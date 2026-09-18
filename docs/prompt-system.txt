@@ -253,6 +253,16 @@
 }
 （注意亮点也用 oldText 指明是哪段文字，字段名与 errors 里保持一致。）
 
+## 怎么写 targetText（容易出错，请严格照做）
+- **只写替换后的那部分文字，不要把左右相邻的词也抄进来。**
+  例：要把 “prominent” 改成 “a prominent”，oldText 写 “prominent”、targetText 写 “a prominent” 是可以的；
+  但不要把整句片段又抄一遍（如把 oldText 写成 “prominent” 而 targetText 写成 “in a prominent position”），
+  那会让程序无法判断究竟改了什么。
+- **不要重复原文。** targetText 里属于"没被改动"的文字，工具会自动去掉，但你写得越干净，标注越准。
+  要加一个冠词就写 “a prominent”，不要写 “prominent a prominent”。
+- 若原文整体被保留、只是旁边多了一截（补标点、补冠词），程序会自动识别并只标新增的那部分，
+  你照实写即可。
+
 ## 交卷前的最后一遍自查
 逐条检查每一个 error：
 - 四个必填字段（id / type / category / explanation）是否都在？

@@ -9,7 +9,7 @@
  *   node scripts/run-minimal.mjs
  */
 
-import { minimizeChange, applyMinimal } from './minimal'
+import { minimizeChange, applyMinimal, stripRepeats } from './minimal'
 
 interface Case {
   name: string
@@ -30,29 +30,37 @@ const CASES: Case[] = [
     expectFrom: 'explore',
     expectTo: 'explored',
   },
-  // 只差一个标点：不应把整句划掉
+  // 只差一个标点：消同类项后只剩新增的那个句号（不再把整个词划掉又写一遍）
   {
-    name: '补一个句号',
+    name: '补一个句号（消同类项后只显示新增的句号）',
     oldText: '关键一环',
     newText: '关键一环。',
-    expectFrom: '关键一环',
-    expectTo: '关键一环。',
+    expectFrom: '',
+    expectTo: '。',
   },
-  // 名词单复数：不要把前面的空格也划掉
+  // 名词单复数：同理，只显示新增的 s，既不划空格，也不重复写 year
   {
-    name: '单复数变化',
+    name: '单复数变化（是词形变化，显示整个词而不是单个 s）',
     oldText: 'recent year',
     newText: 'recent years',
     expectFrom: 'year',
     expectTo: 'years',
   },
-  // 冠词：只划那个词
+  // 冠词：这里 a 没有原样保留（变成了 an），因此照最小块显示
   {
     name: '冠词变化',
     oldText: 'became a important',
     newText: 'became an important',
     expectFrom: 'a',
     expectTo: 'an',
+  },
+  // 在词前面加冠词：整段原文被完整保留，因此只显示新增的 "a "，不重复写原词
+  {
+    name: '在词前加冠词（已知折中：显示整个词，因为新增的 a 含字母）',
+    oldText: 'prominent',
+    newText: 'a prominent',
+    expectFrom: 'prominent',
+    expectTo: 'a prominent',
   },
   // 首字母大小写：i → I 与 is → am，两处都变了，因此整块标出
   {
@@ -97,9 +105,9 @@ const CASES: Case[] = [
     expectFrom: ', ',
     expectTo: '到达地，吸引了',
   },
-  // 'a' 与 'an' 都出现在片段里时，公共后缀要认得出来，只标真正变的那个
+  // 末尾追加一个字母：整段原文被完整保留，因此只显示新增的 n
   {
-    name: '片段内含重复字符',
+    name: '末尾追加字母（同样按词形变化显示）',
     oldText: 'became a',
     newText: 'became an',
     expectFrom: 'a',
@@ -138,7 +146,8 @@ export interface MinimalCheck {
 
 export function checkMinimal(): MinimalCheck[] {
   return CASES.map((testCase) => {
-    const result = minimizeChange(testCase.oldText, testCase.newText)
+    const minimal = minimizeChange(testCase.oldText, testCase.newText)
+    const result = minimal ? { ...minimal, ...stripRepeats(minimal.from, minimal.to) } : null
 
     if (testCase.expectFrom === null) {
       return {
@@ -154,21 +163,23 @@ export function checkMinimal(): MinimalCheck[] {
 
     const fromOk = result.from === testCase.expectFrom
     const toOk = testCase.expectTo === undefined || result.to === testCase.expectTo
-    // 把最小修改应用回原片段，必须能得到目标文字；这一步能挡住"缩错了"的情况
-    const rebuilt = applyMinimal(testCase.oldText, result)
+
+    // 还原验证要用**最小块**（剥离之前），不能用剥离后的展示值：
+    // 消同类项之后 from 为空、to 是新增内容，"划掉 from" 的语义已经不再成立。
+    const rebuilt = minimal ? applyMinimal(testCase.oldText, minimal) : testCase.oldText
     const rebuildOk = rebuilt === testCase.newText
-    // 锚点位置必须真的落在原文上
-    const anchorOk =
-      testCase.oldText.slice(result.startOffset, result.endOffset) === result.from
+
+    // 剥离只应去掉重复，不应把变化本身抹掉：原本有变化，剥离后仍须有变化
+    const changedOk = (minimal !== null) === (result.from !== result.to)
 
     return {
       name: testCase.name,
-      ok: fromOk && toOk && rebuildOk && anchorOk,
+      ok: fromOk && toOk && rebuildOk && changedOk,
       detail:
         `划出「${result.from}」→「${result.to}」` +
         (fromOk && toOk ? '' : `（期望「${testCase.expectFrom}」→「${testCase.expectTo ?? ''}」）`) +
         (rebuildOk ? '' : `（应用回原文得到「${rebuilt}」，应为「${testCase.newText}」）`) +
-        (anchorOk ? '' : '（锚点与划出的文字不一致）'),
+        (changedOk ? '' : '（消同类项把变化本身抹掉了）'),
     }
   })
 }

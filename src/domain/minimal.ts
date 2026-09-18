@@ -94,6 +94,61 @@ function isWordChar(char: string | undefined): boolean {
 }
 
 /**
+ * 消除同类项：去掉"划掉的原文"与"写在上方的正确写法"之间重复的部分。
+ *
+ * 同一处改动有两份描述，若直接显示就会出现重复：
+ *   prominent  → a prominent     划掉 prominent，上方又写一遍 prominent，看着像整个词被换掉
+ *   key point  → key points      划掉 key point，上方又写 key point 加 s
+ *
+ * 判据：把最小块里**公共的部分**去掉之后，剩下的那点东西**是否含词字符**（字母数字汉字）。
+ * （只看最小块本身即可，不需要模型给的整段——用整段判反而会把 explored 里的 explore 当成保留。）
+ *
+ *   含 → 说明确实换了字，是"修改"，照最小块显示：
+ *        year → years                  去掉公共的 year，剩 s（是词字符）→ 显示 year → years
+ *        explore → explored            同理 → 显示整个词，仍然可读
+ *        i is → I am                   两边都变了 → 显示整块
+ *        In wake of reform → Since…    整句重写 → 显示整段
+ *
+ *   不含 → 说明只是插入了标点或空格，是"增加"，那就不划任何字，只显示插进来的东西：
+ *        关键一环 → 关键一环。           多出来的只有一个句号 → 只显示新增的 。
+ *
+ * 已知折中：`prominent` → `a prominent` 多出来的 "a " 里含字母，所以按这条判据算"修改"，
+ * 会显示成 prominent → a prominent。那看着像把整个词换掉，其实是加了个冠词。
+ * 为它单独加特例试过四种写法都会在别的用例上翻车，因此接受这个折中：稳定、可读优先。
+ *
+ * 这条判据折腾了四轮才对，改之前先看 minimal-cases.ts 里的用例。
+ */
+export function stripRepeats(oldChunk: string, newChunk: string): { from: string; to: string } {
+  if (oldChunk.length === 0) return { from: '', to: newChunk }
+  if (newChunk.length === 0) return { from: oldChunk, to: '' }
+
+  const isWordChar = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}]/u.test(char)
+
+  let prefix = 0
+  while (prefix < oldChunk.length && prefix < newChunk.length && oldChunk[prefix] === newChunk[prefix]) {
+    prefix += 1
+  }
+  let suffix = 0
+  while (
+    suffix < oldChunk.length - prefix &&
+    suffix < newChunk.length - prefix &&
+    oldChunk[oldChunk.length - 1 - suffix] === newChunk[newChunk.length - 1 - suffix]
+  ) {
+    suffix += 1
+  }
+
+  const extra = newChunk.slice(prefix, newChunk.length - suffix)
+  const hasWordChar = [...extra].some(isWordChar)
+
+  if (!hasWordChar && extra.length > 0) {
+    // 只是插入了标点或空格：不划任何字，只显示插进来的东西
+    return { from: '', to: extra }
+  }
+
+  return { from: oldChunk, to: newChunk }
+}
+
+/**
  * 算出一处修改的最小差异。返回 null 表示新旧文字完全相同（无需标注）。
  */
 export function minimizeChange(oldText: string, newText: string): MinimalResult | null {
@@ -189,6 +244,7 @@ export function minimizeChange(oldText: string, newText: string): MinimalResult 
   const from = oldText.slice(oldStart, oldEnd)
   const to = newText.slice(newStart, newEnd)
   if (from === to) return null
+
   return { startOffset: oldStart, endOffset: oldEnd, from, to }
 }
 

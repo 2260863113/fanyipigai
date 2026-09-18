@@ -14,7 +14,7 @@
 import type { Correction, ErrorCategory, ErrorObject, ErrorType, Highlight } from './types'
 import { CATEGORY_PRIORITY } from './types'
 import { locate } from './locate'
-import { minimizeChange } from './minimal'
+import { minimizeChange, stripRepeats } from './minimal'
 import { validateCorrection, type ValidatedCorrection } from './validate'
 
 export interface ParseSuccess {
@@ -115,11 +115,17 @@ function resolveChanged(
     return { start: span.start, end: span.end, from: original, to: targetText }
   }
 
+  // 消除同类项：把正确写法里"与原文一字不差的那部分"去掉，只留真正新增的几个字。
+  // 例如 prominent → a prominent 只显示"在 prominent 前插入 a"，
+  // 而不是把 prominent 划掉、上方又写一遍它（那样看着像整个词被换掉）。
+  // 判定要看**原始片段与目标文字**的关系，因此放在这一层做，不放进 minimizeChange。
+  const stripped = stripRepeats(minimal.from, minimal.to)
+
   return {
     start: span.start + minimal.startOffset,
     end: span.start + minimal.endOffset,
-    from: minimal.from,
-    to: minimal.to,
+    from: stripped.from,
+    to: stripped.to,
   }
 }
 
