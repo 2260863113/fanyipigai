@@ -4,3 +4,7 @@
 *.png binary
 *.jpg binary
 *.ico binary
+
+# Windows PowerShell 5.1 不带 BOM 时会按 GBK 读取 .ps1，中文与引号会被解码错乱，
+# 导致脚本直接语法报错。因此标记为 binary，让 git 原样保留文件里的 BOM。
+*.ps1 binary

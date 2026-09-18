@@ -82,6 +82,27 @@ AI 返回的结果要经过 `src/domain/parse.ts` 的解析与 `src/domain/valid
 
 ## 本地开发
 
+### 一键启动（推荐）
+
+| 系统 | 怎么做 |
+| --- | --- |
+| Windows | **双击项目根目录的 `启动.bat`** |
+| macOS / Linux | 终端执行 `./start.sh` |
+
+脚本会依次检查 Node 版本、依赖是否装好、`.dev.vars` 里有没有密钥、端口是否被占用，
+然后启动服务并在就绪后自动打开浏览器。有任何一项不对，它会告诉你具体怎么做。
+
+可选参数：
+
+```
+启动.bat -NoBrowser        # 只启动服务，不打开浏览器
+启动.bat -Port 5200        # 换端口（默认 5180）
+./start.sh --no-browser
+./start.sh --port 5200
+```
+
+### 手动启动
+
 ```bash
 npm install
 cp .dev.vars.example .dev.vars   # Windows: copy .dev.vars.example .dev.vars
@@ -138,6 +159,8 @@ src/
     AnnotationText.tsx  批注渲染与调序弧线
     DetailPanel.tsx     点批注后弹出的解释
 vite-plugin-judge-api.ts  本地开发用的 /api/judge（密钥只在服务端使用）
+启动.bat / start.ps1      Windows 一键启动
+start.sh                  macOS / Linux 一键启动
 scripts/
   smoke.ts           冒烟测试的检查项
   render-probe.tsx   在 jsdom 中挂载界面并模拟交互（含批改接口的模拟响应）
