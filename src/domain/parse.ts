@@ -172,11 +172,71 @@ function resolveChanged(
   // 于是宁可照它给的范围显示，也不要自作聪明。真正治本的办法是提示词要求它只写改成的那部分。
   const minimal = minimizeChange(original, replacement)
   if (!minimal) return { start: span.start, end: span.end, to: replacement }
-  return {
-    start: span.start + minimal.startOffset,
-    end: span.start + minimal.endOffset,
-    to: minimal.to,
+
+  let start = span.start + minimal.startOffset
+  let end = span.start + minimal.endOffset
+
+  // 求同存异要按**词**，不能按字母。
+  //   have explore ways → have explored ways   最小差异只落在词尾的 d 上，
+  //                                            但"整词"才是有意义的单位，应当划掉整个 explore
+  //   live condition    → live conditions      同理，划的应是 condition，而不是那个 s
+  // 做法：若最小差异落在词内（左右至少一侧紧邻的仍是词字符），
+  // 就把范围扩到该词在原文里的完整边界。
+  const isWord = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}]/u.test(char)
+  const insideWord = (start > 0 && isWord(answer[start - 1])) || (end < answer.length && isWord(answer[end]))
+  if (insideWord) {
+    // 向左扩到词首
+    while (start > 0 && isWord(answer[start - 1])) start -= 1
+    // 向右扩到词尾（已经相同的那部分也算进来，因为整词才是改动单位）
+    while (end < answer.length && isWord(answer[end])) end += 1
+    return { start, end, to: wordAfterFix(answer, start, end, span, minimal, replacement) }
   }
+
+  return { start, end, to: minimal.to }
+}
+
+/**
+ * 整词扩展后，算出上方该写什么。
+ *
+ * 扩展把"原本相同的那部分词"也纳入了划掉范围，因此上方不能只写最小差异，
+ * 而要写出这个词改成后的完整形态。
+ *   original 片段是 'have explore ways'，扩出来的词是 'explore'，
+ *   最小差异是 explore → explored，于是上方写 'explored'。
+ */
+function wordAfterFix(
+  answer: string,
+  start: number,
+  end: number,
+  span: { start: number; end: number; snippet: string },
+  minimal: { startOffset: number; endOffset: number; to: string },
+  replacement: string,
+): string {
+  const oldWord = answer.slice(start, end)
+  const headKeep = span.start - start // 左侧多纳入的相同字符数
+  if (headKeep < 0) return replacement
+
+  // 这个词 = 左侧相同部分 + 原片段 + 右侧相同部分
+  const localStart = headKeep + minimal.startOffset
+  const localEnd = headKeep + minimal.endOffset
+  if (localStart < 0 || localEnd > oldWord.length) return replacement
+
+  // 先算出这个词改成后的完整形态
+  const correctedWord = oldWord.slice(0, localStart) + minimal.to + oldWord.slice(localEnd)
+
+  // 再剥掉它**与原文相同的前后部分**：那些字没有被改动，写在上方只会造成重复。
+  // 中间"确实变了的那一段"整段留下，这正是"按词不按字母"的含义：
+  //   condition → conditions            左侧的 condition 在改后文字里不是原样前缀 → 上方写 conditions
+  //   live condition → live conditions  左侧的 live 原样保留 → 上方只写 conditions
+  //
+  // 注意：这里**只剥左侧**，不剥右侧。因为右侧相同的部分正是"改成后的词尾"，
+  // 例如 condition → conditions：左侧 condition 是新词的前缀（剥掉），
+  // 右侧那个 s 是变化本身（必须留下）。若连右侧一起剥，就只剩一个空串了。
+  let from = 0
+  while (from < oldWord.length && from < correctedWord.length && oldWord[from] === correctedWord[from]) {
+    from += 1
+  }
+  const visible = correctedWord.slice(from)
+  return visible.length > 0 ? visible : correctedWord
 }
 
 function readSegments(

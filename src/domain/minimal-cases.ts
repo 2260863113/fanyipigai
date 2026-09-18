@@ -22,6 +22,21 @@ interface Case {
 }
 
 const CASES: Case[] = [
+  // 求同存异要按词不按字母：改动落在词内（词形变化）时，划出整个词
+  {
+    name: '词形变化按整个词标（实测要求：不拆开看字母）',
+    oldText: 'live condition',
+    newText: 'live conditions',
+    expectFrom: 'condition',
+    expectTo: 'conditions',
+  },
+  {
+    name: '词尾变化同样按整词标',
+    oldText: 'have explore ways',
+    newText: 'have explored ways',
+    expectFrom: 'explore',
+    expectTo: 'explored',
+  },
   // 本次实测遇到的例子：模型圈了三个词，实际只是一个词的词形变化
   {
     name: '词形变化只划那一个词（实测例子）',
@@ -156,8 +171,9 @@ function runPipeline(testCase: Case): { from: string; to: string } | null {
       : { id: 'e1', type: 'replace', category: 'function-word', oldText: testCase.oldText, targetText: testCase.newText, explanation: 'x' }
 
   // 造一份"作答"：把 oldText 原样放进去，让定位与偏移换算都走真实路径。
-  // 插入类没有 oldText，用一段固定的上下文承载落点。
-  const answer = isInsert ? `X${testCase.newText}` : `前${testCase.oldText}后`
+  // 两侧刻意用**空格与句点**而不是词字符——词字符会被"按词扩展"卷进来，
+  // 而重复的标点又会让定位器要求消歧，两者都是脚手架自身的干扰。
+  const answer = ` ${testCase.oldText}.`
   const payload = isInsert
     ? error
     : { ...error, oldText: testCase.oldText }
