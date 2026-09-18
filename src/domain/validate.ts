@@ -7,6 +7,7 @@
  */
 
 import type { Anchor, ErrorObject, ErrorCategory, Highlight, MarkColor } from './types'
+import { HARD_CATEGORIES } from './types'
 
 /** 校验通过后得到的绝对区间。 */
 export interface ValidatedSpan {
@@ -29,21 +30,12 @@ export type ValidationOutcome<T> =
 /**
  * 颜色由错误分类推导，不由 AI 自由选择。
  * 这样同一类错误在任何一次批改里颜色都一致，用户才能形成稳定的阅读习惯。
+ *
+ * 红＝硬性错误，橙＝表达问题。哪一类算硬性错误由 types.ts 的 HARD_CATEGORIES 定义，
+ * 这里不再重复写一份，避免两处不一致。
  */
-const CATEGORY_COLOR: Record<ErrorCategory, MarkColor> = {
-  terminology: 'red',
-  omission: 'red',
-  addition: 'red',
-  'word-order': 'orange',
-  collocation: 'orange',
-  'word-choice': 'orange',
-  register: 'orange',
-  'function-word': 'red',
-  punctuation: 'red',
-}
-
 export function colorForCategory(category: ErrorCategory): MarkColor {
-  return CATEGORY_COLOR[category]
+  return HARD_CATEGORIES.includes(category) ? 'red' : 'orange'
 }
 
 /**

@@ -10,7 +10,7 @@ type Selection =
 interface Props {
   layout: AnnotatedLayout
   answer: string
-  onSelect: (selection: Selection) => void
+  onSelect: (selection: Selection | null) => void
 }
 
 interface Arc {
@@ -96,7 +96,7 @@ function ArcLayer({
 }: {
   containerRef: RefObject<HTMLDivElement | null>
   layout: AnnotatedLayout
-  onSelect: (selection: Selection) => void
+  onSelect: (selection: Selection | null) => void
 }) {
   const [arcs, setArcs] = useState<Arc[]>([])
   const [height, setHeight] = useState(0)
@@ -141,7 +141,7 @@ function ArcLayer({
   )
 }
 
-function SegmentView({ segment, onSelect }: { segment: TextSegment; onSelect: (selection: Selection) => void }) {
+function SegmentView({ segment, onSelect }: { segment: TextSegment; onSelect: (selection: Selection | null) => void }) {
   const color = segment.color ? MARK_COLOR_VALUE[segment.color] : undefined
 
   const select = (): void => {

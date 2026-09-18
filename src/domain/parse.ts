@@ -2,23 +2,24 @@
  * 解析 AI 返回的批改 JSON。
  *
  * 这一步承担两个职责，缺一不可：
- * 1. 把 AI 的自由文本收敛成程序可用的结构（去掉代码块包裹、缺字段补默认值）
+ * 1. 把 AI 的自由文本收敛成程序可用的结构（去掉代码块包裹、补齐可缺省字段）
  * 2. 把不合格的结果**连同具体原因**退回去，交给上层重试
  *
  * 校验失败时绝不猜测、绝不凑合：宁可重试一次，也不要在页面上画出错误的位置。
  * 返回的 problems 会被原样交给 AI 作为重试提示，所以每条都要说清哪里不对、实际是什么。
+ *
+ * 注意：AI **不再返回分数**。分数由程序按错误列表算（见 scoring.ts）。
  */
 
 import type { Correction, ErrorCategory, ErrorObject, ErrorType, Highlight } from './types'
-import { CATEGORY_PRIORITY, DIMENSION_LABEL } from './types'
-import { validateCorrection } from './validate'
-import type { ValidatedCorrection } from './validate'
+import { CATEGORY_PRIORITY } from './types'
+import { validateCorrection, type ValidatedCorrection } from './validate'
 
 export interface ParseSuccess {
   ok: true
   correction: Correction
   validated: ValidatedCorrection
-  /** 被丢弃的无效批注数量（位置对不上），用于界面提示 */
+  /** 位置对不上而被丢弃的批注说明 */
   repaired: string[]
 }
 
@@ -49,18 +50,6 @@ export function extractJson(raw: string): { text: string } | { error: string } {
     return { error: `返回内容里找不到 JSON 对象。实际返回的开头是：${trimmed.slice(0, 120)}` }
   }
   return { text: withoutFence.slice(start, end + 1) }
-}
-
-function readScore(value: unknown, label: string, problems: string[]): number {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    problems.push(`维度 ${label} 的分数不是数字，实际是 ${JSON.stringify(value)}`)
-    return 0
-  }
-  if (value < 0 || value > 100) {
-    problems.push(`维度 ${label} 的分数 ${value} 超出 0–100 的范围`)
-    return Math.max(0, Math.min(100, value))
-  }
-  return Math.round(value)
 }
 
 function readText(value: unknown, label: string, problems: string[]): string {
@@ -178,25 +167,6 @@ function readHighlight(value: unknown, index: number, problems: string[]): Highl
   return { id, anchor, comment }
 }
 
-/**
- * 把一个维度都没给的评语补成可用文本：评语缺失只影响展示，不该导致整份批改作废。
- */
-function readDimensionComments(value: unknown, problems: string[]): Record<keyof Correction['dimensions'], string> {
-  const source = isRecord(value) ? value : {}
-  const keys = Object.keys(DIMENSION_LABEL) as Array<keyof Correction['dimensions']>
-  const result = {} as Record<keyof Correction['dimensions'], string>
-  for (const key of keys) {
-    const text = source[key]
-    if (typeof text === 'string' && text.trim()) {
-      result[key] = text.trim()
-    } else {
-      problems.push(`dimensionComments.${key}（${DIMENSION_LABEL[key]}）缺失或为空`)
-      result[key] = ''
-    }
-  }
-  return result
-}
-
 export function parseCorrection(raw: string, answer: string): ParseSuccess | ParseFailure {
   const extracted = extractJson(raw)
   if ('error' in extracted) return { ok: false, problems: [extracted.error] }
@@ -215,28 +185,9 @@ export function parseCorrection(raw: string, answer: string): ParseSuccess | Par
 
   const problems: string[] = []
 
-  const totalRaw = parsed.total
-  let total = 0
-  if (typeof totalRaw !== 'number' || Number.isNaN(totalRaw)) {
-    problems.push(`total 不是数字，实际是 ${JSON.stringify(totalRaw)}`)
-  } else {
-    total = Math.max(0, Math.min(100, Math.round(totalRaw)))
-  }
-
-  const dimensionsRaw = isRecord(parsed.dimensions) ? parsed.dimensions : {}
-  const dimensions = {
-    terminology: readScore(dimensionsRaw.terminology, DIMENSION_LABEL.terminology, problems),
-    grammar: readScore(dimensionsRaw.grammar, DIMENSION_LABEL.grammar, problems),
-    coherence: readScore(dimensionsRaw.coherence, DIMENSION_LABEL.coherence, problems),
-    register: readScore(dimensionsRaw.register, DIMENSION_LABEL.register, problems),
-  }
-
-  const summary = readText(parsed.summary, 'summary（总体评语）', problems)
-  const dimensionComments = readDimensionComments(parsed.dimensionComments, problems)
-
   const errors: ErrorObject[] = []
   if (!Array.isArray(parsed.errors)) {
-    problems.push('errors 不是数组')
+    problems.push('errors 不是数组（没有发现错误时也应当返回空数组 []）')
   } else {
     for (const [index, item] of parsed.errors.entries()) {
       const error = readError(item, index, problems)
@@ -270,6 +221,5 @@ export function parseCorrection(raw: string, answer: string): ParseSuccess | Par
     }
   }
 
-  const correction: Correction = { total, dimensions, summary, dimensionComments, errors, highlights }
-  return { ok: true, correction, validated, repaired }
+  return { ok: true, correction: { errors, highlights }, validated, repaired }
 }

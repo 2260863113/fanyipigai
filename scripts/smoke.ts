@@ -126,21 +126,27 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(rendered.html.includes('screen-left') && rendered.html.includes('screen-right'), '页面分成左右两屏')
     check(rendered.inputReplacedByResult, '提交后右屏的输入框被批改结果替换（没有堆到下面去）')
     check(
-      rendered.modeTabLabels.join(',') === '文章,段落,句子,术语',
-      `顶部导航是四个模式：${rendered.modeTabLabels.join(' / ')}`,
+      rendered.modeTabLabels.join(',') === '文章,段落,句子,术语,练习记录',
+      `顶部导航有四个题型与练习记录：${rendered.modeTabLabels.join(' / ')}`,
     )
     check(rendered.sampleIds.length >= 4, `题库覆盖 ${rendered.sampleIds.length} 道示例，四类题型都有题`)
 
     const markCount = (rendered.html.match(/class="mk /g) ?? []).length
     check(markCount > 0, `渲染出了 ${markCount} 个批注标记`)
 
-    check(rendered.text.includes('错误归类'), '批改结果里出现了错误归类')
-    check(rendered.text.includes('/ 100'), '批改结果里出现了总分')
+    // 批改结果必须是左右分栏：左边计分与错误归类，右边逐处批注
+    check(rendered.html.includes('result-left') && rendered.html.includes('result-right'), '批改结果分成左右两栏')
+    check(rendered.text.includes('错误归类'), '左栏里出现了错误归类')
+    check(rendered.text.includes('/ 100'), '左栏里出现了分数')
+    check(rendered.text.includes('系统计分'), '分数旁说明了计分规则')
+    check(rendered.text.includes('硬性错误'), '左栏里区分了硬性错误')
+    check(rendered.text.includes('表达问题'), '左栏里区分了表达问题')
+    check(!rendered.html.includes('总体评语'), '批改结果里没有 AI 写的总体评语')
+    check(!rendered.html.includes('分项评语'), '批改结果里没有 AI 写的分项评语')
     check(!rendered.text.includes('未能标出'), '没有批注因位置错误被拒绝')
     check(rendered.html.includes('detail') && rendered.html.includes('说明'), '点击批注后详情面板给出了说明')
     check(rendered.html.includes('官方建议'), '题目里显示了官方建议用时')
     check(rendered.html.includes('参考译文'), '左屏提供了可折叠的参考译文')
-    check(rendered.html.includes('逐处批注'), '右屏结果里有逐处批注区')
 
     // 还原探针改过的全局对象，否则后续依赖 fetch 的检查会误报
     rendered.restore()
@@ -158,7 +164,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const path = await import('node:path')
 
     const originalFetch = globalThis.fetch
-    const badJson = '{"total": 70, "dimensions": {"terminology": 70,, "grammar": 60}, '
+    // 故意造一个坏 JSON：少了一个逗号，解析一定失败
+    const badJson = '{"errors": [{"id": "e1", "type": "replace", "category": "function-word",,}], "highlights": []}'
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({ choices: [{ message: { content: badJson }, finish_reason: 'stop' }] }),
@@ -167,16 +174,17 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
 
     const request = {
       source: 'Ecological civilization is a form of human progress.',
-      answer: '生态文明是人类进步的一种形态。',
+      referenceTranslation: '生态文明是一种人类进步形态。',
       direction: 'en-to-zh' as const,
       genre: 'news' as const,
       level: 'polish' as const,
-      referenceTranslation: '生态文明是一种人类进步形态。',
     }
+    const answerText = '生态文明是人类进步的一种形态。'
+    const sections = [{ start: 0, end: answerText.length, text: answerText }]
 
     const collector = new FailureCollector()
     const outcome = await judgeAnswer(
-      request,
+      { request, sections },
       { ...DEFAULT_JUDGE_CONFIG, apiKey: 'test-key', maxAttempts: 1 },
       undefined,
       collector,
@@ -188,7 +196,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
 
     const dir = path.join(process.cwd(), '.ai-failures')
     const before = existsSync(dir) ? new Set(readdirSync(dir).filter((n) => n.endsWith('.json'))) : new Set<string>()
-    const saved = await archiveFailure(request, 'test-model', 'bad-json', collector, '冒烟测试写入')
+    const saved = await archiveFailure(request, 'test-model', 'bad-json', collector, answerText, '冒烟测试写入')
     check(saved === undefined, '失败存档写入成功', saved ? `写入失败：${saved}` : undefined)
 
     const after = readdirSync(dir).filter((n) => n.endsWith('.json'))
@@ -204,7 +212,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       check(record.kind === 'bad-json', `记录的分类是 ${record.kind}`)
       check(record.history[0]?.raw === badJson, '记录里保留了原始返回的全文（未被截断）')
       check((record.history[0]?.problems.length ?? 0) > 0, '记录里保存了失败原因')
-      check(record.request.answer === request.answer, '记录里保存了当时的作答，便于复现')
+      check(record.request.answer === answerText, '记录里保存了当时的作答，便于复现')
       check(!JSON.stringify(record).includes('test-key'), '存档里没有写入 API 密钥')
       rmSync(path.join(dir, created), { force: true })
     }

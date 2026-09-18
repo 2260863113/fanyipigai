@@ -3,16 +3,32 @@
  *
  * 前端永远不接触 API 密钥——请求发给同源的 /api/judge，
  * 由本地开发接口（将来是 Cloudflare Worker）在服务端补上密钥再转发。
+ *
+ * 请求按「段」组织：每段带它在全文中的起点。文章题因此会被拆成多个段落并行批改，
+ * 单段题只会有一个元素，行为与不分段完全一致。
  */
 
-import type { CorrectionRequest } from './prompt'
+import type { Direction, Genre, PolishLevel } from './types'
 import type { JudgeFailure, JudgeSuccess } from './ai'
 
 export type JudgeResult = JudgeSuccess | JudgeFailure
 
-export interface JudgeProgress {
-  attempt: number
-  problems: string[]
+export interface JudgeSectionInput {
+  /** 该段在全文中的起始字符序号 */
+  start: number
+  text: string
+}
+
+export interface JudgeRequest {
+  source: string
+  referenceTranslation: string
+  direction: Direction
+  genre: Genre
+  level: PolishLevel
+  /** 原文按段落切分 */
+  sourceSections: JudgeSectionInput[]
+  /** 作答按同样的段落切分 */
+  answerSections: JudgeSectionInput[]
 }
 
 interface JudgeApiSuccess extends JudgeSuccess {
@@ -27,11 +43,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-/**
- * 提交一次批改。
- * onProgress 只在客户端本地用于显示"第几次尝试"，服务端的重试对界面是透明的。
- */
-export async function requestJudgment(request: CorrectionRequest): Promise<JudgeResult> {
+export async function requestJudgment(request: JudgeRequest): Promise<JudgeResult> {
   let response: Response
   try {
     response = await fetch('/api/judge', {

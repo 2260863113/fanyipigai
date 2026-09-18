@@ -13,7 +13,7 @@ import path from 'node:path'
 import type { Connect, Plugin } from 'vite'
 import { DEFAULT_JUDGE_CONFIG, judgeAnswer } from './src/domain/ai'
 import { FailureCollector, archiveFailure, type FailureKind } from './src/domain/archive'
-import type { CorrectionRequest } from './src/domain/prompt'
+import { rebuildFromSections, type Section } from './src/domain/sections'
 import type { Direction, Genre, PolishLevel } from './src/domain/types'
 
 const VALID_DIRECTIONS: readonly Direction[] = ['zh-to-en', 'en-to-zh']
@@ -70,17 +70,41 @@ function readBody(req: Connect.IncomingMessage): Promise<string> {
   })
 }
 
-function isCorrectionRequest(value: unknown): value is CorrectionRequest {
+function isPlainSection(value: unknown): value is { start: number; text: string } {
+  if (typeof value !== 'object' || value === null) return false
+  const section = value as Record<string, unknown>
+  return typeof section.start === 'number' && typeof section.text === 'string' && section.text.trim().length > 0
+}
+
+function isCorrectionRequest(value: unknown): value is {
+  source: string
+  referenceTranslation: string
+  direction: Direction
+  genre: Genre
+  level: PolishLevel
+  sourceSections: Array<{ start: number; text: string }>
+  answerSections: Array<{ start: number; text: string }>
+} {
   if (typeof value !== 'object' || value === null) return false
   const body = value as Record<string, unknown>
   return (
     typeof body.source === 'string' &&
-    typeof body.answer === 'string' &&
     typeof body.referenceTranslation === 'string' &&
     VALID_DIRECTIONS.includes(body.direction as Direction) &&
     VALID_GENRES.includes(body.genre as Genre) &&
-    VALID_LEVELS.includes(body.level as PolishLevel)
+    VALID_LEVELS.includes(body.level as PolishLevel) &&
+    Array.isArray(body.sourceSections) &&
+    body.sourceSections.length > 0 &&
+    body.sourceSections.every(isPlainSection) &&
+    Array.isArray(body.answerSections) &&
+    body.answerSections.length === body.sourceSections.length &&
+    body.answerSections.every(isPlainSection)
   )
+}
+
+/** 把请求里声明的段落还原成领域层的 Section（补上 end）。 */
+function toSections(items: Array<{ start: number; text: string }>): Section[] {
+  return items.map((item) => ({ start: item.start, end: item.start + item.text.length, text: item.text }))
 }
 
 function json(res: Parameters<Connect.NextHandleFunction>[1], status: number, payload: unknown): void {
@@ -139,20 +163,40 @@ export function judgeApiPlugin(): Plugin {
 
           const started = Date.now()
           const collector = new FailureCollector()
-          const outcome = await judgeAnswer(body, { ...DEFAULT_JUDGE_CONFIG, apiKey, model }, undefined, collector)
+          const answerSections = toSections(body.answerSections)
+          const fullAnswer = rebuildFromSections(answerSections)
+          const judgeInput = {
+            request: {
+              source: body.source,
+              direction: body.direction,
+              genre: body.genre,
+              level: body.level,
+              referenceTranslation: body.referenceTranslation,
+            },
+            sections: answerSections,
+          }
+          const outcome = await judgeAnswer(judgeInput, { ...DEFAULT_JUDGE_CONFIG, apiKey, model }, undefined, collector)
           const elapsed = ((Date.now() - started) / 1000).toFixed(1)
+          const sectionNote = answerSections.length > 1 ? `，共 ${answerSections.length} 段并行批改` : ''
 
           if (outcome.ok) {
             // 成功时理论上不会留下记录；万一有（前几次不合格、最后一次通过），也存下来，
             // 因为"重试后才成功"同样是提示词需要改进的信号。
             if (!collector.isEmpty) {
-              const saved = await archiveFailure(body, model, 'exhausted', collector, '最终成功，但过程中有不合格的返回')
+              const saved = await archiveFailure(
+                body,
+                model,
+                'exhausted',
+                collector,
+                fullAnswer,
+                '最终成功，但过程中有不合格的返回',
+              )
               server.config.logger.info(
-                `[judge-api] 本次批改经过 ${outcome.attempts} 次尝试才成功，失败过程已存档${saved ? `（存档失败：${saved}）` : ''}`,
+                `[judge-api] 本次批改经过多次尝试才成功，失败过程已存档${saved ? `（存档失败：${saved}）` : ''}`,
               )
             }
             server.config.logger.info(
-              `[judge-api] 批改完成，用时 ${elapsed}s，尝试 ${outcome.attempts} 次，` +
+              `[judge-api] 批改完成，用时 ${elapsed}s${sectionNote}，` +
                 `错误 ${outcome.validated.errors.length} 处，亮点 ${outcome.validated.highlights.length} 处，` +
                 `丢弃 ${outcome.repaired.length} 处`,
             )
@@ -163,10 +207,17 @@ export function judgeApiPlugin(): Plugin {
           // 失败存档：这是后续优化提示词的主要依据
           const saved = collector.isEmpty
             ? undefined
-            : await archiveFailure(body, model, classifyFailure(outcome, DEFAULT_JUDGE_CONFIG.maxAttempts), collector, outcome.message)
+            : await archiveFailure(
+                body,
+                model,
+                classifyFailure(outcome, DEFAULT_JUDGE_CONFIG.maxAttempts),
+                collector,
+                fullAnswer,
+                outcome.message,
+              )
 
           server.config.logger.warn(
-            `[judge-api] 批改失败（${outcome.kind}，用时 ${elapsed}s）：${outcome.message}` +
+            `[judge-api] 批改失败（${outcome.kind}，用时 ${elapsed}s${sectionNote}）：${outcome.message}` +
               (collector.isEmpty ? '' : saved ? `（存档失败：${saved}）` : '（失败详情已存档到 .ai-failures/）'),
           )
           json(res, 200, outcome)

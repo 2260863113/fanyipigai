@@ -20,67 +20,88 @@ export type ErrorType =
 /**
  * 错误分类：说明一处错误"错在哪里"。
  * 一条错误只归一类，判定优先级见 CATEGORY_PRIORITY。
+ *
+ * 分类同时决定颜色：硬性错误归红，表达问题归橙。
+ * 具体对应见 HARD_CATEGORIES。
  */
 export type ErrorCategory =
-  | 'terminology' // 术语不准
-  | 'omission' // 漏译
-  | 'addition' // 增译（译文中多出了原文没有的内容）
-  | 'word-order' // 语序错
-  | 'collocation' // 搭配不当
-  | 'word-choice' // 用词不当
-  | 'register' // 语体不符
-  | 'function-word' // 冠词、介词、单复数
-  | 'punctuation' // 标点
+  | 'terminology' // 术语不准（硬性：固定译法写错）
+  | 'omission' // 漏译（硬性：信息缺失）
+  | 'addition' // 增译（硬性：多出原文没有的信息）
+  | 'function-word' // 冠词、介词、单复数（硬性：语法形态）
+  | 'punctuation' // 标点（硬性）
+  | 'word-order' // 语序错（表达问题）
+  | 'collocation' // 搭配不当（表达问题）
+  | 'word-choice' // 用词不当（表达问题）
+  | 'register' // 语体不符（表达问题）
 
 /**
  * 错误分类的判定优先级，从高到低。
  * 一个错误可能同时像多个分类，按此顺序取第一个匹配项，保证统计不重复。
+ * 硬性错误排在前面：同样的位置既有语法问题又有表达问题，按硬性错误计。
  */
 export const CATEGORY_PRIORITY: readonly ErrorCategory[] = [
   'terminology',
   'omission',
   'addition',
+  'function-word',
+  'punctuation',
   'word-order',
   'collocation',
   'word-choice',
   'register',
-  'function-word',
-  'punctuation',
 ]
 
 export const CATEGORY_LABEL: Record<ErrorCategory, string> = {
   terminology: '术语不准',
   omission: '漏译',
   addition: '增译',
+  'function-word': '冠词/介词/单复数',
+  punctuation: '标点',
   'word-order': '语序错',
   collocation: '搭配不当',
   'word-choice': '用词不当',
   register: '语体不符',
-  'function-word': '冠词/介词/单复数',
-  punctuation: '标点',
 }
 
-/** 颜色分级由分类推导，不由 AI 自由选择，保证同一类错误颜色永远一致。 */
+/** 颜色分级。红＝硬性错误，橙＝表达问题，绿＝表达优秀。 */
 export type MarkColor = 'red' | 'orange' | 'green'
 
 export const COLOR_LABEL: Record<MarkColor, string> = {
-  red: '语法错误或严重表达不当',
-  orange: '表达生硬别扭',
+  red: '硬性错误',
+  orange: '表达问题',
   green: '表达优秀',
 }
+
+/**
+ * 哪些分类算硬性错误（红色）。
+ *
+ * 为什么由代码定而不是让 AI 选颜色：颜色是给用户看的稳定信号，
+ * 同一类错误在每一次批改里都必须是同一个颜色。让模型自由选颜色，
+ * 会出现"这次冠词用红、下次用橙"，用户就没法形成阅读习惯了。
+ */
+export const HARD_CATEGORIES: readonly ErrorCategory[] = [
+  'terminology',
+  'omission',
+  'addition',
+  'function-word',
+  'punctuation',
+]
 
 /** 修改风格：批改力度档位。 */
 export type PolishLevel = 'polish' | 'refine'
 
 export const LEVEL_LABEL: Record<PolishLevel, string> = {
-  polish: '润色（只改语法错误与严重表达不当）',
-  refine: '精修（额外提供更好的表达）',
+  polish: '润色（只改硬性错误与严重表达不当）',
+  refine: '精修（额外指出表达生硬之处，并给出更地道写法）',
 }
 
 /**
  * 锚点：错误对象在作答文本中指向的位置。
  * 由字符序号区间 + 该区间应有的原文片段共同描述；
  * 片段的作用是让程序自证位置是否有误（见 validateAnnotation）。
+ *
+ * 注意：文章模式按段调用时，段落内的序号在合并阶段会被换算成全文序号。
  */
 export interface Anchor {
   /** 起始字符序号，含 */
@@ -111,7 +132,7 @@ export interface ErrorObject {
   anchor?: Anchor
   /** 插入时使用的原文锚点，作用仅为校验，不在页面上划掉任何内容 */
   insertAfter?: Anchor
-  /** 正确的写法；只有「删除」类错误没有这一项（多余内容划掉即可，没有替代写法） */
+  /** 正确的写法；只有「删除」类错误没有这一项 */
   targetText?: string
   /** 仅 type = 'reorder' 时存在 */
   segments?: ReorderSegment[]
@@ -127,49 +148,28 @@ export interface Highlight {
   comment: string
 }
 
-/** 维度分：四个打分角度。评价尺子固定为比赛评分标准。 */
-export interface DimensionScores {
-  /** 术语准确 */
-  terminology: number
-  /** 语法正确 */
-  grammar: number
-  /** 语篇连贯 */
-  coherence: number
-  /** 语体得体 */
-  register: number
-}
-
-export const DIMENSION_LABEL: Record<keyof DimensionScores, string> = {
-  terminology: '术语准确',
-  grammar: '语法正确',
-  coherence: '语篇连贯',
-  register: '语体得体',
-}
-
-/** 文体标签。取值为官方考查的四类。 */
-export const GENRE_LABEL: Record<Genre, string> = {
-  political: '政治文献',
-  news: '新闻编译',
-  literature: '文学选篇',
-  expository: '一般说明文',
-}
-
-export const DIRECTION_LABEL: Record<Direction, string> = {
-  'zh-to-en': '中译英',
-  'en-to-zh': '英译中',
-}
-
-/** 批改：对一次作答的完整评价。 */
+/**
+ * 批改：对一次作答的完整评价。
+ *
+ * 注意这里**没有分数字段**：AI 不再负责打分，分数由程序根据错误列表算出来
+ * （见 scoring.ts）。这样分数与页面上实际标出的错误永远一致，
+ * 也不会出现"模型给了 90 分却标出 8 处硬性错误"这种自相矛盾。
+ */
 export interface Correction {
-  /** 总分，0–100 */
-  total: number
-  dimensions: DimensionScores
-  /** 总体评语 */
-  summary: string
-  /** 各维度评语 */
-  dimensionComments: Record<keyof DimensionScores, string>
   errors: ErrorObject[]
   highlights: Highlight[]
+}
+
+/** 系统计分的结果。 */
+export interface Score {
+  /** 0–100 */
+  total: number
+  /** 红色（硬性错误）数量 */
+  hardCount: number
+  /** 橙色（表达问题）数量 */
+  softCount: number
+  /** 绿色（表达优秀）数量 */
+  highlightCount: number
 }
 
 /** 题目的四种形态。顶部导航栏就是按这个分类切换的。 */
@@ -205,17 +205,42 @@ export interface PracticeRecord {
   createdAt: string
 }
 
-export const KIND_LABEL: Record<Exercise['mode'], string> = {
+export const KIND_LABEL: Record<Mode, string> = {
   term: '术语翻译',
   sentence: '句子翻译',
   paragraph: '段落翻译',
   article: '文章翻译',
 }
 
-/** 顶部导航栏用的短标签与说明。顺序即导航栏从左到右的顺序。 */
-export const MODE_TABS: ReadonlyArray<{ mode: Exercise['mode']; label: string; hint: string }> = [
+/** 文体标签。取值为官方考查的四类。 */
+export const GENRE_LABEL: Record<Genre, string> = {
+  political: '政治文献',
+  news: '新闻编译',
+  literature: '文学选篇',
+  expository: '一般说明文',
+}
+
+export const DIRECTION_LABEL: Record<Direction, string> = {
+  'zh-to-en': '中译英',
+  'en-to-zh': '英译中',
+}
+
+/**
+ * 顶部导航栏的顺序与文案。
+ * 「练习记录」不是题型，而是所有题型的记录汇总页，因此单独放在最后。
+ */
+export const MODE_TABS: ReadonlyArray<{ mode: Mode | 'records'; label: string; hint: string }> = [
   { mode: 'article', label: '文章', hint: '整篇语篇翻译，英译汉 250–350 词，汉译英 200–300 字' },
   { mode: 'paragraph', label: '段落', hint: '段落翻译，考查句间衔接与语篇连贯' },
   { mode: 'sentence', label: '句子', hint: '单句翻译，改错最直观，适合打磨细节' },
   { mode: 'term', label: '术语', hint: '关键术语与中华思想文化术语，按官方标准译法判定' },
+  { mode: 'records', label: '练习记录', hint: '查看全部练习记录与当时的完整批改' },
 ]
+
+/** 每类题型的评价单位。文章题按段调用 API，因此单位是"段落"。 */
+export const UNIT_LABEL: Record<Mode, string> = {
+  article: '段落',
+  paragraph: '段落',
+  sentence: '句子',
+  term: '术语',
+}

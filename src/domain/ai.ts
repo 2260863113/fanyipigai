@@ -4,25 +4,30 @@
  * 设计要点：
  * - 使用官方 JSON 输出模式（response_format = json_object），并要求提示词里出现 "json" 字样
  * - 解析失败时把**具体原因**回传给模型重试，最多 3 次；仍失败就如实报错，不猜不凑
- * - 明确区分几类真实故障：密钥无效、余额不足、限流、返回被截断、返回不是 JSON
+ * - **按段调用**：长文本按段落拆分，每段一个请求并行发出。段落之间互不依赖，
+ *   因此总耗时取决于最慢的那一段，而不是各段之和；同时每段的上下文更短、位置更不容易数错。
+ * - 明确区分几类真实故障：密钥无效、余额不足、限流、返回被截断、返回不是 JSON，
  *   这些在页面上要给出不同的下一步动作，而不是笼统的一句"出错了"
  *
  * 这一段代码同时被两种运行环境使用：本地开发时的 Node 测试脚本，以及部署后的 Worker。
  */
 
-import { buildRetryPrompt, buildSystemPrompt, buildUserPrompt, type CorrectionRequest } from './prompt'
+import { buildRetryPrompt, buildSectionNote, buildSystemPrompt, buildUserPrompt, type CorrectionRequest } from './prompt'
 import { parseCorrection, type ParseSuccess } from './parse'
 import { FailureCollector } from './archive'
+import { mergeSectionCorrections, rebuildFromSections, type Section } from './sections'
 
 export interface JudgeConfig {
   apiKey: string
   /** 模型名。DeepSeek 当前可用：deepseek-flash、deepseek-v4-pro */
   model: string
   baseUrl: string
-  /** 单次批改最多试几次（含首次） */
+  /** 单次批改最多试几次（含首次），按"每一段"计 */
   maxAttempts: number
   /** 单次请求的超时时间（毫秒） */
   timeoutMs: number
+  /** 同时最多发几个请求。太高会触发限流（429），太低会让长文章变慢 */
+  maxConcurrency: number
 }
 
 export const DEFAULT_JUDGE_CONFIG: Omit<JudgeConfig, 'apiKey'> = {
@@ -30,6 +35,7 @@ export const DEFAULT_JUDGE_CONFIG: Omit<JudgeConfig, 'apiKey'> = {
   baseUrl: 'https://api.deepseek.com',
   maxAttempts: 3,
   timeoutMs: 120_000,
+  maxConcurrency: 4,
 }
 
 export type JudgeFailureKind =
@@ -52,12 +58,16 @@ export interface JudgeFailure {
   rawExcerpt?: string
   /** 每次尝试的失败原因，用于诊断提示词问题 */
   problems: string[]
+  /** 按段调用时，是哪一段出的问题（从 1 开始） */
+  sectionIndex?: number
+  sectionCount?: number
 }
 
 export interface JudgeSuccess extends ParseSuccess {
+  /** 各段尝试次数中的最大值 */
   attempts: number
-  /** 位置对不上而被丢弃的批注说明 */
-  repaired: string[]
+  /** 本次一共发了几段 */
+  sectionCount: number
 }
 
 export type JudgeOutcome = JudgeSuccess | JudgeFailure
@@ -79,7 +89,7 @@ const KIND_MESSAGE: Record<JudgeFailureKind, string> = {
   'missing-key': '没有配置 DeepSeek API 密钥，无法批改。',
   unauthorized: 'API 密钥无效或已被吊销。请到 platform.deepseek.com 重新生成一个。',
   'insufficient-balance': 'DeepSeek 账户余额不足，请先充值。',
-  'rate-limited': '调用过于频繁被限流，稍等几秒再提交即可。',
+  'rate-limited': '调用过于频繁被限流。文章模式下会同时发多个请求，稍等几秒再提交即可。',
   'server-error': 'DeepSeek 服务端暂时故障，稍后重试即可。',
   timeout: '等待超时。译文较长时批改会慢一些，可以再试一次。',
   network: '网络连接失败，请检查网络后重试。',
@@ -160,24 +170,28 @@ async function callDeepSeek(
   return { ok: true, content, finishReason }
 }
 
-/**
- * 执行一次批改。重试在内部完成：每轮把上一轮的具体失败原因交给模型。
- * onRetry 会收到每一轮的进展，便于界面显示"正在重试（第 2 次）"。
- *
- * collector 收集每一次不合格的原始返回。调用方据它把失败存档落盘，
- * 用于事后优化提示词。批改失败时 collector 非空，成功时为空。
- */
-export async function judgeAnswer(
-  request: CorrectionRequest,
-  config: JudgeConfig,
-  onRetry?: (info: { attempt: number; problems: string[] }) => void,
-  collector?: FailureCollector,
-): Promise<JudgeOutcome> {
-  if (!config.apiKey) return fail('missing-key', [])
+interface SectionOutcome {
+  ok: true
+  parsed: ParseSuccess
+  attempts: number
+}
 
+/**
+ * 批改单个段落。重试在内部完成：每轮把上一轮的具体失败原因交给模型。
+ * collector 收集每一次不合格的原始返回，供调用方存档。
+ */
+async function judgeOneSection(
+  request: CorrectionRequest,
+  sectionNote: string | undefined,
+  config: JudgeConfig,
+  collector: FailureCollector,
+  sectionIndex: number,
+  sectionCount: number,
+  onRetry?: (info: { attempt: number; problems: string[] }) => void,
+): Promise<SectionOutcome | JudgeFailure> {
   const messages: ChatMessage[] = [
     { role: 'system', content: buildSystemPrompt() },
-    { role: 'user', content: buildUserPrompt(request) },
+    { role: 'user', content: buildUserPrompt(request, sectionNote) },
   ]
 
   const allProblems: string[] = []
@@ -195,11 +209,13 @@ export async function judgeAnswer(
     }
 
     if (!result.ok) {
-      // 这几类失败重试没有意义，直接返回，让用户去处理
       const kind = result.failure.kind
-      if (kind === 'unauthorized' || kind === 'insufficient-balance' || kind === 'missing-key') return result.failure
+      // 这几类失败重试没有意义，直接返回，让用户去处理
+      if (kind === 'unauthorized' || kind === 'insufficient-balance' || kind === 'missing-key') {
+        return { ...result.failure, sectionIndex, sectionCount }
+      }
       allProblems.push(...result.failure.problems)
-      if (attempt === config.maxAttempts) return result.failure
+      if (attempt === config.maxAttempts) return { ...result.failure, sectionIndex, sectionCount }
       continue
     }
 
@@ -207,11 +223,11 @@ export async function judgeAnswer(
 
     // 被截断时返回的 JSON 一定是残缺的，重试时要求它把话说短
     if (result.finishReason === 'length') {
-      const problems = ['上一次的返回因为太长被截断了，请精简每条 explanation 与评语的文字，确保 JSON 完整闭合']
+      const problems = ['上一次的返回因为太长被截断了，请精简每条 explanation 的文字，确保 JSON 完整闭合']
       allProblems.push(...problems)
-      collector?.record(attempt, lastRaw, result.finishReason, problems)
+      collector.record(attempt, lastRaw, result.finishReason, problems, sectionIndex)
       if (attempt === config.maxAttempts) {
-        return fail('truncated', problems, { rawExcerpt: lastRaw.slice(-400) })
+        return { ...fail('truncated', problems, { rawExcerpt: lastRaw.slice(-400) }), sectionIndex, sectionCount }
       }
       onRetry?.({ attempt, problems })
       messages.push({ role: 'assistant', content: lastRaw })
@@ -220,14 +236,12 @@ export async function judgeAnswer(
     }
 
     const parsed = parseCorrection(result.content, request.answer)
-    if (parsed.ok) {
-      return { ...parsed, attempts: attempt }
-    }
+    if (parsed.ok) return { ok: true, parsed, attempts: attempt }
 
     allProblems.push(...parsed.problems)
-    collector?.record(attempt, lastRaw, result.finishReason, parsed.problems)
+    collector.record(attempt, lastRaw, result.finishReason, parsed.problems, sectionIndex)
     if (attempt === config.maxAttempts) {
-      return fail('bad-output', parsed.problems, { rawExcerpt: lastRaw.slice(0, 400) })
+      return { ...fail('bad-output', parsed.problems, { rawExcerpt: lastRaw.slice(0, 400) }), sectionIndex, sectionCount }
     }
 
     onRetry?.({ attempt, problems: parsed.problems })
@@ -235,5 +249,116 @@ export async function judgeAnswer(
     messages.push({ role: 'user', content: buildRetryPrompt(parsed.problems) })
   }
 
-  return fail('bad-output', allProblems, { rawExcerpt: lastRaw.slice(0, 400) })
+  return { ...fail('bad-output', allProblems, { rawExcerpt: lastRaw.slice(0, 400) }), sectionIndex, sectionCount }
+}
+
+/** 带并发上限的 map，用来避免一次性发出太多请求被限流。 */
+async function mapWithLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let cursor = 0
+
+  const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const index = cursor
+      cursor += 1
+      if (index >= items.length) return
+      const item = items[index]
+      if (item === undefined) continue
+      results[index] = await worker(item, index)
+    }
+  })
+
+  await Promise.all(runners)
+  return results
+}
+
+export interface JudgeSectionsInput {
+  /** 除作答之外的题目信息 */
+  request: Omit<CorrectionRequest, 'answer'>
+  /**
+   * 作答按段落切分后的结果，每项带它在全文中的起点。
+   * 单段题只有一个元素。
+   *
+   * 起点由调用方给出而不是程序推断：合并后的批注序号全部基于这些起点，
+   * 由调用方声明、并与它自己记录的一致，比事后猜测分隔符宽度可靠得多。
+   */
+  sections: Section[]
+}
+
+/**
+ * 批改一次作答。
+ *
+ * 单段与多段走同一条路径：只有一段时就只有一个请求，行为与之前完全一致。
+ * 多段时并行发出（受 maxConcurrency 限制），全部成功后把批注序号换算到全文坐标再合并。
+ */
+export async function judgeAnswer(
+  input: JudgeSectionsInput,
+  config: JudgeConfig,
+  onRetry?: (info: { attempt: number; problems: string[]; sectionIndex: number }) => void,
+  collector: FailureCollector = new FailureCollector(),
+): Promise<JudgeOutcome> {
+  if (!config.apiKey) return fail('missing-key', [])
+
+  const { request, sections } = input
+  if (sections.length === 0) {
+    return {
+      ok: true,
+      correction: { errors: [], highlights: [] },
+      validated: { errors: [], highlights: [], rejections: [] },
+      repaired: [],
+      attempts: 0,
+      sectionCount: 0,
+    }
+  }
+
+  const total = sections.length
+  const outcomes = await mapWithLimit(sections, config.maxConcurrency, (section, index) =>
+    judgeOneSection(
+      { ...request, answer: section.text },
+      total > 1 ? buildSectionNote(index + 1, total) : undefined,
+      config,
+      collector,
+      index + 1,
+      total,
+      onRetry ? (info) => onRetry({ ...info, sectionIndex: index + 1 }) : undefined,
+    ),
+  )
+
+  const failures = outcomes.filter((outcome): outcome is JudgeFailure => 'ok' in outcome && outcome.ok === false)
+  if (failures.length > 0) {
+    // 只要有一段没成功，整次批改就如实报失败——半份批改比没有批改更误导人
+    const first = failures[0]
+    if (!first) return fail('bad-output', [])
+    const label = total > 1 ? `第 ${first.sectionIndex}/${total} 段批改失败：` : ''
+    return { ...first, message: `${label}${first.message}` }
+  }
+
+  const successes = outcomes as SectionOutcome[]
+  const merged = mergeSectionCorrections(
+    successes.map((outcome, index) => ({
+      answerStart: sections[index]?.start ?? 0,
+      correction: outcome.parsed.correction,
+    })),
+  )
+
+  // 合并后的序号已经换算到全文坐标，因此要在全文上再校验一次。
+  // 这一步能挡住"段落起点算错"这类整篇错位的问题。
+  const merged2 = parseCorrection(JSON.stringify(merged), rebuildFromSections(sections))
+  if (!merged2.ok) {
+    return fail('bad-output', ['合并后的批注在全文坐标下校验失败', ...merged2.problems])
+  }
+
+  const repaired = successes.flatMap((outcome) => outcome.parsed.repaired)
+  return {
+    ok: true,
+    correction: merged,
+    validated: merged2.validated,
+    repaired,
+    attempts: Math.max(...successes.map((outcome) => outcome.attempts)),
+    sectionCount: total,
+  }
 }

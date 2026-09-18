@@ -172,7 +172,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
 
     const { buildStubSource } = await import('./fixture-stub.mjs')
     const { buildFixturePayload } = await import('./fixture-payload.mjs')
-    const payload = await buildFixturePayload(root)
+    const fixture = await buildFixturePayload(root)
 
     for (const shot of shots) {
       const target = (await (
@@ -189,7 +189,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
           deviceScaleFactor: 2,
           mobile: shot.width < 700,
         })
-        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: buildStubSource(payload) })
+        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: buildStubSource(fixture.payload) })
         await cdp.send('Page.navigate', { url: pageUrl })
 
         let mounted = false
@@ -201,22 +201,31 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
         await sleep(500)
 
         if (shot.action === 'submit') {
+          // 真的把示例作答打进输入框再点提交，这样截到的是真实交互后的界面。
+          // 必须用原生 setter + input 事件，React 才会收到这次受控更新。
           const outcome = await cdp.evaluate(
             `(async () => {
                const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+               const ta = document.querySelector('.answer-input');
+               if (!ta) return '找不到输入框';
+               const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+               setter.call(ta, ${JSON.stringify(fixture.answerText)});
+               ta.dispatchEvent(new Event('input', { bubbles: true }));
+               await sleep(300);
                const btn = document.querySelector('.btn-primary');
                if (!btn) return '找不到提交按钮';
+               if (btn.disabled) return '提交按钮是禁用的';
                btn.click();
-               for (let i = 0; i < 60; i++) {
-                 if (document.querySelector('.result-body')) {
-                   await sleep(500);
+               for (let i = 0; i < 80; i++) {
+                 if (document.querySelector('.result-panel')) {
+                   await sleep(600);
                    return 'ok';
                  }
                  const err = document.querySelector('.error-block');
                  if (err) return '页面报错：' + err.textContent.slice(0, 200);
                  await sleep(200);
                }
-               return '提交后没有出现结果';
+               return '提交后没有出现批改结果';
              })()`,
           )
           if (outcome !== 'ok') return { ok: false, files, note: `${shot.name}：${String(outcome)}` }

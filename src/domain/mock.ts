@@ -66,16 +66,6 @@ const replaceCase: MockCase = {
   sampleAnswer:
     'i is a form of human progress that people and nature live together in harmony, it became a important part of China development strategy.',
   correction: {
-    total: 58,
-    dimensions: { terminology: 14, grammar: 16, coherence: 14, register: 14 },
-    summary:
-      '基本意思传达完整，但主句出现主谓一致与冠词两处硬性错误，且原文的并列递进关系被拆成了两个独立分句，读起来松散。',
-    dimensionComments: {
-      terminology: '“生态文明”“发展战略”等概念译法正确，未出现术语偏差。',
-      grammar: '“i is”“a important”属硬性语法错误；“it became”的时态与原文 has become 不对应。',
-      coherence: '原文以 and it has become 承接的递进关系被逗号拼接取代，句间关系变模糊。',
-      register: '整体语体偏口语，live together 未能体现 coexist 的正式表达。',
-    },
     errors: [],
     highlights: [],
   },
@@ -104,16 +94,6 @@ const insertCase: MockCase = {
   sampleAnswer:
     'China insist on idea that lucid waters and lush mountains are invaluable assets, and put ecological civilization construction in prominent position.',
   correction: {
-    total: 62,
-    dimensions: { terminology: 22, grammar: 14, coherence: 14, register: 12 },
-    summary:
-      '术语“绿水青山就是金山银山”译法正确，但动词缺少第三人称单数变化、名词前漏掉冠词，是典型的汉语直译残留。',
-    dimensionComments: {
-      terminology: 'lucid waters and lush mountains are invaluable assets 是“绿水青山就是金山银山”的通行译法。',
-      grammar: '“China insist”“put”均缺少第三人称单数词尾；idea 与 position 前漏掉必要的冠词。',
-      coherence: '两个动作由 and 并列，但时态与人称形式不一致，读起来像两件互不相关的事。',
-      register: 'insist on 语气偏“坚持己见”，政治文献中“坚持（理念）”通常用 uphold 或 adhere to。',
-    },
     errors: [],
     highlights: [],
   },
@@ -143,16 +123,6 @@ const deleteCase: MockCase = {
   sampleAnswer:
     'China made great progress in the construction of ecological civilization in recent year, and it has became a global leader in green development.',
   correction: {
-    total: 66,
-    dimensions: { terminology: 18, grammar: 15, coherence: 17, register: 16 },
-    summary:
-      '句子结构完整、话题切题，但存在冠词、时态与名词数三处硬性错误，属于最容易在比赛中被直接扣掉的类型。',
-    dimensionComments: {
-      terminology: '“生态文明建设”“绿色发展”译法正确。',
-      grammar: '“in recent year”单复数错误；“made”在表示至今的成就时应为 has made；“has became”是形态错误。',
-      coherence: '两个分句由 and 承接，逻辑通顺，没有堆砌。',
-      register: '语体正式，符合新闻与政策类文本的表达习惯。',
-    },
     errors: [],
     highlights: [],
   },
@@ -181,16 +151,6 @@ const reorderCase: MockCase = {
   sampleAnswer:
     'A single mother live in small town love stories because they let she forget her own life for a while.',
   correction: {
-    total: 54,
-    dimensions: { terminology: 16, grammar: 12, coherence: 14, register: 12 },
-    summary:
-      '句子骨架正确，但定语从句的引导词缺失、代词格用错，两处状语的顺序也不符合英语习惯。',
-    dimensionComments: {
-      terminology: '本句无关键术语，用词选择基本准确。',
-      grammar: '“mother live”应为 lives；“let she”应为 let her，宾格用错；“in small town”缺冠词。',
-      coherence: '缺少 who 之后，两个谓语动词并列堆在一起，句子结构断裂。',
-      register: '文学选篇语体偏散文，目前表达偏口语且带有明显语法瑕疵。',
-    },
     errors: [],
     highlights: [],
   },
@@ -219,16 +179,6 @@ const rewriteCase: MockCase = {
   sampleAnswer:
     'In wake of reform, she insist her dream and finally make it come true, even though many people doubt that she can success.',
   correction: {
-    total: 41,
-    dimensions: { terminology: 12, grammar: 9, coherence: 11, register: 9 },
-    summary:
-      '句子的信息点齐全，但“改革开放”这一固定术语缺失、多处动词形式错误、时间状语缺失，开头需要整段重写。',
-    dimensionComments: {
-      terminology: '“改革开放”是固定表述，必须译为 reform and opening up，写成 reform 不足以承担这一术语含义。',
-      grammar: 'insist、make、doubt 三个人称与时态形式均有问题；succeed 被误写成名词 success。',
-      coherence: '时间状语缺失导致叙事起点不明，前后事件的先后关系读不出来。',
-      register: '整体停留在口语层面，与政治文献的正式语体差距明显。',
-    },
     errors: [],
     highlights: [],
   },
@@ -256,15 +206,6 @@ const termCase: MockCase = {
   },
   sampleAnswer: 'ecological civilisation',
   correction: {
-    total: 70,
-    dimensions: { terminology: 60, grammar: 90, coherence: 80, register: 75 },
-    summary: '意思完全正确，但用了英式拼写 civilisation，与官方术语表的写法不一致。',
-    dimensionComments: {
-      terminology: '“生态文明”的官方标准译法是 ecological civilization，英式拼写会被判为不一致。',
-      grammar: '拼写本身是合法英文，无语法问题。',
-      coherence: '术语题不涉及语篇衔接。',
-      register: '固定术语应逐字采用官方写法，不做拼写变体。',
-    },
     errors: [],
     highlights: [],
   },
@@ -291,15 +232,6 @@ const termCompareCase: MockCase = {
   },
   sampleAnswer: '碳中性',
   correction: {
-    total: 50,
-    dimensions: { terminology: 30, grammar: 90, coherence: 80, register: 70 },
-    summary: '“碳中性”是直译，中文官方文献一律使用“碳中和”，属于术语不统一。',
-    dimensionComments: {
-      terminology: '官方术语是“碳中和”，不是“碳中性”——这是有标准答案的题型。',
-      grammar: '译名本身成立，不涉及语法。',
-      coherence: '术语题不涉及语篇衔接。',
-      register: '正式文献中术语必须与官方表述一致，自造变体不被认可。',
-    },
     errors: [],
     highlights: [],
   },
@@ -329,16 +261,6 @@ const paragraphCase: MockCase = {
   sampleAnswer:
     'In the past ten years, China finished plant forest more than seventy million hectares, and desert and sand land area reduced net for many years. In Sanbei project area forest coverage rate from five percent improve to near fourteen percent, ecology in key control area improved clearly. At the same time, each place explore turn ecology advantage into development advantage, ecology tourism and forest economy new business brought millions farmer and herdsman increase income.',
   correction: {
-    total: 46,
-    dimensions: { terminology: 12, grammar: 10, coherence: 12, register: 12 },
-    summary:
-      '数据与信息点基本齐全，但全段缺少时态与人称的一致，多处用名词堆叠代替动词结构，读起来是逐字硬译。',
-    dimensionComments: {
-      terminology: '“三北工程”“林下经济”等固定表述未采用通行译法。',
-      grammar: '谓语普遍缺少时态变化，主动被动混用，turn … into … 结构不完整。',
-      coherence: '句间缺少衔接手段，三句话并列铺开，没有层次。',
-      register: '整体是中文句式的逐字对应，与新闻编译的英文行文习惯差距较大。',
-    },
     errors: [],
     highlights: [],
   },
@@ -369,15 +291,6 @@ const paragraphEnCase: MockCase = {
   sampleAnswer:
     '换电站的推出给电动车制造商一个绕开这个行业顽固问题的方法：充电时间。司机开进来，交出没电的电池包，在五分钟以内带着一个新的离开。这个模式在出租车和快递车队中发展最快，它们的车几乎一直在跑，不能承受长时间空闲。分析师提醒，让不同品牌的电池包设计标准化仍然是更广泛采用的主要障碍。',
   correction: {
-    total: 78,
-    dimensions: { terminology: 18, grammar: 20, coherence: 20, register: 20 },
-    summary: '信息完整、句子通顺，但 take hold、cannot afford、idle periods 等处的语气与含义有明显损失。',
-    dimensionComments: {
-      terminology: '“电池包”“换电站”译法准确。',
-      grammar: '语法没有硬性错误。',
-      coherence: '句间因果关系清楚，读得下去。',
-      register: '“一个绕开……的方法”“不能承受长时间空闲”偏口语，失掉了原文的语势。',
-    },
     errors: [],
     highlights: [],
   },
@@ -407,16 +320,6 @@ const articleEnCase: MockCase = {
   sampleAnswer:
     '过去十年，中国新增的光伏装机容量超过了世界其他国家的总和，现在它大约占全球太阳能板、风力涡轮机和锂电池产量的一半。这个建设规模拉低了全世界的成本：太阳能组件的价格从 2015 年以来下降了超过百分之八十，这个下降让可再生能源在大多数市场成为新增电力的最便宜来源。\n\n但是转型仍然不平均。煤仍然提供中国一半以上的电力，最近几年为了保证高峰需求时的供应，新的煤电厂批准得很快。电网运营商也在艰难吸收风电和光伏的波动输出，而在几条输电线路没有跟上的省份，弃风弃光仍然存在。\n\n政府从两个方面作出反应。它正在建设特高压线路，把电力从人口稀少的西部送到沿海城市，同时扩大储能容量，让白天多余的发电量可以在天黑后使用。官员把这些投资描述为对能源安全必不可少，而不是偏离气候目标。\n\n分析人士对前景有分歧。一些人认为，清洁制造产能的巨大数量让更深的减排几乎不可避免。其他人警告说，如果没有更快地淘汰煤电，这个国家冒着把排放锁定几十年的风险，无论它安装多少光伏和风电。',
   correction: {
-    total: 74,
-    dimensions: { terminology: 16, grammar: 19, coherence: 20, register: 19 },
-    summary:
-      '全篇信息完整、没有硬性语法错误，但多处保留了英文句法痕迹（“它大约占”“在几条输电线路没有跟上的省份”），中文读起来不够顺畅。',
-    dimensionComments: {
-      terminology: '“光伏装机”“特高压”“弃风弃光”等术语使用准确。',
-      grammar: '中文表达没有语法错误。',
-      coherence: '四个段落的转折与递进关系保留完整。',
-      register: '“这个下降让……”“无论它安装多少”偏口语，与新闻编译的书面语体有差距。',
-    },
     errors: [],
     highlights: [],
   },
@@ -446,16 +349,6 @@ const articleZhCase: MockCase = {
   sampleAnswer:
     'Ecological civilization construction is a fundamental plan for the sustainable development of the Chinese nation. Since the 18th National Congress, we take ecological civilization construction as an important content of the five-in-one overall layout, carry out a series of fundamental, pioneering and long-term work, and push ecological environment protection to happen historic, turning and overall changes.\n\nWe insist the idea that green water and green mountains are gold and silver mountains, insist integrated protection and systematic management of mountain, water, forest, farmland, lake, grass and sand, the ecological civilization system is more complete, green, circular and low-carbon development takes solid steps, ecological environment quality improves obviously, and beautiful China construction takes major steps.\n\nAt the same time we should also see that the task of ecological environment protection is still hard, structural, root and trend pressure is not fundamentally relieved. We must firmly set up and practice the idea that green water and green mountains are gold and silver mountains, stand at the height of harmonious coexistence between human and nature to plan development, and together push carbon reduction, pollution reduction, green expansion and growth.',
   correction: {
-    total: 39,
-    dimensions: { terminology: 8, grammar: 10, coherence: 11, register: 10 },
-    summary:
-      '政治文献的固定表述大面积为逐字直译，“绿水青山就是金山银山”“五位一体”“降碳、减污、扩绿、增长”都未采用官方译法，且全篇缺少时态与人称的一致。',
-    dimensionComments: {
-      terminology: '多个关键术语未用官方译法，这是本题失分最重的一项。',
-      grammar: '谓语普遍没有时态变化，长句用逗号平铺，出现多个缺少主语的并列分句。',
-      coherence: '中文的意合结构被原样搬进英文，句与句之间缺少连接手段。',
-      register: '政治文献需要庄重的书面语体，目前是口语化的直译，语体差距明显。',
-    },
     errors: [],
     highlights: [],
   },
@@ -644,16 +537,26 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
   }
 }
 
-/** 建立某道题的假批改。仅在"查看内置示例"时使用，正常批改走真实 AI。 */
-export function fixtureCorrectionFor(exerciseId: string, answer: string): MockCorrection {
-  const testCase = MOCK_CASES.find((item) => item.exercise.id === exerciseId)
-  if (!testCase) throw new Error(`未知的题目：${exerciseId}`)
+/**
+ * 建立某道题的假批改。仅在"查看内置示例"与测试/截屏时使用，正常批改走真实 AI。
+ *
+ * 按**作答文字**反查是哪一道示例，而不是按当前题号：
+ * 这样"在某道题里粘了另一道题的示例作答"也能正确给出对应的批改，
+ * 而不会拿甲题的批注位置去标乙题的文字（那必然全部对不上）。
+ * 对不上任何示例时返回 null，由调用方明确报错。
+ */
+export function fixtureCorrectionFor(exerciseId: string, answer: string): MockCorrection | null {
+  const trimmed = answer.trim()
+  const byAnswer = MOCK_CASES.find((item) => item.sampleAnswer.trim() === trimmed)
+  const testCase = byAnswer ?? MOCK_CASES.find((item) => item.exercise.id === exerciseId)
+  if (!testCase) return null
+  if (testCase.sampleAnswer.trim() !== trimmed) return null
   return {
     ...testCase.correction,
-    errors: buildErrors(exerciseId, answer),
+    errors: buildErrors(testCase.exercise.id, answer),
     highlights: [testCase.highlight(answer)],
   }
 }
 
-/** 五道内置示例的标准作答（含演示时追加的尾部）。 */
-export const DEMO_ANSWERS: readonly string[] = MOCK_CASES.map((item) => item.sampleAnswer + DEMO_ANSWER_TAIL)
+/** 内置示例题的编号与对应的示例作答，供界面提示"哪些作答可以用示例批改"。 */
+export const DEMO_ANSWERS: readonly string[] = MOCK_CASES.map((item) => item.sampleAnswer.trim())

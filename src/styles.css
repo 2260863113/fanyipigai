@@ -7,7 +7,7 @@
   --line: #e4e7ec;
   --line-strong: #cfd4dc;
 
-  /* 三种标记色。红=语法与严重表达不当，橙=表达生硬，绿=表达优秀 */
+  /* 标记色与颜色分级对应：红＝硬性错误，橙＝表达问题，绿＝表达优秀 */
   --mark-red: #c0392b;
   --mark-red-bg: #fdecea;
   --mark-orange: #b26a00;
@@ -17,6 +17,12 @@
 
   --accent: #2c6bed;
 
+  /*
+   * 正文一律用衬线体：原文、作答、批注、批注里的正确写法小字都用同一套字体。
+   * 这样"哪一处被改动、改成了什么"在读感上和被批改的原句是连续的，
+   * 不会出现"批注是另一种字体、看着像另一个东西"的割裂感。
+   * 界面文字（按钮、标签、统计）另用无衬线体，与正文区分开。
+   */
   --serif: Georgia, 'Times New Roman', 'Songti SC', 'SimSun', serif;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
 
@@ -47,11 +53,9 @@ body {
 }
 
 button {
-  font-family: inherit;
+  font-family: var(--sans);
   font-size: inherit;
 }
-
-/* ── 整体：上下三段，中间左右两屏 ───────────────── */
 
 .app {
   height: 100%;
@@ -60,7 +64,7 @@ button {
   overflow: hidden;
 }
 
-/* ── 顶部导航：模式切换 ─────────────────────────── */
+/* ── 顶部导航：题型与练习记录 ───────────────────── */
 
 .topbar {
   flex: none;
@@ -103,7 +107,7 @@ button {
   border: 1px solid transparent;
   background: transparent;
   color: var(--ink-soft);
-  padding: 6px 20px;
+  padding: 6px 18px;
   border-radius: 8px;
   cursor: pointer;
   font-size: 15px;
@@ -223,7 +227,6 @@ button {
   flex-wrap: wrap;
   padding: 10px 18px;
   border-bottom: 1px solid var(--line);
-  background: var(--paper);
 }
 
 .screen-head h2 {
@@ -253,7 +256,7 @@ button {
   margin-top: 14px;
 }
 
-/* 原文用衬线、行距放大，读起来接近纸质材料 */
+/* 原文与作答都用衬线体，且字号、行距一致 */
 .source-text {
   font-family: var(--serif);
   font-size: 17.5px;
@@ -272,30 +275,26 @@ button {
 .reference {
   border-top: 1px dashed var(--line-strong);
   padding-top: 10px;
-  font-size: 14px;
+  font-family: var(--serif);
+  font-size: 15.5px;
+  line-height: 1.85;
   color: var(--ink-soft);
 }
 
 .reference summary {
   cursor: pointer;
   color: var(--accent);
+  font-family: var(--sans);
   font-size: 12.5px;
   user-select: none;
 }
 
 .reference p {
   margin: 8px 0 0;
-  line-height: 1.85;
   white-space: pre-wrap;
 }
 
-.records-inline {
-  margin-top: auto;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-}
-
-/* ── 作答与结果共用同一块区域 ───────────────────── */
+/* ── 作答 ───────────────────────────────────────── */
 
 .answer-input {
   width: 100%;
@@ -303,17 +302,16 @@ button {
   border-radius: 8px;
   padding: 12px 14px;
   font-family: var(--serif);
-  font-size: 16.5px;
+  font-size: 17.5px;
   line-height: 1.9;
   color: var(--ink);
   background: #fcfcfd;
   resize: none;
 }
 
-/* 铺满右屏剩余高度：提交前后都在同一位置 */
 .answer-input-fill {
   flex: 1;
-  min-height: 240px;
+  min-height: 220px;
 }
 
 .answer-input:focus {
@@ -322,12 +320,15 @@ button {
   box-shadow: 0 0 0 3px rgba(44, 107, 237, 0.12);
 }
 
-.answer-static {
-  font-family: var(--serif);
-  font-size: 16.5px;
-  line-height: 1.9;
-  margin: 0;
-  white-space: pre-wrap;
+/* 分段导航：放在原文下方、批改结果上方 */
+.section-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 
 .level-switch {
@@ -358,10 +359,15 @@ button {
 .btn {
   border-radius: 8px;
   border: 1px solid var(--line-strong);
-  padding: 6px 18px;
+  padding: 6px 16px;
   cursor: pointer;
   background: var(--paper);
   color: var(--ink);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .btn-primary {
@@ -369,11 +375,6 @@ button {
   border-color: var(--accent);
   color: #fff;
   font-weight: 600;
-}
-
-.btn-primary:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .btn-ghost {
@@ -416,157 +417,32 @@ button {
   flex-wrap: wrap;
 }
 
-/* ── 练习记录（嵌在左屏底部）───────────────────── */
+/* ── 批改结果：左边计分与归类，右边逐处批注 ─────── */
 
-.panel-records {
-  background: transparent;
-  border: none;
-  box-shadow: none;
+.result-panel {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  border-top: 1px solid var(--line);
 }
 
-.panel-compact .panel-head {
-  padding: 0 0 8px;
-  border-bottom: none;
-}
-
-.panel-compact .panel-head h2 {
-  font-size: 13px;
-}
-
-.panel-compact .panel-body {
-  padding: 0;
-}
-
-.record-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.record-item {
-  width: 100%;
-  text-align: left;
+.result-left {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 16px 18px;
+  border-right: 1px solid var(--line);
   background: var(--paper-soft);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 12px;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
-.record-item:hover {
-  border-color: var(--accent);
+.result-left > * + * {
+  margin-top: 14px;
 }
 
-.record-top {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.record-score {
-  color: var(--accent);
-}
-
-.record-meta,
-.record-time {
-  font-size: 11.5px;
-  color: var(--ink-faint);
-}
-
-/* ── 详情（贴在右屏底部）───────────────────────── */
-
-.detail {
-  flex: none;
-  margin: 0 18px 14px;
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-left-width: 3px;
-  border-radius: var(--radius);
-  overflow: hidden;
-  box-shadow: var(--shadow);
-}
-
-.detail-idle {
-  border-left-width: 1px;
-  padding: 12px 14px;
-}
-
-.detail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-}
-
-.detail-kind {
-  font-size: 12.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.detail-close {
-  border: none;
-  background: transparent;
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  color: var(--ink-soft);
-}
-
-.detail-list {
-  margin: 0;
-  padding: 12px 14px 16px;
-}
-
-.detail-list dt {
-  font-size: 11.5px;
-  color: var(--ink-faint);
-  margin-top: 10px;
-}
-
-.detail-list dt:first-child {
-  margin-top: 0;
-}
-
-.detail-list dd {
-  margin: 3px 0 0;
-}
-
-.detail-text {
-  font-family: var(--serif);
-  font-size: 15px;
-  padding: 12px 14px 0;
-}
-
-.detail-list .detail-text {
-  padding: 0;
-}
-
-.detail-body {
-  font-size: 13.5px;
-  line-height: 1.8;
-  color: var(--ink-soft);
-  margin: 0;
-}
-
-/* ── 批改结果 ───────────────────────────────────── */
-
-.result-body > * + * {
-  margin-top: 16px;
-}
-
-.score-block {
-  display: flex;
-  gap: 24px;
-  align-items: flex-start;
-  flex-wrap: wrap;
+.result-right {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 8px 18px 20px;
 }
 
 .score-total {
@@ -576,7 +452,7 @@ button {
 }
 
 .score-number {
-  font-size: 40px;
+  font-size: 38px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -586,80 +462,29 @@ button {
   color: var(--ink-faint);
 }
 
-.score-note {
-  display: block;
+.score-rule {
+  margin: 0;
   font-size: 11.5px;
+  line-height: 1.6;
   color: var(--ink-faint);
+}
+
+.score-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.score-count {
+  font-variant-numeric: tabular-nums;
   margin-left: 6px;
 }
 
-.dims {
-  flex: 1;
-  min-width: 240px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px 18px;
-}
-
-.dim-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12.5px;
-  color: var(--ink-soft);
-}
-
-.dim-score {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.dim-track {
-  height: 5px;
-  border-radius: 999px;
-  background: var(--paper-soft);
-  overflow: hidden;
-  margin-top: 4px;
-}
-
-.dim-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 999px;
-}
-
-.result-meta {
-  margin-top: 10px;
-}
-
-.summary {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.85;
-  border-left: 3px solid var(--line-strong);
-  padding-left: 12px;
-}
-
-.comment-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 10px 18px;
-}
-
-.comment {
-  font-size: 12.5px;
-  line-height: 1.75;
-  color: var(--ink-soft);
-}
-
-.comment-name {
-  font-weight: 600;
-  color: var(--ink);
-  margin-right: 6px;
-}
-
 .stats h3,
-.annotated-block h3,
 .warn-block h3 {
   font-size: 13px;
   margin: 0 0 8px;
@@ -670,7 +495,7 @@ button {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
   padding: 0;
 }
@@ -678,8 +503,8 @@ button {
 .stats-list li {
   border: 1px solid currentColor;
   border-radius: 999px;
-  padding: 2px 12px;
-  font-size: 12.5px;
+  padding: 1px 10px;
+  font-size: 12px;
 }
 
 .stats-count {
@@ -687,17 +512,13 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.stats-highlight {
-  margin: 10px 0 0;
-  font-size: 12.5px;
+.result-meta-block {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 /* ── 带批注的译文 ───────────────────────────────── */
-
-.annotated-block {
-  border-top: 1px solid var(--line);
-  padding-top: 14px;
-}
 
 .annotated {
   position: relative;
@@ -773,16 +594,16 @@ button {
   text-decoration-thickness: 2px;
 }
 
-/* 正确写法以小字浮在被划掉的原文上方 */
+/* 正确写法以小字浮在被划掉的原文上方，字体与正文同一套 */
 .mk-fix {
   position: absolute;
   left: 0;
   bottom: 100%;
-  font-size: 0.72em;
+  font-family: var(--serif);
+  font-size: 0.76em;
   font-weight: 700;
-  line-height: 1.25;
+  line-height: 1.3;
   white-space: nowrap;
-  font-family: var(--sans);
 }
 
 .mk-insert {
@@ -790,11 +611,10 @@ button {
 }
 
 .mk-fix-inline {
+  font-family: var(--serif);
   font-weight: 700;
   border-bottom: 2px solid currentColor;
   padding: 0 1px;
-  font-family: var(--sans);
-  font-size: 0.92em;
 }
 
 .mk-rewrite {
@@ -815,8 +635,8 @@ button {
 }
 
 .mk-rewrite-new {
-  font-family: var(--sans);
-  font-size: 0.8em;
+  font-family: var(--serif);
+  font-size: 0.84em;
   font-weight: 700;
   line-height: 1.4;
 }
@@ -844,6 +664,136 @@ button {
   background: rgba(44, 107, 237, 0.07);
   outline: none;
   border-radius: 3px;
+}
+
+/* ── 详情（贴在右屏底部）───────────────────────── */
+
+.detail {
+  flex: none;
+  margin: 0 18px 14px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.detail-idle {
+  border-left-width: 1px;
+  padding: 12px 14px;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+}
+
+.detail-kind {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.detail-close {
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--ink-soft);
+}
+
+.detail-list {
+  margin: 0;
+  padding: 12px 14px 16px;
+}
+
+.detail-list dt {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin-top: 10px;
+}
+
+.detail-list dt:first-child {
+  margin-top: 0;
+}
+
+.detail-list dd {
+  margin: 3px 0 0;
+}
+
+.detail-text {
+  font-family: var(--serif);
+  font-size: 15.5px;
+  padding: 12px 14px 0;
+}
+
+.detail-list .detail-text {
+  padding: 0;
+}
+
+.detail-body {
+  font-size: 13.5px;
+  line-height: 1.8;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+/* ── 练习记录页 ─────────────────────────────────── */
+
+.split-records .screen-left {
+  border-right: 1px solid var(--line);
+}
+
+.record-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.record-item {
+  width: 100%;
+  text-align: left;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.record-item:hover {
+  border-color: var(--line-strong);
+}
+
+.record-item-active {
+  border-color: var(--accent);
+  background: var(--paper);
+}
+
+.record-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.record-score {
+  color: var(--accent);
+}
+
+.record-meta,
+.record-time {
+  font-size: 11.5px;
+  color: var(--ink-faint);
 }
 
 /* ── 警示块 ─────────────────────────────────────── */
@@ -909,8 +859,19 @@ button {
     border-bottom: 1px solid var(--line);
   }
 
-  .screen-body {
+  .screen-body,
+  .result-left,
+  .result-right {
     overflow-y: visible;
+  }
+
+  .result-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .result-left {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
   }
 
   .answer-input-fill {

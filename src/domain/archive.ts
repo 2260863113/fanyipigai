@@ -17,7 +17,7 @@
  *          写入会失败，此时只记录一条调试日志，不影响批改本身。
  */
 
-import type { CorrectionRequest } from './prompt'
+// 只依赖请求里的元信息，因此不再引入 CorrectionRequest 类型
 
 export type FailureKind =
   /** JSON 解析不了，或字段结构不合法 */
@@ -30,8 +30,10 @@ export type FailureKind =
   | 'exhausted'
 
 export interface FailureAttempt {
-  /** 第几次尝试，从 1 开始 */
+  /** 第几次尝试，从 1 开始（按段计时） */
   attempt: number
+  /** 按段调用时是第几段，单段题为 1 */
+  sectionIndex: number
   /** 这一次的原始返回全文 */
   raw: string
   /** 结束原因，例如 stop / length */
@@ -67,8 +69,8 @@ export class FailureCollector {
   readonly attempts: FailureAttempt[] = []
 
   /** 记录一次不合格的返回。raw 保留全文，不做截断。 */
-  record(attempt: number, raw: string, finishReason: string, problems: string[]): void {
-    this.attempts.push({ attempt, raw, finishReason, problems })
+  record(attempt: number, raw: string, finishReason: string, problems: string[], sectionIndex = 1): void {
+    this.attempts.push({ attempt, sectionIndex, raw, finishReason, problems })
   }
 
   get isEmpty(): boolean {
@@ -78,10 +80,11 @@ export class FailureCollector {
 
 /** 把收集到的信息落盘。返回实际的错误信息（成功时为空）。 */
 export async function archiveFailure(
-  request: CorrectionRequest,
+  request: { source: string; referenceTranslation: string; direction: string; genre: string; level: string },
   model: string,
   kind: FailureKind,
   collector: FailureCollector,
+  fullAnswer: string,
   extraNote?: string,
 ): Promise<string | undefined> {
   const now = new Date()
@@ -95,10 +98,10 @@ export async function archiveFailure(
       direction: request.direction,
       genre: request.genre,
       level: request.level,
-      answerLength: request.answer.length,
+      answerLength: fullAnswer.length,
       source: request.source,
       referenceTranslation: request.referenceTranslation,
-      answer: request.answer,
+      answer: fullAnswer,
     },
     history: collector.attempts,
     note: extraNote,

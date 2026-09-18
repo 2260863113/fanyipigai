@@ -45,29 +45,27 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number } {
     calls += 1
 
     // 用请求里实际提交的作答来构造批注，与真实流程一致
-    const body = JSON.parse(String(init?.body ?? '{}')) as { answer?: string; source?: string }
-    const submitted = body.answer ?? ''
+    const body = JSON.parse(String(init?.body ?? '{}')) as {
+      answerSections?: Array<{ start: number; text: string }>
+      source?: string
+    }
+    const submitted = (body.answerSections ?? []).map((section) => section.text).join('\n\n')
     const exercise =
-      MOCK_CASES.find((item) => submitted.startsWith(item.sampleAnswer)) ??
+      MOCK_CASES.find((item) => item.sampleAnswer.trim() === submitted.trim()) ??
       MOCK_CASES.find((item) => item.exercise.source === body.source) ??
       MOCK_CASES[0]
     if (!exercise) throw new Error('题库为空')
 
     const correction = fixtureCorrectionFor(exercise.exercise.id, submitted)
+    if (!correction) throw new Error('渲染测试：提交的作答对不上任何内置示例')
     // 与真实接口保持严格同构：真实接口也会把位置校验的结果一起返回
     const checked = validateCorrection(correction.errors, correction.highlights, submitted)
     const payload = {
       ok: true,
       attempts: 1,
+      sectionCount: (body.answerSections ?? []).length,
       repaired: checked.rejections.map((rejection) => `${rejection.id}：${rejection.message}`),
-      correction: {
-        total: correction.total,
-        dimensions: correction.dimensions,
-        summary: correction.summary,
-        dimensionComments: correction.dimensionComments,
-        errors: correction.errors,
-        highlights: correction.highlights,
-      },
+      correction: { errors: correction.errors, highlights: correction.highlights },
       validated: {
         errors: checked.errors.map((entry) => ({
           error: entry.error,
@@ -149,7 +147,17 @@ export async function renderApp(): Promise<RenderProbe> {
   const modeTabLabels = [...container.querySelectorAll('.mode-tab')].map((node) => node.textContent?.trim() ?? '')
   const sampleIds = MOCK_CASES.map((item) => item.exercise.id)
 
-  // 提交批改
+  // 先把内置示例的作答填进输入框（模拟用户真的打字），再点提交。
+  // 必须用原生 setter + input 事件，React 才会收到这次受控更新。
+  const sampleAnswer = MOCK_CASES[0]?.sampleAnswer ?? ''
+  const textarea = container.querySelector<HTMLTextAreaElement>('.answer-input')
+  if (!textarea) throw new Error('找不到作答输入框')
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')?.set
+    setter?.call(textarea, sampleAnswer)
+    textarea.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  })
+
   const submit = container.querySelector<HTMLButtonElement>('.btn-primary')
   if (!submit) throw new Error('找不到「提交批改」按钮')
   await act(async () => {
@@ -158,7 +166,7 @@ export async function renderApp(): Promise<RenderProbe> {
 
   // 关键：提交后输入框应当从右屏消失，同一个位置换成批改结果
   const inputReplacedByResult =
-    container.querySelector('.answer-input') === null && container.querySelector('.result-body') !== null
+    container.querySelector('.answer-input') === null && container.querySelector('.result-panel') !== null
 
   // 点第一处批注，验证详情面板
   const firstMark = container.querySelector<HTMLElement>('.mk-delete, .mk-replace, .mk-insert, .mk-highlight')
@@ -170,7 +178,7 @@ export async function renderApp(): Promise<RenderProbe> {
 
   return {
     html: container.innerHTML,
-    text: textOf('.result-body'),
+    text: `${textOf('.result-left')} ${textOf('.result-right')}`,
     composeStageHadInput,
     inputReplacedByResult,
     modeTabLabels,

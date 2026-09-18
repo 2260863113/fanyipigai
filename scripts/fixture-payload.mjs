@@ -21,17 +21,17 @@ export async function buildFixturePayload(root) {
   const outfile = path.join(cacheDir, 'entry.mjs')
 
   const lines = [
-    `import { MOCK_CASES, fixtureCorrectionFor, DEMO_ANSWER_TAIL } from ${JSON.stringify(
-      path.join(root, 'src', 'domain', 'mock.ts'),
-    )}`,
+    `import { MOCK_CASES, fixtureCorrectionFor } from ${JSON.stringify(path.join(root, 'src', 'domain', 'mock.ts'))}`,
     `import { validateCorrection } from ${JSON.stringify(path.join(root, 'src', 'domain', 'validate.ts'))}`,
     `const first = MOCK_CASES[0]`,
-    `const answer = first.sampleAnswer + DEMO_ANSWER_TAIL`,
+    `const answer = first.sampleAnswer`,
     `const correction = fixtureCorrectionFor(first.exercise.id, answer)`,
+    `if (!correction) throw new Error('内置示例与作答对不上，无法构造假批改')`,
     `const checked = validateCorrection(correction.errors, correction.highlights, answer)`,
+    `export const answerText = answer`,
     `export const payload = {`,
-    `  ok: true, attempts: 1, repaired: [],`,
-    `  correction: { total: correction.total, dimensions: correction.dimensions, summary: correction.summary, dimensionComments: correction.dimensionComments, errors: correction.errors, highlights: correction.highlights },`,
+    `  ok: true, attempts: 1, repaired: [], sectionCount: 1,`,
+    `  correction: { errors: correction.errors, highlights: correction.highlights },`,
     `  validated: {`,
     `    errors: checked.errors.map((e) => ({ error: e.error, span: e.span, insertPoint: e.insertPoint, reorderSpans: e.reorderSpans, reordered: e.reordered })),`,
     `    highlights: checked.highlights.map((h) => ({ highlight: h.highlight, span: h.span })),`,
@@ -52,5 +52,5 @@ export async function buildFixturePayload(root) {
   })
 
   const mod = await import(pathToFileURL(outfile).href)
-  return mod.payload
+  return { payload: mod.payload, answerText: mod.answerText }
 }
