@@ -1,40 +1,42 @@
 /**
- * 第一版的假数据题库与假批改器。
+ * 内置示例题库与示例批改。
  *
- * 目的：在接入真实 AI 之前，先把「批改怎么画」这件事验证清楚。
- * 五道句子题各覆盖一种改法类型（替换、插入、删除、整句重写、语序调换），
- * 每题都带一处绿色亮点。
+ * 用途：没有密钥时看批注效果、冒烟测试、截屏，以及真实 API 出问题时的对照。
  *
- * 批注位置**不由手工数**，而是由 anchorAt() 用 indexOf 定位。
- * 理由：真实 AI 给的正是字符序号，而人工数序号极易出错，验证时无法区分
- * 「是校验器有问题」还是「序号本身写错了」。用程序定位后，假数据的序号必然正确，
- * 于是冒烟测试里任何失败都指向真实的程序缺陷。
- * 序号本身仍会经过与真实 AI 输出完全相同的校验流程，校验器依旧被真实地检验。
+ * 示例批注与真实 AI 走**完全相同的定位与校验**：都只给文字（oldText / insertAfterText），
+ * 由 locate() 去作答里找位置，再走一遍 validateCorrection。
+ * 因此这里任何定位失败都会在构建阶段直接抛错——
+ * 冒烟测试里一旦变红，指向的就是真实的程序缺陷，而不是"示例数据写错了"。
  */
 
-import type { Anchor, Correction, ErrorObject, Exercise, Highlight } from './types'
+import type { Correction, ErrorObject, Exercise, Highlight } from './types'
+import { locate } from './locate'
 
-/** 按出现次序定位片段，得到带原文片段的锚点。occ 从 1 开始。 */
-function anchorAt(text: string, sub: string, occ = 1): Anchor {
-  let index = text.indexOf(sub)
-  for (let i = 1; i < occ; i += 1) {
-    if (index < 0) break
-    index = text.indexOf(sub, index + 1)
-  }
-  if (index < 0) {
-    // 这里抛错而不是悄悄降级：假数据写错片段时，应当在构建阶段立刻暴露。
-    // 真实 AI 的输出走的是另一条路——校验器会拒绝渲染并告知用户，不会让页面崩掉。
+/**
+ * 把文字定位成锚点。
+ * 找不到就抛错：示例数据写错片段时应当在构建阶段立刻暴露，
+ * 而不是像真实 AI 那样走"退回重试"的路径。
+ */
+function anchorAt(text: string, sub: string): { start: number; end: number; snippet: string } {
+  const outcome = locate(text, { text: sub })
+  if (!outcome.ok) {
     throw new Error(
-      `假数据有误：在当前作答中找不到片段「${sub}」（第 ${occ} 次出现）。\n` +
-        `  作答长度 ${text.length}，前 60 字符：${JSON.stringify(text.slice(0, 60))}`,
+      `内置示例有误：${outcome.reason}\n  作答长度 ${text.length}，前 60 字符：${JSON.stringify(text.slice(0, 60))}`,
     )
   }
-  return { start: index, end: index + sub.length, snippet: sub }
+  return outcome.value
+}
+
+/** 示例里的一条错误：只给文字，位置由定位器补上，因此 anchor 是可选的。 */
+export type MockError = Omit<ErrorObject, 'anchor' | 'insertAfter' | 'segments'> & {
+  anchor?: ErrorObject['anchor']
+  insertAfter?: ErrorObject['insertAfter']
+  segments?: Array<Omit<NonNullable<ErrorObject['segments']>[number], 'anchor'>>
 }
 
 /** 假批改的结果。错误列表显式标注类型，避免写错分类或改法类型却无人发现。 */
 export interface MockCorrection extends Omit<Correction, 'errors' | 'highlights'> {
-  errors: ErrorObject[]
+  errors: MockError[]
   highlights: Highlight[]
 }
 
@@ -43,8 +45,11 @@ export interface MockCase {
   /** 故意写错的作答，用来演示批改 */
   sampleAnswer: string
   correction: MockCorrection
-  /** 作答中值得肯定的片段，用于验证绿色标记 */
-  highlight: (answer: string) => Highlight
+  /**
+   * 作答中值得肯定的片段，用于验证绿色标记。
+   * 只给文字；位置由 fixtureCorrectionFor 统一用 locate 找出来，与真实 AI 走同一条路径。
+   */
+  highlight: () => { id: string; oldText: string; comment: string }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -69,9 +74,9 @@ const replaceCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 's1-h1',
-    anchor: anchorAt(answer, 'people and nature live together in harmony'),
+    oldText: 'people and nature live together in harmony',
     comment: '“人与自然和谐共生”这一并列结构译得准确，语序自然，读起来没有翻译腔。',
   }),
 }
@@ -97,9 +102,9 @@ const insertCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 's2-h1',
-    anchor: anchorAt(answer, 'lucid waters and lush mountains are invaluable assets'),
+    oldText: 'lucid waters and lush mountains are invaluable assets',
     comment: '“绿水青山就是金山银山”用的是官方通行译法，术语这一维度没有失分。',
   }),
 }
@@ -126,9 +131,9 @@ const deleteCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 's3-h1',
-    anchor: anchorAt(answer, 'in the construction of ecological civilization'),
+    oldText: 'in the construction of ecological civilization',
     comment: '“生态文明建设”译成 the construction of ecological civilization，用名词化结构处理汉语动词，非常地道。',
   }),
 }
@@ -154,9 +159,9 @@ const reorderCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 's4-h1',
-    anchor: anchorAt(answer, 'because they let she forget her own life'),
+    oldText: 'because they let she forget her own life',
     comment: '用 because 从句解释“为什么热爱故事”，逻辑连接自然，符合原文的因果关系。',
   }),
 }
@@ -182,9 +187,9 @@ const rewriteCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 's5-h1',
-    anchor: anchorAt(answer, 'even though many people doubt that she can success'),
+    oldText: 'even though many people doubt that she can success',
     comment:
       '用 even though 引出让步状语从句，并且补出了 that 引导的宾语从句，句子骨架搭得对——问题只出在词形，而不是结构意识。',
   }),
@@ -209,9 +214,9 @@ const termCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 't2-h1',
-    anchor: anchorAt(answer, 'ecological'),
+    oldText: 'ecological',
     comment: '核心词 ecological 用对了，问题只在拼写变体。',
   }),
 }
@@ -235,9 +240,9 @@ const termCompareCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 't1-h1',
-    anchor: anchorAt(answer, '碳'),
+    oldText: '碳',
     comment: '“碳”这一核心语素译对了，问题只在整词的固定译法。',
   }),
 }
@@ -264,9 +269,9 @@ const paragraphCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 'p1-h1',
-    anchor: anchorAt(answer, 'brought millions farmer and herdsman increase income'),
+    oldText: 'brought millions farmer and herdsman increase income',
     comment:
       '“带动……增收”用了 bring … increase income 的动宾结构，方向是对的——问题在词形而非结构意识。',
   }),
@@ -294,9 +299,9 @@ const paragraphEnCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 'p2-h1',
-    anchor: anchorAt(answer, '交出没电的电池包'),
+    oldText: '交出没电的电池包',
     comment: 'hand over a depleted pack 译成“交出没电的电池包”，简洁达意。',
   }),
 }
@@ -323,9 +328,9 @@ const articleEnCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 'a1-h1',
-    anchor: anchorAt(answer, '弃风弃光仍然存在'),
+    oldText: '弃风弃光仍然存在',
     comment: 'curtailment 译成“弃风弃光”，用的是业内通行说法，比“削减”准确得多。',
   }),
 }
@@ -352,9 +357,9 @@ const articleZhCase: MockCase = {
     errors: [],
     highlights: [],
   },
-  highlight: (answer) => ({
+  highlight: () => ({
     id: 'a2-h1',
-    anchor: anchorAt(answer, 'harmonious coexistence between human and nature'),
+    oldText: 'harmonious coexistence between human and nature',
     comment:
       '“人与自然和谐共生”译成 harmonious coexistence between human and nature，抓住了固定表述的核心，方向正确。',
   }),
@@ -363,7 +368,16 @@ const articleZhCase: MockCase = {
 /** 演示时自动填入的作答：在示例作答后面接一句中文，用来验证作答尾部能正常显示。 */
 export const DEMO_ANSWER_TAIL = '，这一点在各地实践中反复得到验证。'
 
+/**
+ * 题库顺序。
+ * 排在第一位的是打开页面时的默认题目，因此这里放覆盖面最广的那篇作文题（有备选篇目可换）。
+ * 句子题排在其后，因为五道句子题各覆盖一种改法，是看批注效果最直观的一组。
+ */
 export const MOCK_CASES: MockCase[] = [
+  articleEnCase,
+  articleZhCase,
+  paragraphCase,
+  paragraphEnCase,
   replaceCase,
   insertCase,
   deleteCase,
@@ -371,20 +385,17 @@ export const MOCK_CASES: MockCase[] = [
   rewriteCase,
   termCase,
   termCompareCase,
-  paragraphCase,
-  paragraphEnCase,
-  articleEnCase,
-  articleZhCase,
 ]
 
 /**
  * 在作答文本上建立批注。
- * 位置全部由 anchorAt 定位，因此这里不会出现"手数序号数错"的问题。
+ * 这里**只给文字**（oldText），位置由 resolveError 用 locate 统一找出来——
+ * 与真实 AI 走同一条路径，因此示例数据本身就在检验定位器。
  *
- * 注意：只在题目 id 与作答匹配时才能定位，所以这里按 id 分派，
- * 每次只构造当前这道题的批注——否则会用甲题的作答去定位乙题的片段。
+ * 按题目 id 分派：不同题目的片段只在自己那道题的作答里存在，
+ * 用甲题的片段去定位乙题的作答必然全部找不到。
  */
-function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
+function buildErrors(exerciseId: string): MockError[] {
   switch (exerciseId) {
     // 1. 替换
     case 'sentence-001':
@@ -393,7 +404,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's1-e1',
           type: 'replace',
           category: 'function-word',
-          anchor: anchorAt(answer, 'i is'),
+          oldText: 'i is',
           targetText: 'I am',
           explanation: '第一人称代词 I 在任何位置都必须大写；主语 I 搭配的 be 动词是 am，不是 is。',
         },
@@ -401,7 +412,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's1-e2',
           type: 'delete',
           category: 'addition',
-          anchor: anchorAt(answer, ' it '),
+          oldText: ' it ',
           explanation:
             'it 在这里是多余的。原文是并列复合句，后半段直接由 became 承接主句，不该另起一个主语加谓语的分句。',
         },
@@ -409,7 +420,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's1-e3',
           type: 'replace',
           category: 'function-word',
-          anchor: anchorAt(answer, 'became a important'),
+          oldText: 'became a important',
           targetText: 'has become an important',
           explanation: '时态要与前面的 has become 对应，且 important 以元音音素开头，冠词应用 an。',
         },
@@ -422,7 +433,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's2-e1',
           type: 'insert',
           category: 'function-word',
-          insertAfter: anchorAt(answer, 'insist'),
+          oldText: 'insist',
           targetText: 'on ',
           explanation: 'insist 是不及物动词，后面要接介词 on：insist on the idea that …。',
         },
@@ -430,7 +441,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's2-e2',
           type: 'replace',
           category: 'function-word',
-          anchor: anchorAt(answer, 'China '),
+          oldText: 'China ',
           targetText: 'China ',
           explanation: '主语 China 是第三人称单数，谓语应为 insists on the idea that …，需要补上词尾 -s 与介词 on。',
         },
@@ -438,7 +449,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's2-e3',
           type: 'insert',
           category: 'function-word',
-          insertAfter: anchorAt(answer, 'in '),
+          oldText: 'in ',
           targetText: 'a ',
           explanation: 'position 是可数名词单数，前面需要不定冠词 a：in a prominent position。',
         },
@@ -451,7 +462,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's3-e1',
           type: 'replace',
           category: 'function-word',
-          anchor: anchorAt(answer, 'recent year'),
+          oldText: 'recent year',
           targetText: 'recent years',
           explanation: 'in recent years 是固定搭配，year 必须用复数；写成 in recent year 属硬性错误。',
         },
@@ -459,7 +470,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's3-e2',
           type: 'replace',
           category: 'function-word',
-          anchor: anchorAt(answer, 'made'),
+          oldText: 'made',
           targetText: 'has made',
           explanation: 'in recent years 表示从过去延续到现在的时段，谓语应当用现在完成时 has made。',
         },
@@ -467,7 +478,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's3-e3',
           type: 'replace',
           category: 'function-word',
-          anchor: anchorAt(answer, 'has became'),
+          oldText: 'has became',
           targetText: 'has become',
           explanation: '现在完成时由 has + 过去分词构成，become 的过去分词是 become，不是 became。',
         },
@@ -481,8 +492,8 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           type: 'reorder',
           category: 'word-order',
           segments: [
-            { anchor: anchorAt(answer, 'live'), sourceIndex: 0, targetIndex: 1 },
-            { anchor: anchorAt(answer, 'love'), sourceIndex: 1, targetIndex: 0 },
+            { oldText: 'live', sourceIndex: 0, targetIndex: 1 } as NonNullable<MockError['segments']>[number],
+            { oldText: 'love', sourceIndex: 1, targetIndex: 0 } as NonNullable<MockError['segments']>[number],
           ],
           explanation:
             '“住在小城的”是修饰“单身母亲”的定语，不能直接与主句谓语并列。正确结构是 A single mother who lives in a small town loves stories：谓语 loves 必须在定语之后，并带第三人称单数词尾。',
@@ -492,8 +503,8 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           type: 'reorder',
           category: 'word-order',
           segments: [
-            { anchor: anchorAt(answer, 'in small town '), sourceIndex: 0, targetIndex: 1 },
-            { anchor: anchorAt(answer, 'for a while.'), sourceIndex: 1, targetIndex: 0 },
+            { oldText: 'in small town ', sourceIndex: 0, targetIndex: 1 } as NonNullable<MockError['segments']>[number],
+            { oldText: 'for a while.', sourceIndex: 1, targetIndex: 0 } as NonNullable<MockError['segments']>[number],
           ],
           explanation:
             '英文里修饰成分应紧跟被修饰的词，而时间状语 for a while 通常置于句末。原句把两个状语挤在一起，读起来含混。',
@@ -507,7 +518,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's5-e1',
           type: 'rewrite',
           category: 'register',
-          anchor: anchorAt(answer, 'In wake of reform'),
+          oldText: 'In wake of reform',
           targetText: 'Since the beginning of reform and opening up',
           explanation:
             '开头这一段需要整段重写：“改革开放以来”是“固定术语 + 时点”结构，必须写成 since the beginning of reform and opening up。in wake of reform 既丢了“开放”这一半术语，也丢掉了“以来”所标记的时间起点。',
@@ -516,7 +527,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's5-e2',
           type: 'delete',
           category: 'collocation',
-          anchor: anchorAt(answer, 'her dream '),
+          oldText: 'her dream ',
           targetText: 'to her dream',
           explanation:
             'insist 不能直接带宾语，不能说 insist her dream。保留 insist 时必须写成 insisted on；“坚持梦想”更地道的说法是 hold fast to her dream。',
@@ -525,7 +536,7 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
           id: 's5-e3',
           type: 'insert',
           category: 'function-word',
-          insertAfter: anchorAt(answer, 'can '),
+          oldText: 'can ',
           targetText: 'succeed',
           explanation:
             'succeed 是动词，误写成了名词 success。could 后面必须接动词原形，这里应写成 could succeed。',
@@ -538,23 +549,63 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
 }
 
 /**
- * 建立某道题的假批改。仅在"查看内置示例"与测试/截屏时使用，正常批改走真实 AI。
+ * 建立某道题的示例批改。仅在「查看内置示例批改」、冒烟测试与截屏时使用，正常批改走真实 AI。
  *
  * 按**作答文字**反查是哪一道示例，而不是按当前题号：
- * 这样"在某道题里粘了另一道题的示例作答"也能正确给出对应的批改，
- * 而不会拿甲题的批注位置去标乙题的文字（那必然全部对不上）。
- * 对不上任何示例时返回 null，由调用方明确报错。
+ * 这样把某道题的示例作答粘到另一道题里，也能给出与之对应的批改，
+ * 而不会拿甲题的批注去标乙题的文字。对不上任何示例时返回 null，由调用方明确报错。
+ *
+ * 返回的是**已经定位好的** Correction：锚点全部补齐，可以直接交给 validateCorrection 与渲染。
+ * 与真实 AI 走的是同一条路径（locate + validate），
+ * 因此示例既是演示数据，也是定位器的真实测试用例。
  */
-export function fixtureCorrectionFor(exerciseId: string, answer: string): MockCorrection | null {
+export function fixtureCorrectionFor(exerciseId: string, answer: string): Correction | null {
   const trimmed = answer.trim()
-  const byAnswer = MOCK_CASES.find((item) => item.sampleAnswer.trim() === trimmed)
-  const testCase = byAnswer ?? MOCK_CASES.find((item) => item.exercise.id === exerciseId)
-  if (!testCase) return null
-  if (testCase.sampleAnswer.trim() !== trimmed) return null
-  return {
-    ...testCase.correction,
-    errors: buildErrors(testCase.exercise.id, answer),
-    highlights: [testCase.highlight(answer)],
+  const testCase =
+    MOCK_CASES.find((item) => item.sampleAnswer.trim() === trimmed) ??
+    MOCK_CASES.find((item) => item.exercise.id === exerciseId)
+  if (!testCase || testCase.sampleAnswer.trim() !== trimmed) return null
+
+  const rawErrors = buildErrors(testCase.exercise.id)
+  const rawHighlight = testCase.highlight()
+
+  // 定位：错误与亮点都只给文字，位置由 locate 找出来
+  const errors: ErrorObject[] = []
+  for (const error of rawErrors) {
+    const resolved = resolveError(error, answer, testCase.exercise.id)
+    if (resolved) errors.push(resolved)
+  }
+
+  const highlight: Highlight = {
+    ...rawHighlight,
+    anchor: anchorAt(answer, rawHighlight.oldText ?? ''),
+  }
+
+  return { errors, highlights: [highlight] }
+}
+
+/** 把一条示例批注里的文字定位成锚点。 */
+function resolveError(error: MockError, answer: string, exerciseId: string): ErrorObject | null {
+  const label = `${exerciseId} 的 ${error.id}`
+  const base = { ...error }
+
+  switch (error.type) {
+    case 'insert': {
+      const text = error.oldText ?? ''
+      return { ...base, oldText: text, insertAfter: anchorAt(answer, text) } as ErrorObject
+    }
+    case 'reorder': {
+      const segments = (error.segments ?? []).map((segment) => ({
+        ...segment,
+        anchor: anchorAt(answer, segment.oldText ?? ''),
+      }))
+      return { ...base, segments } as ErrorObject
+    }
+    default: {
+      const text = error.oldText ?? ''
+      if (!text) throw new Error(`${label} 缺少 oldText，无法定位`)
+      return { ...base, anchor: anchorAt(answer, text) } as ErrorObject
+    }
   }
 }
 

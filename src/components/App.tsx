@@ -13,6 +13,7 @@ import {
 import { validateCorrection, type ValidatedCorrection } from '../domain/validate'
 import { requestJudgment, type JudgeSectionInput } from '../domain/client'
 import { splitSections, type Section } from '../domain/sections'
+import { variantsFor } from '../domain/variants'
 import type { JudgeFailureKind } from '../domain/ai'
 import { ScoreSummary } from './ScoreSummary'
 import { AnnotationList } from './AnnotationList'
@@ -66,8 +67,26 @@ export function App(): JSX.Element {
   const exercise: Exercise = activeCase.exercise
   const mode = exercise.mode
 
+  /**
+   * 交替使用的原文。
+   * 第 0 份是题目本身的原文，之后的来自 variants.ts 的备选；
+   * 「换一换」按位轮换，换的是原文，题目编号与题型不变。
+   */
+  const sourceOptions = useMemo(
+    () => [
+      { source: exercise.source, referenceTranslation: exercise.referenceTranslation },
+      ...variantsFor(exercise.id),
+    ],
+    [exercise.id, exercise.source, exercise.referenceTranslation],
+  )
+  const [variantIndex, setVariantIndex] = useState(0)
+  const safeVariantIndex = variantIndex < sourceOptions.length ? variantIndex : 0
+  const current = sourceOptions[safeVariantIndex] ?? sourceOptions[0]
+  const currentSource = current?.source ?? exercise.source
+  const currentReference = current?.referenceTranslation ?? exercise.referenceTranslation
+
   /** 原文按段落切分；单段题只有一个元素，因此下面所有逻辑对四类题型通用 */
-  const sourceSections: Section[] = useMemo(() => splitSections(exercise.source), [exercise.source])
+  const sourceSections: Section[] = useMemo(() => splitSections(currentSource), [currentSource])
   const multiSection = sourceSections.length > 1
   const currentSection = sourceSections[sectionIndex] ?? sourceSections[0]
   const currentAnswer = drafts[sectionIndex] ?? ''
@@ -91,11 +110,25 @@ export function App(): JSX.Element {
     setExerciseId(next.exercise.id)
     setDrafts({})
     setSectionIndex(0)
+    setVariantIndex(0)
     setResult(null)
     setSelection(null)
     setOpenRecord(null)
     setError(null)
     setNotice(null)
+  }
+
+  /** 换一换：换成下一份原文，作答与批改结果都清空（原文变了，旧作答不再对应）。 */
+  function rotateSource(): void {
+    if (sourceOptions.length < 2) return
+    setVariantIndex((index) => (index + 1) % sourceOptions.length)
+    setDrafts({})
+    setSectionIndex(0)
+    setResult(null)
+    setSelection(null)
+    setError(null)
+    setNotice(null)
+    setNotice(`已换成第 ${((safeVariantIndex + 1) % sourceOptions.length) + 1} 篇原文，作答已清空。`)
   }
 
   function selectTab(nextTab: Tab): void {
@@ -167,8 +200,8 @@ export function App(): JSX.Element {
 
     const answerSections = buildAnswerSections()
     const outcome = await requestJudgment({
-      source: exercise.source,
-      referenceTranslation: exercise.referenceTranslation,
+      source: currentSource,
+      referenceTranslation: currentReference,
       direction: exercise.direction,
       genre: exercise.genre,
       level,
@@ -303,6 +336,16 @@ export function App(): JSX.Element {
               <header className="pane-head">
                 <h2>原文</h2>
                 <div className="head-meta">
+                  {sourceOptions.length > 1 && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={rotateSource}
+                      title="换一篇同话题、同文体的原文继续练"
+                    >
+                      换一换
+                    </button>
+                  )}
                   {multiSection && (
                     <span className="chip">
                       第 {sectionIndex + 1} / {sourceSections.length} 段
@@ -313,11 +356,11 @@ export function App(): JSX.Element {
               </header>
               <div className="pane-body">
                 <p className={mode === 'term' ? 'source-text source-term' : 'source-text'}>
-                  {multiSection ? (currentSection?.text ?? exercise.source) : exercise.source}
+                  {multiSection ? (currentSection?.text ?? currentSource) : currentSource}
                 </p>
                 <details className="reference">
                   <summary>参考译文（随题固定，可折叠）</summary>
-                  <p>{exercise.referenceTranslation}</p>
+                  <p>{currentReference}</p>
                 </details>
               </div>
             </section>
@@ -391,7 +434,10 @@ export function App(): JSX.Element {
 
                 {notice && !error && <p className="hint notice">{notice}</p>}
 
-                {!shown && (
+                {/* 提交前：可编辑的输入框；提交后：同一栏换成只读的作答展示 */}
+                {shown ? (
+                  <p className="answer-static">{shown.answer}</p>
+                ) : (
                   <textarea
                     className="answer-input answer-input-fill"
                     value={currentAnswer}

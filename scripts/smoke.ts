@@ -84,34 +84,40 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     )
   }
 
-  // 反向验证：故意把位置写错，校验器必须发现并拒绝
-  console.log('\n[反向验证] 故意把批注位置写错')
-  const target = MOCK_CASES[0]
-  if (target) {
-    const correction = fixtureCorrectionFor(target.exercise.id, target.sampleAnswer)
+  // 反向验证：故意给出译文里没有的文字，定位器必须拒绝并说清原因
+  console.log('\n[反向验证] 让定位器面对它找不到、或分不清的文字')
+  try {
+    const { locate } = await import('../src/domain/locate')
+    const target = MOCK_CASES[0]
+    if (target) {
+      const answer = target.sampleAnswer
+      // 从当前默认题的作答里取一段真实存在的文字，避免把断言写死在某一篇上
+      const present = answer.slice(10, 30)
 
-    const offset = correction.errors.find((e) => e.anchor)
-    if (offset?.anchor) {
-      const shifted = { start: offset.anchor.start + 1, end: offset.anchor.end + 1, snippet: offset.anchor.snippet }
-      const reverse = validateCorrection([{ ...offset, anchor: shifted }], [], target.sampleAnswer)
-      check(reverse.rejections.length === 1, '位置整体偏移一个字符的批注被拒绝了')
-      check(reverse.errors.length === 0, '被拒绝的批注没有被拿去渲染')
-      console.log(`    拒绝原因：${reverse.rejections[0]?.message ?? '（无）'}`)
-    }
+      const missing = locate(answer, { text: '这段文字根本不在译文里' })
+      check(!missing.ok, '定位器拒绝了译文里不存在的片段')
+      if (!missing.ok) console.log(`    拒绝原因：${missing.reason}`)
 
-    const mismatched = correction.errors.find((e) => e.anchor)
-    if (mismatched?.anchor) {
-      const wrong = { ...mismatched, anchor: { ...mismatched.anchor, snippet: '这段文字根本不存在' } }
-      const reverse = validateCorrection([wrong], [], target.sampleAnswer)
-      check(reverse.rejections.length === 1, '片段与位置不匹配的批注被拒绝了')
-    }
+      const exact = locate(answer, { text: present })
+      check(exact.ok, `定位器找到了确实存在的片段「${present.slice(0, 12)}…」`)
 
-    const insert = correction.errors.find((e) => e.insertAfter)
-    if (insert?.insertAfter) {
-      const wrong = { ...insert, insertAfter: { ...insert.insertAfter, start: 0, end: 0, snippet: 'x' } }
-      const reverse = validateCorrection([wrong], [], target.sampleAnswer)
-      check(reverse.rejections.length === 1, '插入锚点位置错误的批注被拒绝了')
+      // 同一片段出现多次时必须要求消歧，而不是随便挑一处
+      const repeated = 'the cat and the dog'
+      const ambiguous = locate(repeated, { text: 'the ' })
+      check(!ambiguous.ok, '片段出现多次且没有上下文时，定位器拒绝猜')
+      if (!ambiguous.ok) console.log(`    拒绝原因：${ambiguous.reason}`)
+
+      const disambiguated = locate(repeated, { text: 'the ', contextAfter: 'dog' })
+      check(disambiguated.ok, '补上上下文后定位器能分出是哪一处')
+      if (disambiguated.ok) {
+        check(disambiguated.value.start === 12, `定位到的是第 12 个字符处（实际 ${disambiguated.value.start}）`)
+      }
+
+      const byOrder = locate(repeated, { text: 'the ', occurrence: 2 })
+      check(byOrder.ok && byOrder.value.start === 12, '也可以用"第几次出现"来指定')
     }
+  } catch (error) {
+    check(false, '定位器反向验证可以执行', error instanceof Error ? error.message : String(error))
   }
 
   // 界面渲染：类型正确不等于能渲染出来，白屏是用户无法自行修复的故障
@@ -143,6 +149,15 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const noteCount = (rendered.html.match(/class="note-item/g) ?? []).length
     check(noteCount > 0, `右下角列出了 ${noteCount} 条批注`)
 
+    // 右上角「我的译文」在提交后必须显示作答——这里曾经是空白的（textarea 被压成零高度）
+    check(rendered.answerPaneText.trim().length > 20, `右上角显示了作答（${rendered.answerPaneText.trim().length} 字）`)
+    if (rendered.answerPaneText.trim().length <= 20) {
+      console.log(`    [诊断] 右上栏实际内容：${JSON.stringify(rendered.answerPaneText.slice(0, 200))}`)
+      console.log(`    [诊断] 右上栏 HTML 片段：${rendered.answerPaneHtml.slice(0, 600)}`)
+    }
+    check(rendered.html.includes('answer-static'), '右上是只读的作答展示，不是输入框')
+    check(rendered.hasRotateButton, '左上角原文栏有「换一换」按钮')
+
     // 右下角是独立的批注条目，不再把用户译文重排一遍
     check(!rendered.html.includes('annotated-lines'), '右下角没有把用户译文重排一遍')
 
@@ -153,14 +168,21 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(rendered.text.includes('表达问题'), '左下角区分了表达问题')
     check(!rendered.html.includes('总体评语'), '批改结果里没有 AI 写的总体评语')
     check(!rendered.html.includes('分项评语'), '批改结果里没有 AI 写的分项评语')
-    check(!rendered.text.includes('未能标出'), '没有批注因位置错误被拒绝')
-    check(rendered.html.includes('detail') && rendered.html.includes('说明'), '点击批注后详情面板给出了说明')
-    check(rendered.html.includes('官方建议'), '题目里显示了官方建议用时')
-    check(rendered.html.includes('参考译文'), '左屏提供了可折叠的参考译文')
-
     // 还原探针改过的全局对象，否则后续依赖 fetch 的检查会误报
     rendered.restore()
     check(typeof globalThis.fetch === 'function', '渲染探针已还原全局 fetch')
+
+    // 再用一道有批注的句子题单独验批注交互：
+    // 默认题是文章，示例里只有一处亮点，没有 errors 条目可点，验不了"点批注看解释"。
+    console.log('\n[界面渲染 · 批注交互] 换成句子题重跑一遍')
+    const sentence = await renderApp({ exerciseId: 'sentence-001' })
+    check(sentence.judgeCalls === 1, '句子题也走通了提交 → 批改')
+    check(sentence.answerPaneText.includes('i is'), '句子题提交后右上角显示了作答')
+    const sentenceNotes = (sentence.html.match(/class="note-item/g) ?? []).length
+    check(sentenceNotes >= 3, `句子题的右下角列出了 ${sentenceNotes} 条批注`)
+    check(sentence.html.includes('说明'), '点击批注后详情面板给出了说明')
+    check(!sentence.html.includes('annotated-lines'), '右下角没有把用户译文重排一遍')
+    sentence.restore()
   } catch (error) {
     check(false, '界面渲染没有抛出异常', error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error))
   }

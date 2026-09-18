@@ -14,6 +14,7 @@
 
 import { buildRetryPrompt, buildSectionNote, buildSystemPrompt, buildUserPrompt, type CorrectionRequest } from './prompt'
 import { parseCorrection, type ParseSuccess } from './parse'
+import { validateCorrection } from './validate'
 import { FailureCollector } from './archive'
 import { mergeSectionCorrections, rebuildFromSections, type Section } from './sections'
 
@@ -345,18 +346,26 @@ export async function judgeAnswer(
     })),
   )
 
-  // 合并后的序号已经换算到全文坐标，因此要在全文上再校验一次。
+  // 合并后的区间已经换算到全文坐标，这里在全文上再校验一次。
   // 这一步能挡住"段落起点算错"这类整篇错位的问题。
-  const merged2 = parseCorrection(JSON.stringify(merged), rebuildFromSections(sections))
-  if (!merged2.ok) {
-    return fail('bad-output', ['合并后的批注在全文坐标下校验失败', ...merged2.problems])
+  //
+  // 注意：不要走 parseCorrection 再解析一遍——那是旧的"让 AI 给序号"方案留下来的做法，
+  // 而合并后的批注已经没有 oldText 可供重新定位了。位置此刻就在手上，直接校验区间。
+  const mergedAnswer = rebuildFromSections(sections)
+  const revalidated = validateCorrection(merged.errors, merged.highlights, mergedAnswer)
+  if (merged.errors.length > 0 && revalidated.errors.length === 0) {
+    return fail('bad-output', [
+      '合并后的批注在全文坐标下全部校验失败，说明段落起点的换算有问题',
+      `重建的全文长 ${mergedAnswer.length} 字符，共 ${sections.length} 段`,
+      ...revalidated.rejections.slice(0, 4).map((rejection) => `${rejection.id}：${rejection.message}`),
+    ])
   }
 
   const repaired = successes.flatMap((outcome) => outcome.parsed.repaired)
   return {
     ok: true,
     correction: merged,
-    validated: merged2.validated,
+    validated: revalidated,
     repaired,
     attempts: Math.max(...successes.map((outcome) => outcome.attempts)),
     sectionCount: total,

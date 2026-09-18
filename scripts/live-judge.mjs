@@ -117,7 +117,11 @@ const elapsed = ((Date.now() - started) / 1000).toFixed(1)
 if (!outcome.ok) {
   console.log(`\n✗ 批改失败（${outcome.kind}，用时 ${elapsed}s）`)
   console.log(`  ${outcome.message}`)
-  if (outcome.rawExcerpt) console.log(`  原始返回片段：${outcome.rawExcerpt}`)
+  if (outcome.problems?.length > 0) {
+    console.log(`\n  全部失败原因（共 ${outcome.problems.length} 条）：`)
+    for (const problem of outcome.problems) console.log(`    - ${problem}`)
+  }
+  if (outcome.rawExcerpt) console.log(`\n  原始返回片段：\n${outcome.rawExcerpt}`)
   process.exitCode = 1
 } else {
   const score = scoreCorrection(outcome.correction, chosen.request.answer)

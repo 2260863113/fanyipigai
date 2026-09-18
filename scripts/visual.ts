@@ -203,18 +203,32 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
         if (shot.action === 'submit') {
           // 真的把示例作答打进输入框再点提交，这样截到的是真实交互后的界面。
           // 必须用原生 setter + input 事件，React 才会收到这次受控更新。
+          // 默认题是一篇分段文章，而文章模式要求每段都写完才允许提交，因此这里逐段填入。
           const outcome = await cdp.evaluate(
             `(async () => {
                const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-               const ta = document.querySelector('.answer-input');
-               if (!ta) return '找不到输入框';
-               const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-               setter.call(ta, ${JSON.stringify(fixture.answerText)});
-               ta.dispatchEvent(new Event('input', { bubbles: true }));
-               await sleep(300);
+               const setValue = (el, value) => {
+                 const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+                 setter.call(el, value);
+                 el.dispatchEvent(new Event('input', { bubbles: true }));
+               };
+               const sections = ${JSON.stringify(fixture.answerSections)};
+               for (let i = 0; i < sections.length; i++) {
+                 if (i > 0) {
+                   const next = [...document.querySelectorAll('.section-nav .btn')]
+                     .find((b) => b.textContent.includes('下一段'));
+                   if (!next) return '分段导航里找不到「下一段」按钮';
+                   next.click();
+                   await sleep(250);
+                 }
+                 const ta = document.querySelector('.answer-input');
+                 if (!ta) return '找不到输入框（第 ' + (i + 1) + ' 段）';
+                 setValue(ta, sections[i]);
+                 await sleep(250);
+               }
                const btn = document.querySelector('.btn-primary');
                if (!btn) return '找不到提交按钮';
-               if (btn.disabled) return '提交按钮是禁用的';
+               if (btn.disabled) return '提交按钮是禁用的（共 ' + sections.length + ' 段）';
                btn.click();
                for (let i = 0; i < 80; i++) {
                  if (document.querySelector('.note-list')) {

@@ -271,7 +271,7 @@ button {
 }
 
 .pane-body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   padding: 14px;
@@ -390,8 +390,13 @@ button {
 }
 
 .answer-input-fill {
-  flex: 1;
-  min-height: 120px;
+  /*
+   * 必须同时给 flex-basis 与 min-height。
+   * 只写 flex: 1 时基线是 0%，而 .pane-body 又设了 min-height: 0，
+   * textarea 会被压成近乎零高度——文字在里边，但看起来那一栏是空的（实际踩过这个坑）。
+   */
+  flex: 1 1 auto;
+  min-height: 160px;
 }
 
 .answer-input:focus {

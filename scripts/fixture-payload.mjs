@@ -22,15 +22,17 @@ export async function buildFixturePayload(root) {
 
   const lines = [
     `import { MOCK_CASES, fixtureCorrectionFor } from ${JSON.stringify(path.join(root, 'src', 'domain', 'mock.ts'))}`,
+    `import { splitSections } from ${JSON.stringify(path.join(root, 'src', 'domain', 'sections.ts'))}`,
     `import { validateCorrection } from ${JSON.stringify(path.join(root, 'src', 'domain', 'validate.ts'))}`,
     `const first = MOCK_CASES[0]`,
     `const answer = first.sampleAnswer`,
     `const correction = fixtureCorrectionFor(first.exercise.id, answer)`,
     `if (!correction) throw new Error('内置示例与作答对不上，无法构造假批改')`,
     `const checked = validateCorrection(correction.errors, correction.highlights, answer)`,
-    `export const answerText = answer`,
+    // 默认题是分段的文章：截屏脚本需要逐段填入，所以这里把每段文字一起给出去
+    `export const answerSections = splitSections(answer).map((s) => s.text)`,
     `export const payload = {`,
-    `  ok: true, attempts: 1, repaired: [], sectionCount: 1,`,
+    `  ok: true, attempts: 1, repaired: [], sectionCount: answerSections.length,`,
     `  correction: { errors: correction.errors, highlights: correction.highlights },`,
     `  validated: {`,
     `    errors: checked.errors.map((e) => ({ error: e.error, span: e.span, insertPoint: e.insertPoint, reorderSpans: e.reorderSpans, reordered: e.reordered })),`,
@@ -52,5 +54,5 @@ export async function buildFixturePayload(root) {
   })
 
   const mod = await import(pathToFileURL(outfile).href)
-  return { payload: mod.payload, answerText: mod.answerText }
+  return { payload: mod.payload, answerSections: mod.answerSections }
 }

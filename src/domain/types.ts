@@ -97,24 +97,28 @@ export const LEVEL_LABEL: Record<PolishLevel, string> = {
 }
 
 /**
- * 锚点：错误对象在作答文本中指向的位置。
- * 由字符序号区间 + 该区间应有的原文片段共同描述；
- * 片段的作用是让程序自证位置是否有误（见 validateAnnotation）。
+ * 锚点：一处批注在作答文本中的绝对区间。
  *
- * 注意：文章模式按段调用时，段落内的序号在合并阶段会被换算成全文序号。
+ * 注意：AI **从来不输出这个字段**。它由程序按 AI 给出的文字片段找出来之后写入，
+ * 这样界面、位置校验、排版这些下游逻辑完全不需要知道"定位方式变了"。
  */
 export interface Anchor {
   /** 起始字符序号，含 */
   start: number
   /** 结束字符序号，不含 */
   end: number
-  /** 该区间内应有的原文片段，用于校验 */
+  /** 该区间内的原文片段，用于校验与消歧 */
   snippet: string
 }
 
 /** 语序调换中的一个片段。sourceIndex / targetIndex 相同者互为"另一端"。 */
 export interface ReorderSegment {
-  /** 该片段在用户译文中的锚点 */
+  /**
+   * AI 给出的文字片段（与 errors 的其他字段保持一致叫 oldText；也兼容 text 这个别名）。
+   * 位置由程序按文字找出来，见 anchor。
+   */
+  oldText?: string
+  /** 解析后填入的绝对区间，AI 从不输出这个字段 */
   anchor: Anchor
   /** 该片段在原始语序中的序号 */
   sourceIndex: number
@@ -122,16 +126,35 @@ export interface ReorderSegment {
   targetIndex: number
 }
 
-/** 错误对象：批改中描述"一处"问题的最小单位。 */
+/**
+ * 错误对象：批改中描述"一处"问题的最小单位。
+ *
+ * 位置**不由 AI 给序号**，而是由 AI 给出「改哪段文字」，程序自己到译文里找位置。
+ * 这样 AI 不需要数任何字符，也就没有"数错序号"这种失败——实测中它是最常见的失败来源。
+ * 定位所需的三样东西：
+ * - oldText / anchor.snippet：要改的原文片段，必须逐字复制
+ * - contextBefore / contextAfter：可选的左右各若干字，用于同一片段出现多次时消歧
+ * - insertAfter：插入类改用「补在这个片段之后」表达落点
+ */
 export interface ErrorObject {
   /** 在本次批改内唯一的编号 */
   id: string
   type: ErrorType
   category: ErrorCategory
-  /** 替换、删除、整句重写、语序调换所指向的原文位置 */
+  /** 要改的原文片段（replace / delete / rewrite 用它定位；reorder 用 segments 里的 anchor） */
+  oldText?: string
+  /**
+   * 解析后填入的绝对区间。
+   * AI 从来不给这个字段——它是程序按文字找出来之后自己写进来的，
+   * 保留它是为了让界面、校验、排版这些下游逻辑完全不用改。
+   */
   anchor?: Anchor
-  /** 插入时使用的原文锚点，作用仅为校验，不在页面上划掉任何内容 */
+  /** 插入时使用的原文锚点（补在这个片段之后） */
   insertAfter?: Anchor
+  /** 消歧用：片段左边紧邻的若干字 */
+  contextBefore?: string
+  /** 消歧用：片段右边紧邻的若干字 */
+  contextAfter?: string
   /** 正确的写法；只有「删除」类错误没有这一项 */
   targetText?: string
   /** 仅 type = 'reorder' 时存在 */
@@ -143,6 +166,9 @@ export interface ErrorObject {
 /** 亮点：作答中表达优秀的片段。它不是错误，不参与扣分与错误统计。 */
 export interface Highlight {
   id: string
+  /** AI 给的文字片段（与 errors 用同一个字段名，保持一致） */
+  oldText?: string
+  /** 解析后填入的绝对区间，AI 从不输出这个字段 */
   anchor: Anchor
   /** 值得肯定的原因 */
   comment: string
