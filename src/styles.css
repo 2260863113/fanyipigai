@@ -405,6 +405,15 @@ button {
   box-shadow: 0 0 0 3px rgba(44, 107, 237, 0.12);
 }
 
+/* 右上栏里的带批注译文：留出上方小字与弧线的空间，并且不要贴着栏底 */
+.pane-answer .annotated {
+  margin-top: 4px;
+}
+
+.pane-answer .annotated-lines {
+  padding-bottom: 6px;
+}
+
 .answer-static {
   font-family: var(--serif);
   font-size: 17px;

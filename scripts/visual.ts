@@ -32,7 +32,16 @@ export interface ShotSpec {
   height: number
   /** submit = 点提交后截批改结果；plain = 直接截首屏 */
   action: 'plain' | 'submit'
+  /** 这一张用哪道题的示例作答（默认题目编号由调用方在题库里的第一道决定） */
+  exerciseId?: string
+  /** 截图前先点一下顶部导航里的某个题型（用来截某类题的样子） */
+  clickTab?: string
+  /** 截图前先点一下题目切换条里的某道题 */
+  clickCase?: string
 }
+
+/** 不指定题目时用哪一道（与题库第一道一致）。 */
+const DEFAULT_EXERCISE_ID = 'article-001'
 
 /** 极简 CDP 客户端。错误响应会被抛出，不静默吞掉。 */
 class Cdp {
@@ -172,7 +181,23 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
 
     const { buildStubSource } = await import('./fixture-stub.mjs')
     const { buildFixturePayload } = await import('./fixture-payload.mjs')
-    const fixture = await buildFixturePayload(root)
+
+    // 为每一张需要提交的截图所涉及的题目各准备一份假批改。
+    // 桩会按提交回来的作答文字自动挑对应那份，因此切题型后仍然拿到对的批改。
+    // 没写 exerciseId 的那张要用默认题目补上，否则 undefined 会被当成一个键，
+    // 后面按真实编号去查就查不到（实际踩过这个坑）
+    const wantedIds = [
+      ...new Set(shots.filter((shot) => shot.action === 'submit').map((shot) => shot.exerciseId ?? DEFAULT_EXERCISE_ID)),
+    ]
+    if (wantedIds.length === 0) wantedIds.push(DEFAULT_EXERCISE_ID)
+
+    const stubTable: Array<{ answer: string; payload: unknown }> = []
+    const answerSectionsByExercise = new Map<string, string[]>()
+    for (const id of wantedIds) {
+      const fixture = await buildFixturePayload(root, id)
+      stubTable.push({ answer: fixture.answer, payload: fixture.payload })
+      answerSectionsByExercise.set(id, fixture.answerSections)
+    }
 
     for (const shot of shots) {
       const target = (await (
@@ -189,7 +214,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
           deviceScaleFactor: 2,
           mobile: shot.width < 700,
         })
-        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: buildStubSource(fixture.payload) })
+        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: buildStubSource(stubTable) })
         await cdp.send('Page.navigate', { url: pageUrl })
 
         let mounted = false
@@ -200,10 +225,38 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
         if (!mounted) return { ok: false, files, note: `${shot.name}：界面没有挂载` }
         await sleep(500)
 
+        // 需要时先切到指定题型 / 题目，再截图
+        if (shot.clickTab || shot.clickCase) {
+          const switched = await cdp.evaluate(
+            `(async () => {
+               const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+               const tab = ${JSON.stringify(shot.clickTab ?? '')};
+               const caseName = ${JSON.stringify(shot.clickCase ?? '')};
+               if (tab) {
+                 const btn = [...document.querySelectorAll('.mode-tab')]
+                   .find((b) => b.textContent.trim() === tab);
+                 if (!btn) return '找不到题型标签：' + tab;
+                 btn.click();
+                 await sleep(400);
+               }
+               if (caseName) {
+                 const item = [...document.querySelectorAll('.case-tab')]
+                   .find((b) => b.textContent.includes(caseName));
+                 if (!item) return '找不到题目：' + caseName;
+                 item.click();
+                 await sleep(400);
+               }
+               return 'ok';
+             })()`,
+          )
+          if (switched !== 'ok') return { ok: false, files, note: `${shot.name}：${String(switched)}` }
+        }
+
         if (shot.action === 'submit') {
           // 真的把示例作答打进输入框再点提交，这样截到的是真实交互后的界面。
           // 必须用原生 setter + input 事件，React 才会收到这次受控更新。
-          // 默认题是一篇分段文章，而文章模式要求每段都写完才允许提交，因此这里逐段填入。
+          // 分段题要求每段都写完才允许提交，因此这里逐段填入。
+          const sections = answerSectionsByExercise.get(shot.exerciseId ?? DEFAULT_EXERCISE_ID) ?? []
           const outcome = await cdp.evaluate(
             `(async () => {
                const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -212,12 +265,12 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                  setter.call(el, value);
                  el.dispatchEvent(new Event('input', { bubbles: true }));
                };
-               const sections = ${JSON.stringify(fixture.answerSections)};
+               const sections = ${JSON.stringify(sections)};
                for (let i = 0; i < sections.length; i++) {
                  if (i > 0) {
                    const next = [...document.querySelectorAll('.section-nav .btn')]
                      .find((b) => b.textContent.includes('下一段'));
-                   if (!next) return '分段导航里找不到「下一段」按钮';
+                   if (!next) return '分段导航里找不到「下一段」按钮（本张用了 ' + sections.length + ' 段，第 ' + (i + 1) + ' 段）';
                    next.click();
                    await sleep(250);
                  }

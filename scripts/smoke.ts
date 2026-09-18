@@ -149,17 +149,16 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const noteCount = (rendered.html.match(/class="note-item/g) ?? []).length
     check(noteCount > 0, `右下角列出了 ${noteCount} 条批注`)
 
-    // 右上角「我的译文」在提交后必须显示作答——这里曾经是空白的（textarea 被压成零高度）
+    // 右上角「我的译文」在提交后必须显示**带批注的**作答。
+    // 这一栏出过两个问题：整栏空白（渲染时漏了内容）、只显示纯文本而没有标注。
     check(rendered.answerPaneText.trim().length > 20, `右上角显示了作答（${rendered.answerPaneText.trim().length} 字）`)
-    if (rendered.answerPaneText.trim().length <= 20) {
-      console.log(`    [诊断] 右上栏实际内容：${JSON.stringify(rendered.answerPaneText.slice(0, 200))}`)
-      console.log(`    [诊断] 右上栏 HTML 片段：${rendered.answerPaneHtml.slice(0, 600)}`)
-    }
-    check(rendered.html.includes('answer-static'), '右上是只读的作答展示，不是输入框')
+    check(rendered.html.includes('annotated-lines'), '右上角渲染的是带批注的译文，不是纯文本')
+    const paneAnswerMarks = (rendered.answerPaneHtml.match(/class="mk /g) ?? []).length
+    check(paneAnswerMarks > 0, `右上角译文上有 ${paneAnswerMarks} 处标注`)
     check(rendered.hasRotateButton, '左上角原文栏有「换一换」按钮')
 
-    // 右下角是独立的批注条目，不再把用户译文重排一遍
-    check(!rendered.html.includes('annotated-lines'), '右下角没有把用户译文重排一遍')
+    // 右下角是逐条清单，不重复排版译文（带批注的译文在右上角）
+    check(!rendered.notesPaneHtml.includes('annotated-lines'), '右下角的清单里没有把译文重排一遍')
 
     check(rendered.text.includes('错误归类'), '左下角里出现了错误归类')
     check(rendered.text.includes('/ 100'), '左下角里出现了分数')
@@ -181,7 +180,33 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const sentenceNotes = (sentence.html.match(/class="note-item/g) ?? []).length
     check(sentenceNotes >= 3, `句子题的右下角列出了 ${sentenceNotes} 条批注`)
     check(sentence.html.includes('说明'), '点击批注后详情面板给出了说明')
-    check(!sentence.html.includes('annotated-lines'), '右下角没有把用户译文重排一遍')
+    check(!sentence.notesPaneHtml.includes('annotated-lines'), '句子题的右下清单里也没有重排译文')
+    check(sentence.answerPaneHtml.includes('annotated-lines'), '句子题的右上译文上有批注')
+
+    // 五种改法都要能画在译文上：替换（划掉 + 上方小字）、插入、删除（划掉）、
+    // 整句重写、语序调换（配对弧线）。这道句子题的示例正好同时含替换、插入、删除。
+    const sentenceMarks = sentence.answerPaneHtml.match(/class="mk /g) ?? []
+    check(sentenceMarks.length >= 3, `右上译文上有 ${sentenceMarks.length} 处标注标记`)
+    check(sentence.answerPaneHtml.includes('mk-delete'), '删除类在译文上有划线')
+    check(
+      sentence.answerPaneHtml.includes('mk-replace') && sentence.answerPaneHtml.includes('mk-fix'),
+      '替换类划掉了原文并在上方给出正确写法',
+    )
+
+    // 插入类单独用那道插入题验证（sentence-002 的示例是漏介词与冠词）
+    const insert = await renderApp({ exerciseId: 'sentence-002' })
+    check(insert.answerPaneHtml.includes('mk-insert'), '插入类在译文上标出了补入位置')
+    check(insert.answerPaneHtml.includes('mk-fix-inline'), '插入类给出了要补入的内容')
+    insert.restore()
+
+    // 调序弧线单独用那道语序题验证
+    const reorder = await renderApp({ exerciseId: 'sentence-004' })
+    check(
+      reorder.answerPaneHtml.includes('mk-reorder') || reorder.answerPaneHtml.includes('data-reorder-owner'),
+      '语序题在译文上标出了要调换的片段',
+    )
+    check(reorder.html.includes('arc-svg'), '语序题画出了配对弧线')
+    reorder.restore()
     sentence.restore()
   } catch (error) {
     check(false, '界面渲染没有抛出异常', error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error))
@@ -260,7 +285,10 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const result = await captureScreens([
       { name: '01-compose', width: 1600, height: 950, action: 'plain' },
       { name: '02-result', width: 1600, height: 950, action: 'submit' },
-      { name: '03-mobile', width: 420, height: 900, action: 'plain' },
+      // 再用句子题截一张：它同时含替换、插入、删除三种标记，
+      // 默认的文章题只有一处亮点，看不出标注长什么样
+      { name: '03-marks', width: 1600, height: 950, action: 'submit', exerciseId: 'sentence-002', clickTab: '句子' },
+      { name: '04-mobile', width: 420, height: 900, action: 'plain' },
     ])
     check(result.ok, result.ok ? `生成了 ${result.files.length} 张截屏` : `截屏未完成：${result.note ?? ''}`)
     for (const file of result.files) console.log(`    ${file}`)

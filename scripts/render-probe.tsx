@@ -33,6 +33,8 @@ export interface RenderProbe {
   answerPaneText: string
   /** 右上栏的 HTML 片段，仅在该栏异常时用于诊断 */
   answerPaneHtml: string
+  /** 右下栏的 HTML 片段，用来确认清单里没有把译文重排一遍 */
+  notesPaneHtml: string
   /** 左上角原文栏里有没有「换一换」按钮 */
   hasRotateButton: boolean
   /** 顶部导航里的模式标签 */
@@ -254,6 +256,7 @@ export async function renderApp(options: { exerciseId?: string } = {}): Promise<
     inputReplacedByResult,
     answerPaneText: textOf('.pane-answer'),
     answerPaneHtml: container.querySelector('.pane-answer')?.innerHTML ?? '（找不到该栏）',
+    notesPaneHtml: container.querySelector('.pane-notes')?.innerHTML ?? '（找不到该栏）',
     hasRotateButton: textOf('.pane-source').includes('换一换'),
     modeTabLabels,
     sampleIds,

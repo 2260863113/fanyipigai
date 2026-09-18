@@ -11,6 +11,8 @@ import {
   type PolishLevel,
 } from '../domain/types'
 import { validateCorrection, type ValidatedCorrection } from '../domain/validate'
+import { buildLayout } from '../domain/layout'
+import { AnnotationText } from './AnnotationText'
 import { requestJudgment, type JudgeSectionInput } from '../domain/client'
 import { splitSections, type Section } from '../domain/sections'
 import { variantsFor } from '../domain/variants'
@@ -98,8 +100,8 @@ export function App(): JSX.Element {
     const highlights = new Map(result?.validated.highlights.map((entry) => [entry.highlight.id, entry.highlight]) ?? [])
     return { errors, highlights }
   }, [result])
-
   const caseRecords = records.filter((record) => record.exerciseId === exercise.id)
+
   const isFixtureAnswer = useMemo(() => {
     const trimmed = currentAnswer.trim()
     if (!trimmed) return false
@@ -271,6 +273,18 @@ export function App(): JSX.Element {
 
   const inMode = tab === 'records' ? [] : casesOfMode(tab)
 
+  /**
+   * 右上角要显示的带批注的作答。
+   * 位置早已由校验结果给出（validated 里带 span），这里只是把它排版成片段序列。
+   */
+  const answerLayout = useMemo(
+    () =>
+      shown
+        ? buildLayout(shown.validated, shown.answer)
+        : { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 },
+    [shown],
+  )
+
   return (
     <div className="app">
       <header className="topbar">
@@ -434,9 +448,14 @@ export function App(): JSX.Element {
 
                 {notice && !error && <p className="hint notice">{notice}</p>}
 
-                {/* 提交前：可编辑的输入框；提交后：同一栏换成只读的作答展示 */}
+                {/*
+                  提交前：可编辑的输入框。
+                  提交后：同一栏换成**带批注的**作答——划掉的词、上方的小字、
+                  插入标记、调序弧线都直接长在你的译文上。
+                  右下角的清单是补充（可以逐条读原因），不能取代这里的标注。
+                */}
                 {shown ? (
-                  <p className="answer-static">{shown.answer}</p>
+                  <AnnotationText layout={answerLayout} answer={shown.answer} onSelect={setSelection} />
                 ) : (
                   <textarea
                     className="answer-input answer-input-fill"
