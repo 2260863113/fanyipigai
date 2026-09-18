@@ -217,7 +217,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                if (btn.disabled) return '提交按钮是禁用的';
                btn.click();
                for (let i = 0; i < 80; i++) {
-                 if (document.querySelector('.result-panel')) {
+                 if (document.querySelector('.note-list')) {
                    await sleep(600);
                    return 'ok';
                  }

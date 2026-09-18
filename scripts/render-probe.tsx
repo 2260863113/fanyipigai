@@ -164,21 +164,24 @@ export async function renderApp(): Promise<RenderProbe> {
     submit.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   })
 
-  // 关键：提交后输入框应当从右屏消失，同一个位置换成批改结果
+  // 关键：提交后输入框应当从右上角消失，左下与右下换成计分与批注
   const inputReplacedByResult =
-    container.querySelector('.answer-input') === null && container.querySelector('.result-panel') !== null
+    container.querySelector('.answer-input') === null &&
+    container.querySelector('.pane-score') !== null &&
+    container.querySelector('.pane-notes') !== null &&
+    container.querySelector('.note-list') !== null
 
-  // 点第一处批注，验证详情面板
-  const firstMark = container.querySelector<HTMLElement>('.mk-delete, .mk-replace, .mk-insert, .mk-highlight')
-  if (firstMark) {
+  // 点第一条批注，验证详情面板
+  const firstNote = container.querySelector<HTMLElement>('.note-item')
+  if (firstNote) {
     await act(async () => {
-      firstMark.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      firstNote.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
     })
   }
 
   return {
     html: container.innerHTML,
-    text: `${textOf('.result-left')} ${textOf('.result-right')}`,
+    text: `${textOf('.pane-score')} ${textOf('.pane-notes')}`,
     composeStageHadInput,
     inputReplacedByResult,
     modeTabLabels,

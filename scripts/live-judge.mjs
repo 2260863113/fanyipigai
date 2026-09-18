@@ -1,13 +1,13 @@
 /**
- * 用真实 DeepSeek API 跑一次批改，检查提示词与解析器是否真的对得上。
+ * 用真实 DeepSeek API 跑一次句子题批改，检查提示词与解析器是否真的对得上。
  *
  * 这是开发期的人工检查工具，不进生产路径。它会打印：
  * - 批改用了几次尝试
- * - 分数、错误分类统计、亮点
- * - 每处批注的位置与片段（用来肉眼核对 AI 数序号准不准）
+ * - 系统计分（按错误分类算出来的分数）
+ * - 每处批注的位置、分类与片段（用来肉眼核对 AI 数序号准不准）
  * - 被丢弃的批注（位置对不上）
  *
- * 用法：node scripts/live-judge.mjs [用例编号 1..4]
+ * 用法：node scripts/live-judge.mjs [用例编号 1..3]
  */
 
 import { build } from 'esbuild'
@@ -37,8 +37,8 @@ await mkdir(outDir, { recursive: true })
 await writeFile(
   path.join(outDir, 'entry.ts'),
   [
-    `import { judgeAnswer, DEFAULT_JUDGE_CONFIG } from ${JSON.stringify(path.join(root, 'src/domain/ai.ts'))}`,
-    `export { judgeAnswer, DEFAULT_JUDGE_CONFIG }`,
+    `export { judgeAnswer, DEFAULT_JUDGE_CONFIG } from ${JSON.stringify(path.join(root, 'src/domain/ai.ts'))}`,
+    `export { scoreCorrection } from ${JSON.stringify(path.join(root, 'src/domain/scoring.ts'))}`,
   ].join('\n'),
   'utf8',
 )
@@ -53,10 +53,10 @@ await build({
   logLevel: 'warning',
 })
 
-const { judgeAnswer, DEFAULT_JUDGE_CONFIG } = await import(pathToFileURL(outFile).href)
+const { judgeAnswer, DEFAULT_JUDGE_CONFIG, scoreCorrection } = await import(pathToFileURL(outFile).href)
 await rm(outDir, { recursive: true, force: true })
 
-// 三个真实用例：英文长句、中文政策句、含中文标点的中文句
+// 三个真实用例：英译中新闻句、中译英政策句、含术语与语体问题的政策句
 const CASES = [
   {
     name: '英译中 · 新闻',
@@ -68,8 +68,7 @@ const CASES = [
         'A decade of ecological restoration has turned a once barren coastline into a popular destination for migratory birds, drawing visitors from across the country.',
       referenceTranslation:
         '十年的生态修复让曾经荒芜的海岸线变成候鸟青睐的栖息地，吸引了全国各地的观鸟者。',
-      answer:
-        '十年生态修复把一个曾经贫瘠的海岸变成候鸟喜欢的到达地, 吸引了来自全国各地的游客。',
+      answer: '十年生态修复把一个曾经贫瘠的海岸变成候鸟喜欢的到达地, 吸引了来自全国各地的游客。',
     },
   },
   {
@@ -105,9 +104,14 @@ console.log(`\n=== 用例 ${caseIndex}：${chosen.name} ===`)
 console.log(`作答（${chosen.request.answer.length} 字符）：${chosen.request.answer}`)
 
 const started = Date.now()
-const outcome = await judgeAnswer(chosen.request, { ...DEFAULT_JUDGE_CONFIG, apiKey }, (info) => {
-  console.log(`  ↻ 第 ${info.attempt} 次返回未通过校验，正在重试。原因：${info.problems.join('；')}`)
-})
+const outcome = await judgeAnswer(
+  {
+    request: chosen.request,
+    sections: [{ start: 0, end: chosen.request.answer.length, text: chosen.request.answer }],
+  },
+  { ...DEFAULT_JUDGE_CONFIG, apiKey },
+  (info) => console.log(`  ↻ 第 ${info.attempt} 次返回未通过校验，正在重试。原因：${info.problems.join('；')}`),
+)
 const elapsed = ((Date.now() - started) / 1000).toFixed(1)
 
 if (!outcome.ok) {
@@ -116,16 +120,21 @@ if (!outcome.ok) {
   if (outcome.rawExcerpt) console.log(`  原始返回片段：${outcome.rawExcerpt}`)
   process.exitCode = 1
 } else {
+  const score = scoreCorrection(outcome.correction, chosen.request.answer)
   console.log(`\n✓ 批改成功（用时 ${elapsed}s，尝试 ${outcome.attempts} 次）`)
-  console.log(`  总分 ${outcome.correction.total}｜术语 ${outcome.correction.dimensions.terminology}｜语法 ${outcome.correction.dimensions.grammar}｜连贯 ${outcome.correction.dimensions.coherence}｜语体 ${outcome.correction.dimensions.register}`)
-  console.log(`  总评：${outcome.correction.summary}`)
+  console.log(
+    `  系统计分 ${score.total} / 100（硬性错误 ${score.hardCount} 处 ×8，表达问题 ${score.softCount} 处 ×3，表达优秀 ${score.highlightCount} 处）`,
+  )
 
   console.log(`\n  错误 ${outcome.validated.errors.length} 处：`)
   for (const entry of outcome.validated.errors) {
     const { error, span } = entry
-    const where = `[${span.start},${span.end})`
+    const color = ['terminology', 'omission', 'addition', 'function-word', 'punctuation'].includes(error.category)
+      ? '红'
+      : '橙'
     console.log(
-      `    ${error.id} ${error.type}/${error.category} ${where} 「${error.anchor?.snippet ?? error.insertAfter?.snippet ?? ''}」` +
+      `    ${error.id} [${color}] ${error.type}/${error.category} [${span.start},${span.end}) ` +
+        `「${error.anchor?.snippet ?? error.insertAfter?.snippet ?? ''}」` +
         (error.targetText ? ` → 「${error.targetText}」` : ''),
     )
     console.log(`        ${error.explanation}`)

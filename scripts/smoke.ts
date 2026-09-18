@@ -123,24 +123,34 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(rendered.composeStageHadInput, '提交前右屏是作答输入框')
 
     // 布局要求：左边整页原文，右边整页作答；提交后结果在右边同一个位置替换掉输入框
-    check(rendered.html.includes('screen-left') && rendered.html.includes('screen-right'), '页面分成左右两屏')
-    check(rendered.inputReplacedByResult, '提交后右屏的输入框被批改结果替换（没有堆到下面去）')
     check(
       rendered.modeTabLabels.join(',') === '文章,段落,句子,术语,练习记录',
       `顶部导航有四个题型与练习记录：${rendered.modeTabLabels.join(' / ')}`,
     )
     check(rendered.sampleIds.length >= 4, `题库覆盖 ${rendered.sampleIds.length} 道示例，四类题型都有题`)
 
-    const markCount = (rendered.html.match(/class="mk /g) ?? []).length
-    check(markCount > 0, `渲染出了 ${markCount} 个批注标记`)
+    // 四栏 2×2 布局：左上原文、右上译文、左下计分、右下批注
+    // 注意：这里是在 HTML 文本里找类名，所以不带选择器的点号
+    for (const [className, label] of [
+      ['pane-source', '左上：原文'],
+      ['pane-answer', '右上：我的译文'],
+      ['pane-score', '左下：总体评分'],
+      ['pane-notes', '右下：逐处批注'],
+    ] as const) {
+      check(rendered.html.includes(className), `四栏布局里有${label}`)
+    }
 
-    // 批改结果必须是左右分栏：左边计分与错误归类，右边逐处批注
-    check(rendered.html.includes('result-left') && rendered.html.includes('result-right'), '批改结果分成左右两栏')
-    check(rendered.text.includes('错误归类'), '左栏里出现了错误归类')
-    check(rendered.text.includes('/ 100'), '左栏里出现了分数')
+    const noteCount = (rendered.html.match(/class="note-item/g) ?? []).length
+    check(noteCount > 0, `右下角列出了 ${noteCount} 条批注`)
+
+    // 右下角是独立的批注条目，不再把用户译文重排一遍
+    check(!rendered.html.includes('annotated-lines'), '右下角没有把用户译文重排一遍')
+
+    check(rendered.text.includes('错误归类'), '左下角里出现了错误归类')
+    check(rendered.text.includes('/ 100'), '左下角里出现了分数')
     check(rendered.text.includes('系统计分'), '分数旁说明了计分规则')
-    check(rendered.text.includes('硬性错误'), '左栏里区分了硬性错误')
-    check(rendered.text.includes('表达问题'), '左栏里区分了表达问题')
+    check(rendered.text.includes('硬性错误'), '左下角区分了硬性错误')
+    check(rendered.text.includes('表达问题'), '左下角区分了表达问题')
     check(!rendered.html.includes('总体评语'), '批改结果里没有 AI 写的总体评语')
     check(!rendered.html.includes('分项评语'), '批改结果里没有 AI 写的分项评语')
     check(!rendered.text.includes('未能标出'), '没有批注因位置错误被拒绝')

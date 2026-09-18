@@ -1,12 +1,13 @@
 import { useMemo } from 'react'
-import type { Correction, Direction, ErrorCategory, Mode, PolishLevel } from '../domain/types'
-import { CATEGORY_LABEL, DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
-import { colorForCategory, type ValidatedCorrection } from '../domain/validate'
-import { buildLayout } from '../domain/layout'
+import type { Correction, Direction, Mode, PolishLevel } from '../domain/types'
+import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
+import { EXERCISE_SOURCES } from '../domain/mock'
+import type { ValidatedCorrection } from '../domain/validate'
 import { scoreCorrection } from '../domain/scoring'
-import { AnnotationText, type Selection } from './AnnotationText'
+import { AnnotationList } from './AnnotationList'
+import { ScoreSummary } from './ScoreSummary'
 import { DetailPanel, type SelectionData } from './DetailPanel'
-import { MARK_COLOR_VALUE } from '../domain/color'
+import type { Selection } from './AnnotationText'
 
 /** 一次作答的存档视图。第一版只存在内存里，接入 D1 后改为从服务端读取。 */
 export interface RecordView {
@@ -37,18 +38,9 @@ interface Props {
  * 练习记录页。
  *
  * 顶部导航栏里的一栏，因此占据整个主体区域：左边是全部记录的列表，
- * 右边是选中那一条的完整批改（计分、错误归类、逐处批注）。
+ * 右边沿用练习页的四栏结构——上排是题干原文与当时写的译文，下排是计分与逐处批注。
  */
 export function RecordsView({ records, openRecord, onOpen, selection, onSelect }: Props) {
-  const layout = useMemo(
-    () => (openRecord ? buildLayout(openRecord.validated, openRecord.answer) : null),
-    [openRecord],
-  )
-  const score = useMemo(
-    () => (openRecord ? scoreCorrection(openRecord.correction, openRecord.answer) : null),
-    [openRecord],
-  )
-
   const selectionData: SelectionData = useMemo(() => {
     const errors = new Map(openRecord?.validated.errors.map((entry) => [entry.error.id, entry]) ?? [])
     const highlights = new Map(
@@ -57,10 +49,7 @@ export function RecordsView({ records, openRecord, onOpen, selection, onSelect }
     return { errors, highlights }
   }, [openRecord])
 
-  const stats = new Map<ErrorCategory, number>()
-  for (const entry of openRecord?.validated.errors ?? []) {
-    stats.set(entry.error.category, (stats.get(entry.error.category) ?? 0) + 1)
-  }
+  const source = openRecord ? (EXERCISE_SOURCES[openRecord.exerciseId] ?? '') : ''
 
   return (
     <main className="split split-records">
@@ -130,62 +119,68 @@ export function RecordsView({ records, openRecord, onOpen, selection, onSelect }
           )}
         </header>
 
-        {!openRecord || !layout || !score ? (
+        {!openRecord ? (
           <div className="screen-body">
             <p className="hint">从左边选一条记录，这里会显示当时的完整批改。</p>
           </div>
         ) : (
-          <>
-            <div className="screen-body">
-              <div className="result-panel">
-                <section className="result-left">
-                  <div className="score-total">
-                    <span className="score-number">{score.total}</span>
-                    <span className="score-unit">/ 100</span>
-                  </div>
-                  <ul className="score-legend">
-                    <li style={{ color: MARK_COLOR_VALUE.red }}>
-                      硬性错误 <span className="score-count">×{score.hardCount}</span>
-                    </li>
-                    <li style={{ color: MARK_COLOR_VALUE.orange }}>
-                      表达问题 <span className="score-count">×{score.softCount}</span>
-                    </li>
-                    {score.highlightCount > 0 && (
-                      <li style={{ color: MARK_COLOR_VALUE.green }}>
-                        表达优秀 <span className="score-count">×{score.highlightCount}</span>
-                      </li>
-                    )}
-                  </ul>
-                  <div className="stats">
-                    <h3>错误归类</h3>
-                    {stats.size === 0 ? (
-                      <p className="hint">本次没有发现错误。</p>
-                    ) : (
-                      <ul className="stats-list">
-                        {[...stats.entries()]
-                          .sort((a, b) => b[1] - a[1])
-                          .map(([category, count]) => (
-                            <li key={category} style={{ color: MARK_COLOR_VALUE[colorForCategory(category)] }}>
-                              {CATEGORY_LABEL[category]}
-                              <span className="stats-count">×{count}</span>
-                            </li>
-                          ))}
-                      </ul>
-                    )}
-                  </div>
-                  <p className="hint">
-                    当时的作答：
-                    <br />
-                    {openRecord.answer}
-                  </p>
-                </section>
-                <section className="result-right">
-                  <AnnotationText layout={layout} answer={openRecord.answer} onSelect={onSelect} />
-                </section>
+          <div className="split split-nested">
+            <section className="pane pane-source">
+              <header className="pane-head">
+                <h2>原文</h2>
+              </header>
+              <div className="pane-body">
+                <p className="source-text">{source || '（未保存题干）'}</p>
               </div>
-            </div>
-            <DetailPanel selection={selection} data={selectionData} onClose={() => onSelect(null)} />
-          </>
+            </section>
+
+            <section className="pane pane-answer">
+              <header className="pane-head">
+                <h2>当时的译文</h2>
+              </header>
+              <div className="pane-body">
+                <p className="answer-static">{openRecord.answer}</p>
+              </div>
+            </section>
+
+            <section className="pane pane-score">
+              <header className="pane-head">
+                <h2>总体评分</h2>
+              </header>
+              <div className="pane-body">
+                <ScoreSummary
+                  correction={openRecord.correction}
+                  validated={openRecord.validated}
+                  answer={openRecord.answer}
+                  level={openRecord.level}
+                  attempt={openRecord.attempt}
+                />
+              </div>
+            </section>
+
+            <section className="pane pane-notes">
+              <header className="pane-head">
+                <h2>逐处批注</h2>
+                <div className="head-meta">
+                  <span className="chip">
+                    {openRecord.validated.errors.length} 处错误
+                    {openRecord.validated.highlights.length > 0 &&
+                      ` · ${openRecord.validated.highlights.length} 处优秀`}
+                  </span>
+                </div>
+              </header>
+              <div className="pane-body">
+                <AnnotationList
+                  correction={openRecord.correction}
+                  validated={openRecord.validated}
+                  answer={openRecord.answer}
+                  onSelect={onSelect}
+                  selectedId={selection?.id}
+                />
+              </div>
+              <DetailPanel selection={selection} data={selectionData} onClose={() => onSelect(null)} />
+            </section>
+          </div>
         )}
       </section>
     </main>

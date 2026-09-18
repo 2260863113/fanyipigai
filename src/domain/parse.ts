@@ -110,8 +110,12 @@ function readError(value: unknown, index: number, problems: string[]): ErrorObje
   }
   const category = value.category
   if (typeof category !== 'string' || !CATEGORIES.includes(category as ErrorCategory)) {
+    // 这是实际发生过的一类失败：某一条错误漏写了 category，导致整份返回作废。
+    // 因此提示里要说清"这一条的哪个字段缺了"，而不是只说取值不合法。
+    const actual = value.category === undefined ? '缺了这个字段' : JSON.stringify(category)
     problems.push(
-      `${label} 的 category 是 ${JSON.stringify(category)}，必须从分类表里取值：${CATEGORIES.join(' / ')}`,
+      `${label} 的 category ${actual}。每一个 error 都必须有 category，` +
+        `取值只能是：${CATEGORIES.join(' / ')}`,
     )
     return undefined
   }

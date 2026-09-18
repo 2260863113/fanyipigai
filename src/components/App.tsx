@@ -14,7 +14,8 @@ import { validateCorrection, type ValidatedCorrection } from '../domain/validate
 import { requestJudgment, type JudgeSectionInput } from '../domain/client'
 import { splitSections, type Section } from '../domain/sections'
 import type { JudgeFailureKind } from '../domain/ai'
-import { CorrectionPanel } from './CorrectionPanel'
+import { ScoreSummary } from './ScoreSummary'
+import { AnnotationList } from './AnnotationList'
 import { DetailPanel, type SelectionData } from './DetailPanel'
 import { RecordsView, type RecordView } from './RecordsView'
 import type { Selection } from './AnnotationText'
@@ -298,27 +299,31 @@ export function App(): JSX.Element {
           )}
 
           <main className="split">
-            <section className="screen screen-left">
-              <header className="screen-head">
+            <section className="pane pane-source">
+              <header className="pane-head">
                 <h2>原文</h2>
                 <div className="head-meta">
-                  {multiSection && <span className="chip">第 {sectionIndex + 1} / {sourceSections.length} 段</span>}
+                  {multiSection && (
+                    <span className="chip">
+                      第 {sectionIndex + 1} / {sourceSections.length} 段
+                    </span>
+                  )}
                   <span className="chip">官方建议 {exercise.suggestedMinutes} 分钟</span>
                 </div>
               </header>
-              <div className="screen-body">
+              <div className="pane-body">
                 <p className={mode === 'term' ? 'source-text source-term' : 'source-text'}>
                   {multiSection ? (currentSection?.text ?? exercise.source) : exercise.source}
                 </p>
-                <details className="reference" open={!multiSection}>
+                <details className="reference">
                   <summary>参考译文（随题固定，可折叠）</summary>
                   <p>{exercise.referenceTranslation}</p>
                 </details>
               </div>
             </section>
 
-            <section className="screen screen-right">
-              <header className="screen-head">
+            <section className="pane pane-answer">
+              <header className="pane-head">
                 <h2>我的译文</h2>
                 <div className="head-meta">
                   {shown && (
@@ -364,7 +369,7 @@ export function App(): JSX.Element {
                 </div>
               </header>
 
-              <div className="screen-body">
+              <div className="pane-body">
                 {judging && (
                   <p className="hint judging">
                     正在批改{multiSection ? `（${sourceSections.length} 段并行发出）` : ''}。长段通常十几秒；
@@ -425,20 +430,55 @@ export function App(): JSX.Element {
                   </div>
                 )}
               </div>
+            </section>
 
-              {shown && (
-                <>
-                  <CorrectionPanel
+            <section className="pane pane-score">
+              <header className="pane-head">
+                <h2>总体评分</h2>
+              </header>
+              <div className="pane-body">
+                {shown ? (
+                  <ScoreSummary
                     correction={shown.correction}
                     validated={shown.validated}
                     answer={shown.answer}
                     level={shown.level}
                     attempt={shown.attempt || caseRecords.length}
                     sectionCount={shown.sectionCount}
-                    onSelect={setSelection}
                   />
-                  <DetailPanel selection={selection} data={selectionData} onClose={() => setSelection(null)} />
-                </>
+                ) : (
+                  <p className="hint">提交批改后，这里会显示分数与错误归类。</p>
+                )}
+              </div>
+            </section>
+
+            <section className="pane pane-notes">
+              <header className="pane-head">
+                <h2>逐处批注</h2>
+                <div className="head-meta">
+                  {shown && (
+                    <span className="chip">
+                      {shown.validated.errors.length} 处错误
+                      {shown.validated.highlights.length > 0 && ` · ${shown.validated.highlights.length} 处优秀`}
+                    </span>
+                  )}
+                </div>
+              </header>
+              <div className="pane-body">
+                {shown ? (
+                  <AnnotationList
+                    correction={shown.correction}
+                    validated={shown.validated}
+                    answer={shown.answer}
+                    onSelect={setSelection}
+                    selectedId={selection?.id}
+                  />
+                ) : (
+                  <p className="hint">提交批改后，这里会逐条列出标出来的问题。</p>
+                )}
+              </div>
+              {shown && (
+                <DetailPanel selection={selection} data={selectionData} onClose={() => setSelection(null)} />
               )}
             </section>
           </main>

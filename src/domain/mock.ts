@@ -560,3 +560,8 @@ export function fixtureCorrectionFor(exerciseId: string, answer: string): MockCo
 
 /** 内置示例题的编号与对应的示例作答，供界面提示"哪些作答可以用示例批改"。 */
 export const DEMO_ANSWERS: readonly string[] = MOCK_CASES.map((item) => item.sampleAnswer.trim())
+
+/** 题目编号 → 原文。练习记录页要用它显示当时那道题的原文。 */
+export const EXERCISE_SOURCES: Record<string, string> = Object.fromEntries(
+  MOCK_CASES.map((item) => [item.exercise.id, item.exercise.source]),
+)

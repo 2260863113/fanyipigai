@@ -197,15 +197,93 @@ button {
   font-weight: 600;
 }
 
-/* ── 左右两屏 ───────────────────────────────────── */
+/* ── 四栏 2×2：左上原文 / 右上译文 / 左下计分 / 右下批注 ──── */
 
+/*
+ * 左右均分（两列 1fr），上下 2:1（两行 2fr 1fr）。
+ * 四块区域各自独立滚动，互不干扰：原文与译文常常很长，计分与批注则需要固定视野。
+ */
 .split {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-template-rows: 2fr 1fr;
+  gap: 0;
 }
 
+/* 练习记录页：左边记录列表，右边沿用四栏结构 */
+.split-records {
+  grid-template-rows: 1fr;
+}
+
+.split-nested {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 2fr 1fr;
+}
+
+/* 记录列表那一屏占满整高 */
+.split-records > .screen-left {
+  grid-row: 1 / -1;
+}
+
+.pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+}
+
+/* 分区之间的分隔线 */
+.pane-source {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.pane-answer {
+  border-bottom: 1px solid var(--line);
+}
+
+.pane-score {
+  border-right: 1px solid var(--line);
+}
+
+.pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pane-head h2 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-body > * + * {
+  margin-top: 12px;
+}
+
+/* 记录页与外层用的两屏式容器 */
 .screen {
   min-width: 0;
   min-height: 0;
@@ -236,13 +314,6 @@ button {
   color: var(--ink-soft);
 }
 
-.head-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 .screen-body {
   flex: 1;
   min-height: 0;
@@ -256,27 +327,36 @@ button {
   margin-top: 14px;
 }
 
+.head-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ── 原文 ───────────────────────────────────────── */
+
 /* 原文与作答都用衬线体，且字号、行距一致 */
 .source-text {
   font-family: var(--serif);
-  font-size: 17.5px;
+  font-size: 17px;
   line-height: 1.9;
   margin: 0;
   white-space: pre-wrap;
 }
 
 .source-term {
-  font-size: 30px;
+  font-size: 28px;
   line-height: 1.5;
   text-align: center;
-  padding: 40px 0;
+  padding: 32px 0;
 }
 
 .reference {
   border-top: 1px dashed var(--line-strong);
   padding-top: 10px;
   font-family: var(--serif);
-  font-size: 15.5px;
+  font-size: 15px;
   line-height: 1.85;
   color: var(--ink-soft);
 }
@@ -302,7 +382,7 @@ button {
   border-radius: 8px;
   padding: 12px 14px;
   font-family: var(--serif);
-  font-size: 17.5px;
+  font-size: 17px;
   line-height: 1.9;
   color: var(--ink);
   background: #fcfcfd;
@@ -311,13 +391,21 @@ button {
 
 .answer-input-fill {
   flex: 1;
-  min-height: 220px;
+  min-height: 120px;
 }
 
 .answer-input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(44, 107, 237, 0.12);
+}
+
+.answer-static {
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.9;
+  margin: 0;
+  white-space: pre-wrap;
 }
 
 /* 分段导航：放在原文下方、批改结果上方 */
@@ -417,32 +505,10 @@ button {
   flex-wrap: wrap;
 }
 
-/* ── 批改结果：左边计分与归类，右边逐处批注 ─────── */
+/* ── 左下角：总体评分 ───────────────────────────── */
 
-.result-panel {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 240px 1fr;
-  border-top: 1px solid var(--line);
-}
-
-.result-left {
-  min-width: 0;
-  overflow-y: auto;
-  padding: 14px 16px 18px;
-  border-right: 1px solid var(--line);
-  background: var(--paper-soft);
-}
-
-.result-left > * + * {
+.score-summary > * + * {
   margin-top: 14px;
-}
-
-.result-right {
-  min-width: 0;
-  overflow-y: auto;
-  padding: 8px 18px 20px;
 }
 
 .score-total {
@@ -452,7 +518,7 @@ button {
 }
 
 .score-number {
-  font-size: 38px;
+  font-size: 34px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -516,6 +582,101 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* ── 右下角：逐处批注列表 ───────────────────────── */
+
+/*
+ * 这里刻意不显示用户的译文全文——全文已经在右上角。
+ * 每条只给"哪段文字、错在哪、改成什么"，读起来是一份修改清单而不是重排的文章。
+ */
+.note-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: note;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.note-item {
+  width: 100%;
+  text-align: left;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.note-item:hover {
+  border-color: var(--line-strong);
+}
+
+.note-item-active {
+  background: var(--paper);
+  border-color: var(--accent);
+}
+
+.note-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.note-badge {
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.note-category {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.note-index {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+.note-change {
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.7;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.note-from {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  color: var(--ink-soft);
+}
+
+.note-arrow {
+  color: var(--ink-faint);
+}
+
+.note-to {
+  font-weight: 700;
+}
+
+.note-why {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-soft);
 }
 
 /* ── 带批注的译文 ───────────────────────────────── */
