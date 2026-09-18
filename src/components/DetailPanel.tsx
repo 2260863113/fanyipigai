@@ -71,10 +71,10 @@ export function DetailPanel({ selection, data, onClose }: Props) {
       </header>
 
       <dl className="detail-list">
-        {error.changed && error.changed.from && (
+        {error.anchor && error.anchor.snippet && (
           <>
             <dt>要改的是（最小范围）</dt>
-            <dd className="detail-text">{error.changed.from}</dd>
+            <dd className="detail-text">{error.anchor.snippet}</dd>
           </>
         )}
         {error.changed?.to && (

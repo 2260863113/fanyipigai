@@ -163,7 +163,13 @@ export interface ErrorObject {
    * 这里由程序拿 AI 给的改后文字反算出最小差异（见 minimal.ts），
    * 于是页面上只划掉 explore、只把 explored 写在上方，而不是划掉三个词。
    */
-  changed?: { start: number; end: number; from: string; to: string }
+  changed?: { start: number; end: number; to: string }
+  /**
+   * AI 当初圈出的原始区间（未缩窄）。
+   * 校验器要用它核对 "该区间里的文字是否与 oldText 一致"——
+   * anchor 现在装的是缩窄后的区间，不能用来做这件事。
+   */
+  originalSpan?: { start: number; end: number; snippet: string }
   /** 正确的写法；只有「删除」类错误没有这一项 */
   targetText?: string
   /** 仅 type = 'reorder' 时存在 */

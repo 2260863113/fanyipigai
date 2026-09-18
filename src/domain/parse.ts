@@ -14,7 +14,7 @@
 import type { Correction, ErrorCategory, ErrorObject, ErrorType, Highlight } from './types'
 import { CATEGORY_PRIORITY } from './types'
 import { locate } from './locate'
-import { minimizeChange, stripRepeats } from './minimal'
+import { minimizeChange } from './minimal'
 import { validateCorrection, type ValidatedCorrection } from './validate'
 
 export interface ParseSuccess {
@@ -54,12 +54,19 @@ export function extractJson(raw: string): { text: string } | { error: string } {
   return { text: withoutFence.slice(start, end + 1) }
 }
 
+/**
+ * 读一个非空字符串。
+ *
+ * **只判断"是不是空的"，绝不 trim 返回值**：片段里的首尾空格属于片段本身，
+ * trim 掉就会让定位偏到别处——实测踩过："China " 被 trim 成 "China"，
+ * 于是定位到位置 0–5、把后面的 " insist" 漏在外面，画面上就出现了重复的 China。
+ */
 function readText(value: unknown, label: string, problems: string[]): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     problems.push(`${label} 缺失或为空`)
     return ''
   }
-  return value.trim()
+  return value
 }
 
 function readOptionalText(value: unknown): string | undefined {
@@ -92,40 +99,83 @@ function resolveSpan(
  * 返回的 start / end 是**答案文本里的绝对位置**，程序直接据此渲染，
  * 不需要再按文字找一次——那样反而可能找到别处去。
  */
+/**
+ * 算出这处修改最终要显示什么。
+ *
+ * **所有坐标统一到"作答全文"这一套**：`start` / `end` 直接就是答案里的绝对位置，
+ * 划掉的文字就是 `answer.slice(start, end)`；`to` 是上方要写的文字。
+ * 这样彻底避免了在"片段内坐标"与"全文坐标"之间来回换算——
+ * 之前正是在那里出错，画面上出现了 `China` 后面又跟一个 `insist` 这种重复。
+ *
+ * 三种显示形态：
+ *   replace  划掉 start..end 里的文字，上方写 to
+ *   delete   划掉 start..end 里的文字，不写任何东西
+ *   insert   start === end（零宽落点），只显示补入的 to
+ */
 function resolveChanged(
+  answer: string,
   span: { start: number; end: number; snippet: string },
   errorType: ErrorType,
   targetText: string | undefined,
-): { start: number; end: number; from: string; to: string } {
+): { start: number; end: number; to: string } {
+  void answer
   const original = span.snippet
 
   // 删除：整块划掉就是最小改法
   if (errorType === 'delete') {
-    return { start: span.start, end: span.end, from: original, to: '' }
+    return { start: span.start, end: span.end, to: '' }
   }
 
   // 插入：没有可删的内容，落点即区间（零长度）
   if (errorType === 'insert' || typeof targetText !== 'string') {
-    return { start: span.end, end: span.end, from: '', to: targetText ?? '' }
+    return { start: span.end, end: span.end, to: targetText ?? '' }
   }
 
-  const minimal = minimizeChange(original, targetText)
-  if (!minimal) {
-    // 新旧文字完全相同：AI 标了一处其实没改的地方，按原区间展示
-    return { start: span.start, end: span.end, from: original, to: targetText }
+  const isWordChar = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}]/u.test(char)
+
+  // 先把 targetText 两端**原样重复的原文**剥掉。
+  // 模型常这么写：原文 "China "、却把正确写法写成 "China insists on"（China 是原样保留的）。
+  // 不剥的话页面上会先划掉 China、上方又写一遍 China——这正是实测看到的重复。
+  // 现在坐标已统一到作答全文，所以这里只做字符串层面的去除，不牵涉任何位置换算。
+  const stripEdgeRepeat = (text: string): string => {
+    const core = original.trim()
+    if (!core) return text
+    for (const edge of [original, core]) {
+      if (text.length > edge.length && text.startsWith(edge)) return text.slice(edge.length).trimStart()
+      if (text.length > edge.length && text.endsWith(edge)) return text.slice(0, text.length - edge.length).trimEnd()
+    }
+    return text
+  }
+  const cleaned = stripEdgeRepeat(targetText)
+  const replacement = cleaned.length > 0 ? cleaned : targetText
+
+  // 情况一：正确写法里**包含**原文（含"在一端多出一截"）——只多不少。
+  if (replacement.includes(original)) {
+    const at = replacement.indexOf(original)
+    const extra = replacement.slice(0, at) + replacement.slice(at + original.length)
+
+    // 多出来的全是标点或空格 → 纯插入：不划任何字，只显示补进去的东西
+    // （关键一环 → 关键一环。 只显示新增的 ）
+    if (extra.length > 0 && ![...extra].some(isWordChar)) {
+      const insertAt = at === 0 ? span.start : span.end
+      return { start: insertAt, end: insertAt, to: extra }
+    }
+
+    // 多出来的含字母数字 → 真的换了字，照原区间显示（year → years 划掉 year）
+    return { start: span.start, end: span.end, to: replacement }
   }
 
-  // 消除同类项：把正确写法里"与原文一字不差的那部分"去掉，只留真正新增的几个字。
-  // 例如 prominent → a prominent 只显示"在 prominent 前插入 a"，
-  // 而不是把 prominent 划掉、上方又写一遍它（那样看着像整个词被换掉）。
-  // 判定要看**原始片段与目标文字**的关系，因此放在这一层做，不放进 minimizeChange。
-  const stripped = stripRepeats(minimal.from, minimal.to)
-
+  // 情况二：正确写法里**不包含**原文——这才用最小差异缩窄，让"哪个词变了"看得清。
+  //
+  // 注意这里刻意不去"清理"模型抄重复的原文：实测它常给出含糊或重叠的 targetText
+  // （如原文 "China "、targetText "China insists on"），任何自动换算都会算错位置，
+  // 于是宁可照它给的范围显示，也不要自作聪明。真正治本的办法是提示词要求它只写改成的那部分。
+  const minimal = minimizeChange(original, replacement)
+  if (!minimal) return { start: span.start, end: span.end, to: replacement }
   return {
     start: span.start + minimal.startOffset,
     end: span.start + minimal.endOffset,
-    from: stripped.from,
-    to: stripped.to,
+    to: minimal.to,
   }
 }
 
@@ -211,12 +261,15 @@ function readError(value: unknown, index: number, answer: string, problems: stri
       if (!targetText) problems.push(`${label} 是 ${errorType}，但没有给出 targetText`)
       const span = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
       if (!span || !targetText) return undefined
-      const changed = resolveChanged(span, errorType, targetText)
+      const changed = resolveChanged(answer, span, errorType, targetText)
       return {
         ...base,
         oldText: text,
         changed,
-        anchor: { start: changed.start, end: changed.end, snippet: changed.from },
+        // anchor 指向缩窄后的区间；原始区间另存一份供校验用
+        // anchor 保留 AI 圈的原始区间；真正要划的范围在 changed 里
+        anchor: { start: span.start, end: span.end, snippet: span.snippet },
+        originalSpan: span,
         targetText,
       }
     }
@@ -224,8 +277,15 @@ function readError(value: unknown, index: number, answer: string, problems: stri
       const text = readText(value.oldText, `${label} 的 oldText`, problems)
       const span = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
       if (!span) return undefined
-      const changed = resolveChanged(span, errorType, undefined)
-      return { ...base, oldText: text, changed, anchor: { start: changed.start, end: changed.end, snippet: changed.from } }
+      const changed = resolveChanged(answer, span, errorType, undefined)
+      return {
+        ...base,
+        oldText: text,
+        changed,
+        // anchor 保留 AI 圈的原始区间；真正要划的范围在 changed 里
+        anchor: { start: span.start, end: span.end, snippet: span.snippet },
+        originalSpan: span,
+      }
     }
     case 'insert': {
       // 落点用「补在这个片段之后」表达；也兼容旧字段名 afterText
@@ -234,13 +294,14 @@ function readError(value: unknown, index: number, answer: string, problems: stri
       if (!targetText) problems.push(`${label} 是 insert，但没有给出要补入的 targetText`)
       const span = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
       if (!span || !targetText) return undefined
-      const changed = resolveChanged(span, errorType, targetText)
+      const changed = resolveChanged(answer, span, errorType, targetText)
       return {
         ...base,
         oldText: text,
         changed,
         insertAfter: { start: span.start, end: span.end, snippet: span.snippet },
-        anchor: { start: changed.start, end: changed.end, snippet: '' },
+        anchor: { start: span.start, end: span.end, snippet: '' },
+        originalSpan: span,
         targetText,
       }
     }

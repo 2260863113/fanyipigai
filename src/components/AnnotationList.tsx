@@ -128,9 +128,9 @@ function errorRow(entry: ValidatedError, order: number, answer: string): Row {
 
   switch (error.type) {
     case 'replace':
-      return { ...base, from: changed?.from ?? answer.slice(entry.span.start, entry.span.end), to: changed?.to ?? error.targetText ?? '' }
+      return { ...base, from: answer.slice(entry.span.start, entry.span.end), to: changed?.to ?? error.targetText ?? '' }
     case 'delete':
-      return { ...base, from: changed?.from ?? answer.slice(entry.span.start, entry.span.end), to: '' }
+      return { ...base, from: answer.slice(entry.span.start, entry.span.end), to: '' }
     case 'rewrite':
       // 整句重写要给出完整的改后句子，因此这里用 targetText 而不是最小差异
       return { ...base, from: answer.slice(entry.span.start, entry.span.end), to: error.targetText ?? '' }

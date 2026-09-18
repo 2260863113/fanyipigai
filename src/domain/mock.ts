@@ -10,27 +10,19 @@
  */
 
 import type { Correction, ErrorObject, Exercise, Highlight } from './types'
-import { locate } from './locate'
+import { parseCorrection } from './parse'
+
+
 
 /**
- * 把文字定位成锚点。
- * 找不到就抛错：示例数据写错片段时应当在构建阶段立刻暴露，
- * 而不是像真实 AI 那样走"退回重试"的路径。
+ * 示例里的一条错误。
+ * 只给文字（oldText / insertAfterText），位置由解析管线按文字找出来——
+ * 因此这里不需要、也不应该自己写 anchor。
  */
-function anchorAt(text: string, sub: string): { start: number; end: number; snippet: string } {
-  const outcome = locate(text, { text: sub })
-  if (!outcome.ok) {
-    throw new Error(
-      `内置示例有误：${outcome.reason}\n  作答长度 ${text.length}，前 60 字符：${JSON.stringify(text.slice(0, 60))}`,
-    )
-  }
-  return outcome.value
-}
-
-/** 示例里的一条错误：只给文字，位置由定位器补上，因此 anchor 是可选的。 */
-export type MockError = Omit<ErrorObject, 'anchor' | 'insertAfter' | 'segments'> & {
-  anchor?: ErrorObject['anchor']
-  insertAfter?: ErrorObject['insertAfter']
+export type MockError = Omit<ErrorObject, 'anchor' | 'insertAfter' | 'changed' | 'segments'> & {
+  anchor?: never
+  insertAfter?: never
+  changed?: never
   segments?: Array<Omit<NonNullable<ErrorObject['segments']>[number], 'anchor'>>
 }
 
@@ -434,22 +426,17 @@ function buildErrors(exerciseId: string): MockError[] {
           type: 'insert',
           category: 'function-word',
           oldText: 'insist',
-          targetText: 'on ',
-          explanation: 'insist 是不及物动词，后面要接介词 on：insist on the idea that …。',
-        },
-        {
-          id: 's2-e2',
-          type: 'replace',
-          category: 'function-word',
-          oldText: 'China ',
-          targetText: 'China ',
-          explanation: '主语 China 是第三人称单数，谓语应为 insists on the idea that …，需要补上词尾 -s 与介词 on。',
+          // 原文已有 on，真正缺的只是第三人称单数的 s（insist on → insists on）
+          targetText: 's ',
+          explanation: '主语 China 是第三人称单数，谓语须用 insists：insists on the idea that …。',
         },
         {
           id: 's2-e3',
           type: 'insert',
           category: 'function-word',
-          oldText: 'in ',
+          // 落点用「补在这个片段之后」表达：要补的 a 落在 construction in 之后、prominent 之前。
+          // 用更长的片段，是因为单独的 in 在译文里出现 6 次，定位器会拒绝猜。
+          oldText: 'construction in ',
           targetText: 'a ',
           explanation: 'position 是可数名词单数，前面需要不定冠词 a：in a prominent position。',
         },
@@ -551,13 +538,14 @@ function buildErrors(exerciseId: string): MockError[] {
 /**
  * 建立某道题的示例批改。仅在「查看内置示例批改」、冒烟测试与截屏时使用，正常批改走真实 AI。
  *
- * 按**作答文字**反查是哪一道示例，而不是按当前题号：
- * 这样把某道题的示例作答粘到另一道题里，也能给出与之对应的批改，
- * 而不会拿甲题的批注去标乙题的文字。对不上任何示例时返回 null，由调用方明确报错。
+ * 按**作答文字**反查是哪一道示例，而不是按当前题号：这样把某道题的示例作答粘到另一道题里，
+ * 也能给出与之对应的批改。对不上任何示例时返回 null，由调用方明确报错。
  *
- * 返回的是**已经定位好的** Correction：锚点全部补齐，可以直接交给 validateCorrection 与渲染。
- * 与真实 AI 走的是同一条路径（locate + validate），
- * 因此示例既是演示数据，也是定位器的真实测试用例。
+ * 关键：这里把示例批注**过一遍与真实 AI 完全相同的解析管线**（parseCorrection）。
+ * 解析管线负责按文字定位、算最小修改、消同类项；
+ * 早期版本绕过了它、直接自己拼锚点，于是示例里出现"划掉 China、上方又写一遍 China"这种重复
+ * ——真实 AI 的结果没有这个问题，示例却有，等于把示例当成了另一套实现。
+ * 现在两边共用一条路径，示例也就顺带成了这条路径的测试用例。
  */
 export function fixtureCorrectionFor(exerciseId: string, answer: string): Correction | null {
   const trimmed = answer.trim()
@@ -566,47 +554,18 @@ export function fixtureCorrectionFor(exerciseId: string, answer: string): Correc
     MOCK_CASES.find((item) => item.exercise.id === exerciseId)
   if (!testCase || testCase.sampleAnswer.trim() !== trimmed) return null
 
-  const rawErrors = buildErrors(testCase.exercise.id)
-  const rawHighlight = testCase.highlight()
-
-  // 定位：错误与亮点都只给文字，位置由 locate 找出来
-  const errors: ErrorObject[] = []
-  for (const error of rawErrors) {
-    const resolved = resolveError(error, answer, testCase.exercise.id)
-    if (resolved) errors.push(resolved)
+  const raw = {
+    errors: buildErrors(testCase.exercise.id),
+    highlights: [testCase.highlight()],
   }
-
-  const highlight: Highlight = {
-    ...rawHighlight,
-    anchor: anchorAt(answer, rawHighlight.oldText ?? ''),
+  const parsed = parseCorrection(JSON.stringify(raw), answer)
+  if (!parsed.ok) {
+    // 示例数据有问题就在开发阶段直接抛错：它必须永远是合法的
+    throw new Error(
+      `内置示例（${testCase.exercise.id}）没通过解析管线：\n  ${parsed.problems.join('\n  ')}`,
+    )
   }
-
-  return { errors, highlights: [highlight] }
-}
-
-/** 把一条示例批注里的文字定位成锚点。 */
-function resolveError(error: MockError, answer: string, exerciseId: string): ErrorObject | null {
-  const label = `${exerciseId} 的 ${error.id}`
-  const base = { ...error }
-
-  switch (error.type) {
-    case 'insert': {
-      const text = error.oldText ?? ''
-      return { ...base, oldText: text, insertAfter: anchorAt(answer, text) } as ErrorObject
-    }
-    case 'reorder': {
-      const segments = (error.segments ?? []).map((segment) => ({
-        ...segment,
-        anchor: anchorAt(answer, segment.oldText ?? ''),
-      }))
-      return { ...base, segments } as ErrorObject
-    }
-    default: {
-      const text = error.oldText ?? ''
-      if (!text) throw new Error(`${label} 缺少 oldText，无法定位`)
-      return { ...base, anchor: anchorAt(answer, text) } as ErrorObject
-    }
-  }
+  return parsed.correction
 }
 
 /** 内置示例题的编号与对应的示例作答，供界面提示"哪些作答可以用示例批改"。 */

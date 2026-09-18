@@ -117,24 +117,38 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
     rejection: { id: error.id, message },
   })
 
+  /**
+   * 校验时要用**原始区间**核对，而不是 anchor。
+   * anchor 现在装的是最小修改之后的窄区间（如只覆盖 explore），
+   * 拿它去核对模型圈的原文（have explore ways）必然对不上（实际踩过这个坑）。
+   */
+  const anchorToCheck = error.originalSpan ?? error.anchor
+
   switch (error.type) {
     case 'replace':
     case 'rewrite': {
-      if (!error.anchor) return fail('缺少原文位置，无法标注')
+      if (!anchorToCheck) return fail('缺少原文位置，无法标注')
       if (error.targetText === undefined) {
         return fail(`${error.type === 'replace' ? '替换' : '整句重写'}没有给出正确写法`)
       }
-      const span = checkSpan(error.id, error.anchor, answer, '该处批注')
+      const span = checkSpan(error.id, anchorToCheck, answer, '该处批注')
       if (!span.ok) return span
-      return { ok: true, value: { error, span: span.value } }
+      // 渲染用的是缩窄后的区间（若已算出来）；没有就退回原始区间
+      const renderSpan = error.changed
+        ? { start: error.changed.start, end: error.changed.end }
+        : span.value
+      return { ok: true, value: { error, span: renderSpan } }
     }
 
     case 'delete': {
       // 删除类错误划掉即可，本来就没有替代写法
-      if (!error.anchor) return fail('缺少原文位置，无法标注')
-      const span = checkSpan(error.id, error.anchor, answer, '该处批注')
+      if (!anchorToCheck) return fail('缺少原文位置，无法标注')
+      const span = checkSpan(error.id, anchorToCheck, answer, '该处批注')
       if (!span.ok) return span
-      return { ok: true, value: { error, span: span.value } }
+      const renderSpan = error.changed
+        ? { start: error.changed.start, end: error.changed.end }
+        : span.value
+      return { ok: true, value: { error, span: renderSpan } }
     }
 
     case 'insert': {

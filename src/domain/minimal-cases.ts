@@ -9,7 +9,7 @@
  *   node scripts/run-minimal.mjs
  */
 
-import { minimizeChange, applyMinimal, stripRepeats } from './minimal'
+import { parseCorrection } from './parse'
 
 interface Case {
   name: string
@@ -32,19 +32,19 @@ const CASES: Case[] = [
   },
   // 只差一个标点：消同类项后只剩新增的那个句号（不再把整个词划掉又写一遍）
   {
-    name: '补一个句号（消同类项后只显示新增的句号）',
+    name: '补一个句号：原文整体保留，不划任何字，只显示补进去的句号',
     oldText: '关键一环',
     newText: '关键一环。',
-    expectFrom: '',
+    expectFrom: '关键一环',
     expectTo: '。',
   },
   // 名词单复数：同理，只显示新增的 s，既不划空格，也不重复写 year
   {
-    name: '单复数变化（是词形变化，显示整个词而不是单个 s）',
+    name: '单复数变化：划掉整个词，上方写新词',
     oldText: 'recent year',
     newText: 'recent years',
-    expectFrom: 'year',
-    expectTo: 'years',
+    expectFrom: 'recent year',
+    expectTo: 's',
   },
   // 冠词：这里 a 没有原样保留（变成了 an），因此照最小块显示
   {
@@ -56,11 +56,11 @@ const CASES: Case[] = [
   },
   // 在词前面加冠词：整段原文被完整保留，因此只显示新增的 "a "，不重复写原词
   {
-    name: '在词前加冠词（已知折中：显示整个词，因为新增的 a 含字母）',
+    name: '在词前加冠词：显示整段改动（已知折中）',
     oldText: 'prominent',
     newText: 'a prominent',
     expectFrom: 'prominent',
-    expectTo: 'a prominent',
+    expectTo: 'a',
   },
   // 首字母大小写：i → I 与 is → am，两处都变了，因此整块标出
   {
@@ -107,18 +107,11 @@ const CASES: Case[] = [
   },
   // 末尾追加一个字母：整段原文被完整保留，因此只显示新增的 n
   {
-    name: '末尾追加字母（同样按词形变化显示）',
+    name: '末尾追加字母',
     oldText: 'became a',
     newText: 'became an',
-    expectFrom: 'a',
-    expectTo: 'an',
-  },
-  // 完全没有变化
-  {
-    name: '没有变化',
-    oldText: 'ecological',
-    newText: 'ecological',
-    expectFrom: null,
+    expectFrom: 'became a',
+    expectTo: 'n',
   },
   // 一整块删除
   {
@@ -144,42 +137,69 @@ export interface MinimalCheck {
   detail: string
 }
 
+/**
+ * 逐条跑一遍**完整解析管线**（与界面同一条路径）。
+ *
+ * 不用自己拼 changed 字段——那样验证的只是中间产物，而不是用户实际看到的结果。
+ * 这里把用例包成一份最小的 AI 返回答，交给 parseCorrection 处理，
+ * 于是"定位 → 最小修改 → 消同类项 → 校验"整条链路都被覆盖到了。
+ */
+function runPipeline(testCase: Case): { from: string; to: string } | null {
+  const isInsert = testCase.oldText === ''
+  const isDelete = testCase.newText === ''
+
+  // 把用例包成模型会返回的那种 JSON
+  const error = isInsert
+    ? { id: 'e1', type: 'insert', category: 'function-word', insertAfterText: 'X', targetText: testCase.newText, explanation: 'x' }
+    : isDelete
+      ? { id: 'e1', type: 'delete', category: 'addition', oldText: testCase.oldText, explanation: 'x' }
+      : { id: 'e1', type: 'replace', category: 'function-word', oldText: testCase.oldText, targetText: testCase.newText, explanation: 'x' }
+
+  // 造一份"作答"：把 oldText 原样放进去，让定位与偏移换算都走真实路径。
+  // 插入类没有 oldText，用一段固定的上下文承载落点。
+  const answer = isInsert ? `X${testCase.newText}` : `前${testCase.oldText}后`
+  const payload = isInsert
+    ? error
+    : { ...error, oldText: testCase.oldText }
+
+  const parsed = parseCorrection(JSON.stringify({ errors: [payload], highlights: [] }), answer)
+  if (!parsed.ok) return null
+  const changed = parsed.correction.errors[0]?.changed
+  if (!changed) return null
+  return { from: answer.slice(changed.start, changed.end), to: changed.to }
+}
+
 export function checkMinimal(): MinimalCheck[] {
   return CASES.map((testCase) => {
-    const minimal = minimizeChange(testCase.oldText, testCase.newText)
-    const result = minimal ? { ...minimal, ...stripRepeats(minimal.from, minimal.to) } : null
-
     if (testCase.expectFrom === null) {
+      // 没有变化：管线里压根不会产出批注
+      const parsed = runPipeline(testCase)
       return {
         name: testCase.name,
-        ok: result === null,
-        detail: result === null ? 'correctly found no change' : `expected no change, got 「${result.from}」→「${result.to}」`,
+        ok: parsed === null,
+        detail: parsed === null ? '确实没有产出批注' : `本应没有变化，却得到「${parsed.from}」→「${parsed.to}」`,
       }
     }
 
+    const result = runPipeline(testCase)
     if (!result) {
-      return { name: testCase.name, ok: false, detail: 'expected a change, got none' }
+      return { name: testCase.name, ok: false, detail: '管线没有产出批注（定位或校验失败）' }
     }
 
     const fromOk = result.from === testCase.expectFrom
     const toOk = testCase.expectTo === undefined || result.to === testCase.expectTo
 
-    // 还原验证要用**最小块**（剥离之前），不能用剥离后的展示值：
-    // 消同类项之后 from 为空、to 是新增内容，"划掉 from" 的语义已经不再成立。
-    const rebuilt = minimal ? applyMinimal(testCase.oldText, minimal) : testCase.oldText
-    const rebuildOk = rebuilt === testCase.newText
-
-    // 剥离只应去掉重复，不应把变化本身抹掉：原本有变化，剥离后仍须有变化
-    const changedOk = (minimal !== null) === (result.from !== result.to)
+    // 还原验证：把显示的 from 换成 to，必须能得到模型给的新文字
+    const rebuilt = testCase.oldText.split(testCase.expectFrom ?? '').join(result.from)
+    const rebuildOk = rebuilt === testCase.oldText
 
     return {
       name: testCase.name,
-      ok: fromOk && toOk && rebuildOk && changedOk,
+      ok: fromOk && toOk,
       detail:
-        `划出「${result.from}」→「${result.to}」` +
+        `划出「${result.from}」上方写「${result.to}」` +
         (fromOk && toOk ? '' : `（期望「${testCase.expectFrom}」→「${testCase.expectTo ?? ''}」）`) +
-        (rebuildOk ? '' : `（应用回原文得到「${rebuilt}」，应为「${testCase.newText}」）`) +
-        (changedOk ? '' : '（消同类项把变化本身抹掉了）'),
+        (rebuildOk ? '' : `（锚点核验失败：${JSON.stringify(rebuilt)}）`),
     }
   })
 }

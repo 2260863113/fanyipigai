@@ -98,53 +98,50 @@ function isWordChar(char: string | undefined): boolean {
  *
  * 同一处改动有两份描述，若直接显示就会出现重复：
  *   prominent  → a prominent     划掉 prominent，上方又写一遍 prominent，看着像整个词被换掉
- *   key point  → key points      划掉 key point，上方又写 key point 加 s
+ *   关键一环    → 关键一环。        划掉整个词，上方又写一遍整个词加句号
  *
- * 判据：把最小块里**公共的部分**去掉之后，剩下的那点东西**是否含词字符**（字母数字汉字）。
- * （只看最小块本身即可，不需要模型给的整段——用整段判反而会把 explored 里的 explore 当成保留。）
+ * 判据只有两步，刻意做得很窄（试过四种更"聪明"的写法都会在别的用例上翻车）：
  *
- *   含 → 说明确实换了字，是"修改"，照最小块显示：
- *        year → years                  去掉公共的 year，剩 s（是词字符）→ 显示 year → years
- *        explore → explored            同理 → 显示整个词，仍然可读
- *        i is → I am                   两边都变了 → 显示整块
- *        In wake of reform → Since…    整句重写 → 显示整段
+ *   1. **整段原文被完整保留在正确写法里**吗？没有 → 说明原文确实被改掉了，
+ *      照最小块显示整段改动，这样"哪个词变了"看得清：
+ *        explore → explored    显示为划掉 explore、上方写 explored
+ *        i is → I am           显示为划掉 i is、上方写 I am
  *
- *   不含 → 说明只是插入了标点或空格，是"增加"，那就不划任何字，只显示插进来的东西：
- *        关键一环 → 关键一环。           多出来的只有一个句号 → 只显示新增的 。
+ *   2. 保留了，那就算出多出来的那部分（只多不少）。**多出来的全是标点或空格**吗？
+ *      是 → 纯插入，不划任何字，只显示补进去的东西：
+ *        关键一环 → 关键一环。   只显示新增的 。
+ *      不是（含字母数字）→ 那是真的换了字，照最小块显示整段改动：
+ *        year → years          显示为划掉 year、上方写 years
  *
- * 已知折中：`prominent` → `a prominent` 多出来的 "a " 里含字母，所以按这条判据算"修改"，
- * 会显示成 prominent → a prominent。那看着像把整个词换掉，其实是加了个冠词。
- * 为它单独加特例试过四种写法都会在别的用例上翻车，因此接受这个折中：稳定、可读优先。
+ * 已知折中：`prominent` → `a prominent` 多出来的 "a " 含字母，因此走第 2 步的"不是"分支，
+ * 显示成划掉 prominent、上方写 a prominent。为它单独加判据试过四种写法，都会在别处翻车，
+ * 所以接受这个折中：**稳定可读优先**。
  *
- * 这条判据折腾了四轮才对，改之前先看 minimal-cases.ts 里的用例。
- */
-export function stripRepeats(oldChunk: string, newChunk: string): { from: string; to: string } {
+ * 改这里之前请先看 minimal-cases.ts 的用例，它们覆盖了上面每一条分支。
+ */export function stripRepeats(original: string, oldChunk: string, newChunk: string): { from: string; to: string } {
   if (oldChunk.length === 0) return { from: '', to: newChunk }
   if (newChunk.length === 0) return { from: oldChunk, to: '' }
 
   const isWordChar = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}]/u.test(char)
 
-  let prefix = 0
-  while (prefix < oldChunk.length && prefix < newChunk.length && oldChunk[prefix] === newChunk[prefix]) {
-    prefix += 1
-  }
-  let suffix = 0
-  while (
-    suffix < oldChunk.length - prefix &&
-    suffix < newChunk.length - prefix &&
-    oldChunk[oldChunk.length - 1 - suffix] === newChunk[newChunk.length - 1 - suffix]
-  ) {
-    suffix += 1
+  // 整段原文是否被完整保留在正确写法里（含"在一端多出一截"的情形）
+  const preserved = newChunk.includes(original)
+  if (!preserved) {
+    // 原文被改掉了 → 照最小块显示整段改动，这样"哪个词变了"看得清（explore → explored）
+    return { from: oldChunk, to: newChunk }
   }
 
-  const extra = newChunk.slice(prefix, newChunk.length - suffix)
-  const hasWordChar = [...extra].some(isWordChar)
+  // 原文被保留：算出多出来的那部分
+  const at = newChunk.indexOf(original)
+  const extra = newChunk.slice(0, at) + newChunk.slice(at + original.length)
 
-  if (!hasWordChar && extra.length > 0) {
-    // 只是插入了标点或空格：不划任何字，只显示插进来的东西
+  // 多出来的全是标点或空格 → 纯插入，不划任何字，只显示补进去的东西（关键一环 → 关键一环。）
+  const extraHasWord = [...extra].some(isWordChar)
+  if (extra.length > 0 && !extraHasWord) {
     return { from: '', to: extra }
   }
 
+  // 多出来的含字母数字 → 那是真的换了字（year → years），照最小块显示整段改动
   return { from: oldChunk, to: newChunk }
 }
 
