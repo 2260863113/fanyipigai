@@ -1,73 +1,81 @@
-﻿# 本地一键启动：检查环境 → 启动开发服务 → 打开浏览器
+# Local one-click launcher: check the environment, start the dev server, open the browser.
 #
-# 用法（任选其一）：
-#   - 双击项目根目录的 启动.bat
-#   - 右键本文件「使用 PowerShell 运行」
-#   - 在本目录执行：powershell -ExecutionPolicy Bypass -File .\start.ps1
+# THIS FILE IS INTENTIONALLY ASCII-ONLY. DO NOT ADD NON-ASCII CHARACTERS.
+#   Windows PowerShell 5.1 reads a BOM-less file as ANSI (GBK on Chinese Windows),
+#   which corrupts non-ASCII string literals and makes the script fail to parse.
+#   Depending on a UTF-8 BOM to fix that is fragile: one editor save or tool
+#   round-trip can drop the BOM and the script dies with a confusing parse error.
+#   Keeping the source ASCII removes the whole class of problems.
+#   The Chinese user interface lives in the web app, not here.
 #
-# 可传参数：-NoBrowser 只启动服务，不打开浏览器
-#          -Port 5200  改用其他端口
+# Usage:
+#   - double-click the launcher .bat in the project root
+#   - or run: powershell -ExecutionPolicy Bypass -File .\start.ps1
+#
+# Parameters:
+#   -NoBrowser   start the server only, do not open a browser
+#   -Port 5200   use another port
+#   -Diagnose    run the environment checks and exit (does not start the server)
 
 [CmdletBinding()]
 param(
   [switch]$NoBrowser,
-  [int]$Port = 5180
+  [int]$Port = 5180,
+  [switch]$Diagnose
 )
 
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 
-# 把控制台切到 UTF-8 代码页。
-# 否则子进程（vite）输出的中文会被按系统默认代码页解码成乱码，
-# 让人误以为启动出错——这是实际踩到的坑，不是多余的一步。
+# Switch the console to UTF-8 so the child process (vite) does not print mojibake.
 try {
   & chcp.com 65001 > $null
   [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 } catch {
-  # 切换失败不影响启动，只是日志可能出现乱码，所以不中断
+  # Not fatal: only log output would look garbled.
 }
 
-function Write-Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
-function Write-Ok($text) { Write-Host "    $text" -ForegroundColor Green }
-function Write-Warn2($text) { Write-Host "    $text" -ForegroundColor Yellow }
-function Write-Bad($text) { Write-Host "    $text" -ForegroundColor Red }
+$Step = '==> '
+$Indent = '    '
+
+function Say([string]$text, [string]$color = 'Gray') {
+  Write-Host ($Indent + $text) -ForegroundColor $color
+}
 
 Write-Host ''
-Write-Host '  英语翻译练习站 · 本地开发服务' -ForegroundColor White
-Write-Host '  ------------------------------------' -ForegroundColor DarkGray
+Write-Host '  Translation Practice - local dev server' -ForegroundColor White
+Write-Host '  ---------------------------------------' -ForegroundColor DarkGray
 
-# ── 1. Node 是否可用 ───────────────────────────────────────
-Write-Step '检查 Node.js'
+# -- 1. Node ----------------------------------------------------------
+Write-Host ($Step + 'Check Node.js') -ForegroundColor Cyan
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
-  Write-Bad '没有找到 Node.js。请先安装：https://nodejs.org/（选 LTS 版本），装完重开这个窗口。'
-  Read-Host '按回车关闭'
+  Say 'Node.js not found. Install the LTS build from https://nodejs.org/ then reopen this window.' 'Red'
+  Read-Host 'Press Enter to close'
   exit 1
 }
 $nodeVersion = (& node -v)
-$major = [int]($nodeVersion.TrimStart('v').Split('.')[0])
-Write-Ok "Node $nodeVersion"
-if ($major -lt 20) {
-  Write-Warn2 '版本偏低，建议升级到 20 或更高。'
-}
+$major = 0
+[void][int]::TryParse($nodeVersion.TrimStart('v').Split('.')[0], [ref]$major)
+Say "Node $nodeVersion" 'Green'
+if ($major -lt 20) { Say 'Version looks old; 20 or newer is recommended.' 'Yellow' }
 
-# ── 2. 依赖是否装好 ────────────────────────────────────────
-Write-Step '检查依赖'
+# -- 2. Dependencies --------------------------------------------------
+Write-Host ($Step + 'Check dependencies') -ForegroundColor Cyan
 if (-not (Test-Path (Join-Path $PWD 'node_modules'))) {
-  Write-Warn2 '还没有安装依赖，正在执行 npm install（第一次会比较慢）…'
+  Say 'node_modules is missing, running npm install (the first run takes a while)...' 'Yellow'
   & npm install --no-fund --no-audit
   if ($LASTEXITCODE -ne 0) {
-    Write-Bad '依赖安装失败，请把上面的报错发给我。'
-    Read-Host '按回车关闭'
+    Say 'npm install failed. Copy the messages above and send them to the developer.' 'Red'
+    Read-Host 'Press Enter to close'
     exit 1
   }
 }
-Write-Ok '依赖已就绪'
+Say 'dependencies ready' 'Green'
 
-# ── 3. 密钥文件 ────────────────────────────────────────────
-# 密钥只从 .dev.vars 读取，这个文件已被 gitignore，绝不会进仓库。
+# -- 3. API key (.dev.vars is gitignored and never committed) ---------
 $devVarsPath = Join-Path $PWD '.dev.vars'
-Write-Step '检查密钥文件 .dev.vars'
+Write-Host ($Step + 'Check .dev.vars') -ForegroundColor Cyan
 $apiKey = ''
 if (Test-Path $devVarsPath) {
   foreach ($line in Get-Content -LiteralPath $devVarsPath) {
@@ -77,62 +85,69 @@ if (Test-Path $devVarsPath) {
     }
   }
 }
-
 if (-not $apiKey) {
   if (-not (Test-Path $devVarsPath)) {
-    Write-Warn2 '没有找到 .dev.vars，正在从 .dev.vars.example 复制一份…'
+    Say '.dev.vars not found, copying it from .dev.vars.example' 'Yellow'
     Copy-Item (Join-Path $PWD '.dev.vars.example') $devVarsPath -ErrorAction SilentlyContinue
   }
-  Write-Warn2 '还没有填入 DeepSeek API 密钥。'
-  Write-Warn2 "请用记事本打开：$devVarsPath"
-  Write-Warn2 '把 DEEPSEEK_API_KEY= 后面补上你的密钥（形如 sk-xxxx），保存后重新双击本脚本。'
-  Write-Warn2 '没有密钥也能启动：界面可以看，但提交批改会提示密钥缺失；此时可点「查看内置示例批改」。'
+  Say 'No DeepSeek API key yet. Open this file in Notepad:' 'Yellow'
+  Say $devVarsPath 'Yellow'
+  Say 'Fill in DEEPSEEK_API_KEY= with your key (looks like sk-xxxx), save, then run the launcher again.' 'Yellow'
+  Say 'The site still opens without a key, but grading will report the missing key.' 'Yellow'
+  Say 'In that case use the built-in sample grading to see how annotations look.' 'Yellow'
 } else {
-  $masked = if ($apiKey.Length -gt 10) { $apiKey.Substring(0, 6) + '...' + $apiKey.Substring($apiKey.Length - 4) } else { '(长度异常)' }
-  Write-Ok "已读到密钥 $masked"
+  $masked = if ($apiKey.Length -gt 10) { $apiKey.Substring(0, 6) + '...' + $apiKey.Substring($apiKey.Length - 4) } else { '(unexpected length)' }
+  Say ('API key loaded: ' + $masked) 'Green'
 }
 
-# ── 4. 端口占用 ────────────────────────────────────────────
-Write-Step "检查端口 $Port"
+# -- 4. Port ----------------------------------------------------------
+Write-Host ($Step + "Check port $Port") -ForegroundColor Cyan
 $occupied = $null
 try {
-  $occupied = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop |
-    Select-Object -First 1
+  $occupied = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop | Select-Object -First 1
 } catch {
   $occupied = $null
 }
 if ($occupied) {
-  $procId = $occupied.OwningProcess
-  $procName = (Get-Process -Id $procId -ErrorAction SilentlyContinue).ProcessName
-  Write-Warn2 "端口 $Port 已被占用（进程 $procName，PID $procId）。"
-  Write-Warn2 '如果是上次没关干净的服务，可以先结束它：'
-  Write-Warn2 "    Stop-Process -Id $procId"
-  Write-Warn2 '或者换个端口启动：'
-  Write-Warn2 "    .\start.ps1 -Port 5200"
+  $ownerId = $occupied.OwningProcess
+  $ownerName = (Get-Process -Id $ownerId -ErrorAction SilentlyContinue).ProcessName
+  Say ("port $Port is already in use by $ownerName (PID $ownerId).") 'Yellow'
+  Say ("If it is a leftover server, stop it with:  Stop-Process -Id $ownerId") 'Yellow'
+  Say 'Or start on another port:  .\start.ps1 -Port 5200' 'Yellow'
   Write-Host ''
-  $answer = Read-Host '现在结束那个进程并继续？(y/N)'
+  $answer = Read-Host 'Stop that process and continue? (y/N)'
   if ($answer -eq 'y' -or $answer -eq 'Y') {
-    Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    Stop-Process -Id $ownerId -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 800
-    Write-Ok '已结束占用端口的进程'
+    Say 'stopped the process holding the port' 'Green'
   } else {
-    Write-Bad '已取消启动。'
-    Read-Host '按回车关闭'
+    Say 'cancelled' 'Red'
+    Read-Host 'Press Enter to close'
     exit 1
   }
 } else {
-  Write-Ok "端口 $Port 空闲"
+  Say 'port is free' 'Green'
 }
 
-# ── 5. 启动服务 ────────────────────────────────────────────
+# -- 5. Start ---------------------------------------------------------
 $url = "http://127.0.0.1:$Port/"
 Write-Host ''
-Write-Step "启动开发服务（$url）"
-Write-Host '    服务运行期间请保持这个窗口开着；按 Ctrl+C 停止。' -ForegroundColor DarkGray
+Write-Host ($Step + "Start dev server ($url)") -ForegroundColor Cyan
+
+if ($Diagnose) {
+  Write-Host ''
+  Write-Host '  Diagnose mode: checks passed, server not started.' -ForegroundColor Cyan
+  Write-Host '  No errors above means the launcher itself is fine.' -ForegroundColor DarkGray
+  Write-Host ''
+  exit 0
+}
+
+Say 'Keep this window open while the server runs; press Ctrl+C to stop.' 'DarkGray'
 Write-Host ''
 
+$opener = $null
 if (-not $NoBrowser) {
-  # 等端口起来再开浏览器，避免打开时是错误页
+  # Wait until the port answers, then open the browser, so it never lands on an error page.
   $opener = Start-Job -ScriptBlock {
     param($target, $timeoutSeconds)
     $deadline = (Get-Date).AddSeconds($timeoutSeconds)
@@ -148,7 +163,7 @@ if (-not $NoBrowser) {
       }
     }
   } -ArgumentList $url, 40
-  Write-Host '    （服务就绪后会自动打开浏览器）' -ForegroundColor DarkGray
+  Say '(the browser opens automatically once the server is ready)' 'DarkGray'
 }
 
 try {
@@ -159,5 +174,5 @@ try {
     Remove-Job $opener -Force -ErrorAction SilentlyContinue
   }
   Write-Host ''
-  Write-Host '  服务已停止。' -ForegroundColor DarkGray
+  Write-Host '  Server stopped.' -ForegroundColor DarkGray
 }

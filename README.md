@@ -90,16 +90,24 @@ AI 返回的结果要经过 `src/domain/parse.ts` 的解析与 `src/domain/valid
 | macOS / Linux | 终端执行 `./start.sh` |
 
 脚本会依次检查 Node 版本、依赖是否装好、`.dev.vars` 里有没有密钥、端口是否被占用，
-然后启动服务并在就绪后自动打开浏览器。有任何一项不对，它会告诉你具体怎么做。
+然后启动服务并在就绪后自动打开浏览器。**出现任何问题它都会在结尾停下等你按键**，
+不会一闪而过；诊断时可以先跑 `启动.bat -Diagnose`（只做检查、不启动服务）。
 
 可选参数：
 
 ```
 启动.bat -NoBrowser        # 只启动服务，不打开浏览器
 启动.bat -Port 5200        # 换端口（默认 5180）
+启动.bat -Diagnose         # 只做环境检查
 ./start.sh --no-browser
 ./start.sh --port 5200
 ```
+
+> ⚠️ **维护者注意**：`启动.bat` 与 `start.ps1` 必须保持**纯 ASCII**，不要往里加中文。
+> cmd.exe 用系统代码页（中文 Windows 是 GBK）读取 `.bat`，而 Windows PowerShell 5.1
+> 会把无 BOM 的 `.ps1` 当 ANSI 读；一旦文件里出现非 ASCII 字符，字符串字面量会被解码错乱、
+> 脚本语法报错，用户看到的现象是"双击后窗口闪退"，极难排查。
+> 中文提示属于网页界面，控制台输出保持英文。`npm run smoke` 里有护栏会拦住这个错误。
 
 ### 手动启动
 

@@ -133,5 +133,59 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(false, '界面渲染没有抛出异常', error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error))
   }
 
+  // 启动脚本的编码护栏。
+  // 这两个文件必须只有 ASCII：cmd.exe 按系统代码页（中文 Windows 是 GBK）读取 .bat，
+  // 而 Windows PowerShell 5.1 会把无 BOM 的 .ps1 当 ANSI 读。
+  // 只要文件里出现非 ASCII 字符，字符串字面量就会被解码错乱、脚本语法报错，
+  // 而用户看到的现象是"双击后窗口闪退"——极难排查。所以在这里直接拦住。
+  console.log('\n[启动脚本] 检查编码与语法护栏')
+  try {
+    const { readFileSync } = await import('node:fs')
+    const { execFileSync } = await import('node:child_process')
+    const path = await import('node:path')
+    // 注意：本文件会被 esbuild 打包到 node_modules/.cache 下执行，
+    // 因此 import.meta.dirname 指向的是缓存目录。npm run smoke 的当前目录才是项目根。
+    const root = process.cwd()
+
+    for (const file of ['start.ps1', '启动.bat']) {
+      const full = path.join(root, file)
+      let bytes: Buffer
+      try {
+        bytes = readFileSync(full)
+      } catch {
+        check(false, `${file} 存在`)
+        continue
+      }
+      const badBytes: number[] = []
+      for (const [index, byte] of bytes.entries()) {
+        if (byte > 127) badBytes.push(index)
+      }
+      check(
+        badBytes.length === 0,
+        `${file} 只有 ASCII 字符（非 ASCII 字节 ${badBytes.length} 个）`,
+        badBytes.length > 0
+          ? `首个非 ASCII 字节在第 ${badBytes[0]} 个位置。这两个文件必须保持纯 ASCII，` +
+            `中文提示请放在网页界面里，不要放进启动脚本。`
+          : undefined,
+      )
+    }
+
+    // 在没有 BOM 的前提下检查 PowerShell 语法：这正是用户机器上的真实情形
+    const scriptPath = path.join(root, 'start.ps1')
+    const command =
+      "$e=$null;$t=$null;" +
+      `[void][System.Management.Automation.Language.Parser]::ParseFile('${scriptPath.replace(/'/g, "''")}',[ref]$t,[ref]$e);` +
+      "if($e.Count -gt 0){$e|ForEach-Object{$_.Message};exit 1}"
+    try {
+      execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { stdio: 'pipe' })
+      check(true, 'start.ps1 的语法检查通过（按无 BOM 读取）')
+    } catch (error) {
+      const detail = error instanceof Error && 'stdout' in error ? String((error as { stdout?: Buffer }).stdout) : ''
+      check(false, 'start.ps1 的语法检查通过（按无 BOM 读取）', detail.slice(0, 400))
+    }
+  } catch (error) {
+    check(false, '启动脚本检查可以执行', error instanceof Error ? error.message : String(error))
+  }
+
   return { checks, failures }
 }
