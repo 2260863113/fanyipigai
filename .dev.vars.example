@@ -1,0 +1,19 @@
+# 本地开发用的密钥模板。
+# 使用方法：把本文件复制成 .dev.vars（去掉 .example），然后填入真实值。
+# .dev.vars 已被 .gitignore 忽略，永远不会进入 git 仓库。
+#
+# 线上部署时不要用这个文件，改在项目目录执行：
+#   npx wrangler secret put DEEPSEEK_API_KEY
+#   npx wrangler secret put ACCESS_PASSWORD
+#   npx wrangler secret put SESSION_SECRET
+
+# DeepSeek API 密钥，形如 sk-xxxxxxxx
+DEEPSEEK_API_KEY=
+
+# 网站访问口令：打开网站时要求输入的那串东西。
+# 建议 16 位以上随机字符串。这是保护你 API 余额的唯一一道门。
+ACCESS_PASSWORD=
+
+# 登录凭证的签名密钥：随便一串长随机字符串即可（不要和上面相同）。
+# 它的作用是让浏览器保存的登录状态无法被伪造。
+SESSION_SECRET=

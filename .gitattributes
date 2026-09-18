@@ -1,0 +1,6 @@
+# 统一按 LF 存储，避免 Windows 与 Linux 之间反复出现"整文件被改写"的提交。
+# Cloudflare 的构建在 Linux 上跑，本地在 Windows 上开发，这个约定能省掉一类无意义的冲突。
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
