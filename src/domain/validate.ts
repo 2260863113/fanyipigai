@@ -77,7 +77,7 @@ function checkSpan(id: string, anchor: Anchor, answer: string, what: string): Va
     const hint =
       foundAt >= 0 && foundAt !== start
         ? `片段「${snippet}」实际出现在第 ${foundAt}–${foundAt + snippet.length} 个字符处，序号偏移 ${foundAt - start}`
-        : '这段文字在你的译文中并不存在，或序号与片段分属两处'
+        : nearMissHint(answer, start, end, snippet)
     const before = answer.slice(Math.max(0, start - 6), start)
     const after = answer.slice(end, Math.min(answer.length, end + 6))
     return fail(
@@ -86,6 +86,24 @@ function checkSpan(id: string, anchor: Anchor, answer: string, what: string): Va
     )
   }
   return { ok: true, value: { start, end } }
+}
+
+/**
+ * 判断是否属于"差一个字符"的近失。
+ * 这类错误最常见（AI 数序号时少算或多算一个），给出精确差值能让重试真正有用，
+ * 而不是让它看到一句笼统的"对不上"再猜一次。
+ */
+function nearMissHint(answer: string, start: number, end: number, snippet: string): string {
+  const normalizedSnippet = normalize(snippet)
+  const candidates = [start - 1, start + 1, end - 1, end + 1]
+  for (const candidate of candidates) {
+    const width = snippet.length
+    if (candidate < 0 || candidate + width > answer.length) continue
+    if (normalize(answer.slice(candidate, candidate + width)) === normalizedSnippet) {
+      return `片段本身是对的，但序号偏移了：应当写作 start=${candidate}、end=${candidate + width}（当前是 start=${start}、end=${end}）`
+    }
+  }
+  return '这段文字在你的译文中并不存在，或序号与片段分属两处'
 }
 
 /** 校验通过的错误对象，附带各位置解算后的绝对区间。 */

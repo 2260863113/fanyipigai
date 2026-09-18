@@ -782,6 +782,40 @@ button {
   border-radius: 4px;
 }
 
+/* ── 提交状态与错误提示 ─────────────────────────── */
+
+.judging {
+  margin: 10px 0 0;
+  color: var(--accent);
+}
+
+.notice {
+  margin: 10px 0 0;
+  background: var(--paper-soft);
+  border-left: 3px solid var(--line-strong);
+  padding: 8px 12px;
+  color: var(--ink-soft);
+}
+
+.error-block {
+  margin-top: 12px;
+  background: var(--mark-red-bg);
+  border: 1px solid #f2c4bd;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: #8f2c1f;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.error-block strong {
+  margin-right: 4px;
+}
+
 /* ── 页脚 ───────────────────────────────────────── */
 
 .app-foot {

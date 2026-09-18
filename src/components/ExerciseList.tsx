@@ -9,6 +9,8 @@ export interface RecordView {
   answer: string
   correction: import('../domain/types').Correction
   validated: import('../domain/validate').ValidatedCorrection
+  /** 这次结果是 AI 现场批改的，还是内置示例 */
+  source: 'live' | 'fixture'
   createdAt: Date
 }
 
@@ -48,6 +50,7 @@ export function ExerciseList({ exercise, records, onOpenRecord }: Props) {
                     </span>
                     <span className="record-meta">
                       {record.level === 'polish' ? '润色' : '精修'} · 错误 {record.validated.errors.length} 处
+                      {record.source === 'fixture' && ' · 示例'}
                     </span>
                     <span className="record-time">
                       {record.createdAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}

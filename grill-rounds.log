@@ -15,4 +15,13 @@
 2026-09-18 16:00  实现第一版切片（句子翻译最短闭环）：新增 src/domain（types / validate / layout / color / mock 五个模块）、src/components（App / ExerciseList / CorrectionPanel / AnnotationText / DetailPanel）、scripts（smoke / render-probe / run-smoke）、package.json、tsconfig、vite.config、index.html、styles.css。五种改法（替换、插入、删除、整句重写、语序调换）与三色分级全部可渲染，含分数、四维度、错误归类、逐处批注、练习记录。
                   过程中冒烟测试抓出四个真实缺陷并已修复：①批注构造按题目 id 分派错误，用甲题作答去定位乙题片段；②重叠消解会丢弃普通文本片段，导致作答尾部整段不显示；③插入落点正好在替换区间末端时被误判为重叠；④Vite 默认绑定 localhost 在 Windows 上解析到 IPv6，127.0.0.1 连不上。
                   ⚠️ 未决：GitHub 仓库地址仍未知，本地已提交但未推送；术语表仍为空；真实 DeepSeek 调用、Workers/D1 改造、其余三类题型均未开始。
-                  ⚠️ 注意：批注位置一律用带原文片段的锚点描述。真实 AI 若数错位置，校验器会拒绝渲染该处并告知用户；假数据阶段则直接在建库时抛错，避免带着错误数据继续开发。
+                  ⚠️ 注意：批注位置一律用带原文片段的锚点描述。真实 AI 若数错位置，校验器会拒绝渲染该处并告知用户；内置示例阶段则直接在建库时抛错，避免带着错误数据继续开发。
+
+2026-09-18 16:00  首次推送到 GitHub（https://github.com/2260863113/translation-practice）。SSH 的 22 端口被网络拒绝，改用 HTTPS + Windows 凭据管理器，推送成功。
+                  ⚠️ 注意：本机 ~/.ssh 下只有 safescan_deploy 密钥，与本项目无关；不要复用它。
+
+2026-09-18 16:00  接入真实 DeepSeek API，替换假批改器：新增 src/domain/prompt.ts（提示词与返回格式的唯一真相来源）、parse.ts（解析 + 可重试的具体原因）、ai.ts（调用、重试、失败分类）、client.ts（前端封装）、vite-plugin-judge-api.ts（本地 /api/judge，密钥只在服务端使用）。前端提交改为异步请求，含批改中状态与分类错误提示；内置示例批改保留为「查看内置示例批改」入口。
+                  真实 API 实测三例全部通过，位置与分类准确。其中一例 AI 返回坏 JSON，自动重试后成功；另一例 AI 数序号少算一个字符，被位置校验拦下并给出精确提示。
+                  ⚠️ 注意：提示词里关于「必须逐字核对序号」「中文译文用全角标点」的要求是踩坑后加的，不要删。
+                  ⚠️ 注意：未配置密钥时也能开发，只有提交批改会报错，此时可用内置示例看批注效果。
+                  ⚠️ 未决：题库、练习记录仍在内存中，刷新即失，需等 D1 接入。

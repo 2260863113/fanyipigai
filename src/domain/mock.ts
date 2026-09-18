@@ -405,8 +405,8 @@ function buildErrors(exerciseId: string, answer: string): ErrorObject[] {
   }
 }
 
-/** 建立某道题的完整假批改。 */
-export function mockCorrectionFor(exerciseId: string, answer: string): MockCorrection {
+/** 建立某道题的假批改。仅在"查看内置示例"时使用，正常批改走真实 AI。 */
+export function fixtureCorrectionFor(exerciseId: string, answer: string): MockCorrection {
   const testCase = MOCK_CASES.find((item) => item.exercise.id === exerciseId)
   if (!testCase) throw new Error(`未知的题目：${exerciseId}`)
   return {
@@ -415,3 +415,6 @@ export function mockCorrectionFor(exerciseId: string, answer: string): MockCorre
     highlights: [testCase.highlight(answer)],
   }
 }
+
+/** 五道内置示例的标准作答（含演示时追加的尾部）。 */
+export const DEMO_ANSWERS: readonly string[] = MOCK_CASES.map((item) => item.sampleAnswer + DEMO_ANSWER_TAIL)

@@ -7,7 +7,7 @@
  * 运行：npm run smoke
  */
 
-import { MOCK_CASES, mockCorrectionFor } from '../src/domain/mock'
+import { MOCK_CASES, fixtureCorrectionFor } from '../src/domain/mock'
 import { validateCorrection } from '../src/domain/validate'
 import { buildLayout } from '../src/domain/layout'
 import type { TextSegment } from '../src/domain/layout'
@@ -52,7 +52,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const { exercise, sampleAnswer } = testCase
     console.log(`\n[${exercise.id}] ${exercise.direction} · ${exercise.genre} · ${exercise.topic}`)
 
-    const correction = mockCorrectionFor(exercise.id, sampleAnswer)
+    const correction = fixtureCorrectionFor(exercise.id, sampleAnswer)
     const expectedErrors = correction.errors.length
     const result = validateCorrection(correction.errors, correction.highlights, sampleAnswer)
 
@@ -88,7 +88,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   console.log('\n[反向验证] 故意把批注位置写错')
   const target = MOCK_CASES[0]
   if (target) {
-    const correction = mockCorrectionFor(target.exercise.id, target.sampleAnswer)
+    const correction = fixtureCorrectionFor(target.exercise.id, target.sampleAnswer)
 
     const offset = correction.errors.find((e) => e.anchor)
     if (offset?.anchor) {
@@ -119,6 +119,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   try {
     const rendered = await renderApp()
     check(rendered.html.length > 0, '界面渲染出了内容')
+    check(rendered.judgeCalls === 1, `提交后调用了批改接口 ${rendered.judgeCalls} 次`)
 
     const markCount = (rendered.html.match(/class="mk /g) ?? []).length
     check(markCount > 0, `渲染出了 ${markCount} 个批注标记`)

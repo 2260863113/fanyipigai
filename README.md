@@ -61,9 +61,24 @@
 | 运行时 | Cloudflare Workers + Static Assets | 通过官方 Vite 插件构建；D1 绑定只能在 Workers 上使用 |
 | 前端 | React + TypeScript + Vite | |
 | 数据库 | Cloudflare D1 | 题库、术语表、每次提交记录（含答题原文与完整批改） |
-| AI | DeepSeek API（`deepseek-flash`） | 开启 JSON 输出模式，返回结构化数据 |
+| AI | DeepSeek API（默认 `deepseek-flash`） | 开启 JSON 输出模式，返回结构化数据 |
 | 密钥 | 本地 `.dev.vars` / 线上 Cloudflare Secrets | 均不入库 |
 | 访问控制 | 全局口令 + 长期登录凭证 | 公网部署的必要防护 |
+
+### 批改请求的走向
+
+浏览器代码里**永远不出现 API 密钥**。提交批改时请求发给同源的 `/api/judge`：
+
+```
+浏览器 → /api/judge → 补上密钥 → api.deepseek.com → 解析校验 → 返回结构化批改
+```
+
+本地开发时 `/api/judge` 由 `vite-plugin-judge-api.ts` 提供（只从 `.dev.vars` 读密钥）；
+部署到 Cloudflare 后同一路径由 Worker 承担，前端代码无需改动。
+
+AI 返回的结果要经过 `src/domain/parse.ts` 的解析与 `src/domain/validate.ts` 的位置校验：
+不合格时把**具体原因**回传给模型重试（最多 3 次），仍不合格就如实报错并保留你的输入。
+单次批改实测约 10–35 秒（重试会明显变慢）。
 
 ## 本地开发
 
@@ -73,14 +88,15 @@ cp .dev.vars.example .dev.vars   # Windows: copy .dev.vars.example .dev.vars
 npm run dev                      # http://127.0.0.1:5180/
 ```
 
-`.dev.vars` 需要填三项：`DEEPSEEK_API_KEY`、`ACCESS_PASSWORD`、`SESSION_SECRET`。
-接入真实 AI 之前，`npm run dev` 不需要这个文件也能跑（当前用的是本地假批改器）。
+`.dev.vars` 需要填 `DEEPSEEK_API_KEY`（必需）、`ACCESS_PASSWORD`、`SESSION_SECRET`。
+没有密钥也能启动，但提交批改会告诉你密钥缺失；此时可以点内置示例看批注效果。
 
 其他命令：
 
 | 命令 | 作用 |
 | --- | --- |
-| `npm run smoke` | 运行冒烟测试：批注位置校验、排版计算、以及在 jsdom 里真正渲染界面并走一遍交互 |
+| `npm run smoke` | 冒烟测试：批注位置校验、排版计算、反向验证，以及在 jsdom 里真正渲染界面并走一遍交互 |
+| `node scripts/live-judge.mjs [1-3]` | 用真实 API 跑一次批改并打印警告细节，用于核对提示词与解析器 |
 | `npm run typecheck` | 类型检查 |
 | `npm run build` | 类型检查 + 生产构建 |
 
@@ -110,22 +126,28 @@ src/
     validate.ts    批注位置校验：确认 AI 指的位置确实存在，对不上就拒绝渲染
     layout.ts      把批改结果转成可渲染的片段序列，并消解互相重叠的批注
     color.ts       颜色分级
-    mock.ts        第一版的假数据题库与假批改器（接入真实 AI 后会被替换）
+    prompt.ts      AI 提示词：字段格式、五种改法、分类表、评分标准
+    parse.ts       解析 AI 返回的 JSON，结构不合格时给出可重试的具体原因
+    ai.ts          DeepSeek 调用、重试策略、失败分类
+    client.ts      前端调用 /api/judge 的封装
+    mock.ts        五道内置示例题与示例批改（用于「查看内置示例批改」与冒烟测试）
   components/      界面
     App.tsx            左右两栏布局与流程编排
     ExerciseList.tsx   练习记录
     CorrectionPanel.tsx 分数、维度分、错误归类、逐处批注
     AnnotationText.tsx  批注渲染与调序弧线
     DetailPanel.tsx     点批注后弹出的解释
+vite-plugin-judge-api.ts  本地开发用的 /api/judge（密钥只在服务端使用）
 scripts/
   smoke.ts           冒烟测试的检查项
-  render-probe.tsx   在 jsdom 中挂载界面并模拟交互
+  render-probe.tsx   在 jsdom 中挂载界面并模拟交互（含批改接口的模拟响应）
   run-smoke.mjs      用 esbuild 打包后交给 Node 运行
+  live-judge.mjs     用真实 API 跑一次批改，供人工核对提示词
 ```
 
 ## 实现进度
 
-**已完成：句子翻译的最短闭环**（第一版切片）
+**已完成：句子翻译的最短闭环 + 真实 AI 批改**
 
 - 左右两栏界面：左待译原文（含可折叠参考译文）、右作答输入
 - 五种改法全部实现：替换、插入、删除、整句重写、语序调换（含配对弧线）
@@ -134,18 +156,29 @@ scripts/
 - 批改结果：总分、四维度分、总体与分维度评语、错误归类统计、逐处批注
 - 点任意批注查看"错在哪类、为什么错"
 - 练习记录：每次作答单独存档，可点进去回看当时的完整批改
-- 批注位置校验：AI 指的位置与译文对不上时拒绝渲染，并明确提示是哪一处、偏了多少
+- **批改由真实 DeepSeek API 完成**，密钥只在服务端使用
+- AI 返回结果的解析与位置校验：不合格时把具体原因回传重试，最多 3 次
+- 位置校验：AI 指的位置与译文对不上时拒绝渲染，并指出偏了几个字符
 - 重叠批注消解：长跨度批注优先，避免划线上再划线
+- 失败分类提示：密钥无效、余额不足、限流、超时、返回被截断，各自给出不同的下一步动作
 
-**验证方式**：`npm run smoke` 共 40 项检查，覆盖批注位置校验、排版计算、反向验证（故意写错位置必须被拒）与 jsdom 实际渲染。
+**验证方式**
+
+- `npm run smoke` 共 41 项检查，全部通过
+- 三个真实用例（英译中新闻句、中译英政策句、含术语与语体问题的政策句）实测通过，
+  批注位置、错误分类、术语判定均正确；其中一次 AI 返回坏 JSON，自动重试后成功
+- 通过本地接口的端到端实测：10.8 秒完成，正确指出"缺少介词「在」"
 
 **尚未开始**
 
-- 接入真实 DeepSeek API（当前批改由本地假批改器给出，界面顶部有明确标识）
-- Cloudflare Workers 改造与 D1 数据库
+- Cloudflare Workers 改造与 D1 数据库（题库与练习记录目前只在内存里，刷新即失）
 - 访问口令与登录凭证
-- 术语翻译、段落翻译、文章翻译三类题型（目前只有句子翻译）
-- 题库生成与篇长硬校验
+- 术语翻译、段落翻译、文章翻译三类题型（目前只有句子翻译，且只有五道内置题）
+- 题库生成与篇长硬校验（英译汉 250–350 词、汉译英 200–300 字）
 - 术语表（尚无任何条目）
 
-> ⚠️ 已知待办：GitHub 仓库地址尚未提供，因此本地只有提交、没有推送。提供仓库地址后即可打通「推送 → Cloudflare 自动部署」。
+> ⚠️ 已知待办：术语表需要你对照《理解当代中国》系列教材逐条校对后才参与扣分；
+> 在此之前的术语判定依赖模型自身知识，准确性无法保证。
+>
+> ⚠️ 密钥安全：项目里的密钥只存在于 `.dev.vars`（已 gitignore）。若密钥曾在任何对话或截图中出现过，
+> 请到 platform.deepseek.com 吊销重发。
