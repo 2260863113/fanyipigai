@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Connect, Plugin } from 'vite'
 import { DEFAULT_JUDGE_CONFIG, judgeAnswer } from './src/domain/ai'
+import { FailureCollector, archiveFailure, type FailureKind } from './src/domain/archive'
 import type { CorrectionRequest } from './src/domain/prompt'
 import type { Direction, Genre, PolishLevel } from './src/domain/types'
 
@@ -41,6 +42,23 @@ function readDevVars(root: string): Record<string, string> {
     values[key] = value
   }
   return values
+}
+
+/**
+ * 判断这次失败该归到哪一类存档。
+ *
+ * 归类会直接影响后续怎么看这些记录，所以规则写清楚：
+ * - 返回被截断：输出太长，属于提示词里要求写太细
+ * - 重试次数用尽仍不合格：提示词约束不够，最需要关注
+ * - 位置全部对不上：模型没按"逐字复制片段"的要求做
+ * - 其余（JSON 解析不了、字段结构不合法）：格式约束问题
+ */
+function classifyFailure(outcome: { kind: string; problems: string[] }, maxAttempts: number): FailureKind {
+  if (outcome.kind === 'truncated') return 'truncated'
+  if (outcome.kind !== 'bad-output') return 'bad-json'
+  if (outcome.problems.some((problem) => problem.includes('位置都与学生译文对不上'))) return 'anchor-mismatch'
+  if (outcome.problems.some((problem) => problem.includes('JSON 解析失败'))) return 'bad-json'
+  return maxAttempts > 1 ? 'exhausted' : 'bad-json'
 }
 
 function readBody(req: Connect.IncomingMessage): Promise<string> {
@@ -120,10 +138,19 @@ export function judgeApiPlugin(): Plugin {
           }
 
           const started = Date.now()
-          const outcome = await judgeAnswer(body, { ...DEFAULT_JUDGE_CONFIG, apiKey, model })
+          const collector = new FailureCollector()
+          const outcome = await judgeAnswer(body, { ...DEFAULT_JUDGE_CONFIG, apiKey, model }, undefined, collector)
           const elapsed = ((Date.now() - started) / 1000).toFixed(1)
 
           if (outcome.ok) {
+            // 成功时理论上不会留下记录；万一有（前几次不合格、最后一次通过），也存下来，
+            // 因为"重试后才成功"同样是提示词需要改进的信号。
+            if (!collector.isEmpty) {
+              const saved = await archiveFailure(body, model, 'exhausted', collector, '最终成功，但过程中有不合格的返回')
+              server.config.logger.info(
+                `[judge-api] 本次批改经过 ${outcome.attempts} 次尝试才成功，失败过程已存档${saved ? `（存档失败：${saved}）` : ''}`,
+              )
+            }
             server.config.logger.info(
               `[judge-api] 批改完成，用时 ${elapsed}s，尝试 ${outcome.attempts} 次，` +
                 `错误 ${outcome.validated.errors.length} 处，亮点 ${outcome.validated.highlights.length} 处，` +
@@ -133,7 +160,15 @@ export function judgeApiPlugin(): Plugin {
             return
           }
 
-          server.config.logger.warn(`[judge-api] 批改失败（${outcome.kind}，用时 ${elapsed}s）：${outcome.message}`)
+          // 失败存档：这是后续优化提示词的主要依据
+          const saved = collector.isEmpty
+            ? undefined
+            : await archiveFailure(body, model, classifyFailure(outcome, DEFAULT_JUDGE_CONFIG.maxAttempts), collector, outcome.message)
+
+          server.config.logger.warn(
+            `[judge-api] 批改失败（${outcome.kind}，用时 ${elapsed}s）：${outcome.message}` +
+              (collector.isEmpty ? '' : saved ? `（存档失败：${saved}）` : '（失败详情已存档到 .ai-failures/）'),
+          )
           json(res, 200, outcome)
         })().catch((error: unknown) => {
           server.config.logger.error(`[judge-api] 未预期的错误：${error instanceof Error ? error.stack : String(error)}`)

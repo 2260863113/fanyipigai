@@ -120,6 +120,16 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const rendered = await renderApp()
     check(rendered.html.length > 0, '界面渲染出了内容')
     check(rendered.judgeCalls === 1, `提交后调用了批改接口 ${rendered.judgeCalls} 次`)
+    check(rendered.composeStageHadInput, '提交前右屏是作答输入框')
+
+    // 布局要求：左边整页原文，右边整页作答；提交后结果在右边同一个位置替换掉输入框
+    check(rendered.html.includes('screen-left') && rendered.html.includes('screen-right'), '页面分成左右两屏')
+    check(rendered.inputReplacedByResult, '提交后右屏的输入框被批改结果替换（没有堆到下面去）')
+    check(
+      rendered.modeTabLabels.join(',') === '文章,段落,句子,术语',
+      `顶部导航是四个模式：${rendered.modeTabLabels.join(' / ')}`,
+    )
+    check(rendered.sampleIds.length >= 4, `题库覆盖 ${rendered.sampleIds.length} 道示例，四类题型都有题`)
 
     const markCount = (rendered.html.match(/class="mk /g) ?? []).length
     check(markCount > 0, `渲染出了 ${markCount} 个批注标记`)
@@ -128,9 +138,94 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(rendered.text.includes('/ 100'), '批改结果里出现了总分')
     check(!rendered.text.includes('未能标出'), '没有批注因位置错误被拒绝')
     check(rendered.html.includes('detail') && rendered.html.includes('说明'), '点击批注后详情面板给出了说明')
-    check(rendered.html.includes('官方建议用时'), '题目里显示了官方建议用时')
+    check(rendered.html.includes('官方建议'), '题目里显示了官方建议用时')
+    check(rendered.html.includes('参考译文'), '左屏提供了可折叠的参考译文')
+    check(rendered.html.includes('逐处批注'), '右屏结果里有逐处批注区')
+
+    // 还原探针改过的全局对象，否则后续依赖 fetch 的检查会误报
+    rendered.restore()
+    check(typeof globalThis.fetch === 'function', '渲染探针已还原全局 fetch')
   } catch (error) {
     check(false, '界面渲染没有抛出异常', error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error))
+  }
+
+  // 失败存档：这是后续优化提示词的主要依据，必须证明它真的会写下来
+  console.log('\n[失败存档] 模拟一次 AI 返回坏 JSON，检查是否存档')
+  try {
+    const { judgeAnswer, DEFAULT_JUDGE_CONFIG } = await import('../src/domain/ai')
+    const { FailureCollector, archiveFailure } = await import('../src/domain/archive')
+    const { readFileSync, rmSync, existsSync, readdirSync } = await import('node:fs')
+    const path = await import('node:path')
+
+    const originalFetch = globalThis.fetch
+    const badJson = '{"total": 70, "dimensions": {"terminology": 70,, "grammar": 60}, '
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ choices: [{ message: { content: badJson }, finish_reason: 'stop' }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )) as unknown as typeof fetch
+
+    const request = {
+      source: 'Ecological civilization is a form of human progress.',
+      answer: '生态文明是人类进步的一种形态。',
+      direction: 'en-to-zh' as const,
+      genre: 'news' as const,
+      level: 'polish' as const,
+      referenceTranslation: '生态文明是一种人类进步形态。',
+    }
+
+    const collector = new FailureCollector()
+    const outcome = await judgeAnswer(
+      request,
+      { ...DEFAULT_JUDGE_CONFIG, apiKey: 'test-key', maxAttempts: 1 },
+      undefined,
+      collector,
+    )
+    globalThis.fetch = originalFetch
+
+    check(!outcome.ok, '坏 JSON 的返回被判为失败')
+    check(collector.attempts.length === 1, `收集到 ${collector.attempts.length} 次失败尝试`)
+
+    const dir = path.join(process.cwd(), '.ai-failures')
+    const before = existsSync(dir) ? new Set(readdirSync(dir).filter((n) => n.endsWith('.json'))) : new Set<string>()
+    const saved = await archiveFailure(request, 'test-model', 'bad-json', collector, '冒烟测试写入')
+    check(saved === undefined, '失败存档写入成功', saved ? `写入失败：${saved}` : undefined)
+
+    const after = readdirSync(dir).filter((n) => n.endsWith('.json'))
+    const created = after.find((name) => !before.has(name))
+    check(Boolean(created), '存档目录里出现了新的记录文件')
+
+    if (created) {
+      const record = JSON.parse(readFileSync(path.join(dir, created), 'utf8')) as {
+        kind: string
+        request: { answer: string }
+        history: Array<{ raw: string; problems: string[] }>
+      }
+      check(record.kind === 'bad-json', `记录的分类是 ${record.kind}`)
+      check(record.history[0]?.raw === badJson, '记录里保留了原始返回的全文（未被截断）')
+      check((record.history[0]?.problems.length ?? 0) > 0, '记录里保存了失败原因')
+      check(record.request.answer === request.answer, '记录里保存了当时的作答，便于复现')
+      check(!JSON.stringify(record).includes('test-key'), '存档里没有写入 API 密钥')
+      rmSync(path.join(dir, created), { force: true })
+    }
+  } catch (error) {
+    check(false, '失败存档流程可以执行', error instanceof Error ? error.message : String(error))
+  }
+
+  // 真实浏览器截屏：结构断言证明不了"看起来对不对"。
+  // 生成的图留给人看（不做自动比对），浏览器不存在时自动跳过，不阻塞测试。
+  console.log('\n[真实截屏] 用无头浏览器渲染三个画面')
+  try {
+    const { captureScreens } = await import('./visual')
+    const result = await captureScreens([
+      { name: '01-compose', width: 1600, height: 950, action: 'plain' },
+      { name: '02-result', width: 1600, height: 950, action: 'submit' },
+      { name: '03-mobile', width: 420, height: 900, action: 'plain' },
+    ])
+    check(result.ok, result.ok ? `生成了 ${result.files.length} 张截屏` : `截屏未完成：${result.note ?? ''}`)
+    for (const file of result.files) console.log(`    ${file}`)
+  } catch (error) {
+    check(false, '截屏流程可以执行', error instanceof Error ? error.message : String(error))
   }
 
   // 启动脚本的编码护栏。

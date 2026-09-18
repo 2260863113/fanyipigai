@@ -172,12 +172,15 @@ export interface Correction {
   highlights: Highlight[]
 }
 
+/** 题目的四种形态。顶部导航栏就是按这个分类切换的。 */
+export type Mode = 'article' | 'paragraph' | 'sentence' | 'term'
+
 /** 一道题目。 */
 export interface Exercise {
   id: string
   direction: Direction
-  /** 题型。第一版只有句子翻译。 */
-  kind: 'sentence' | 'paragraph' | 'article' | 'term'
+  /** 题型 */
+  mode: Mode
   genre: Genre
   /** 话题领域，用户可自行输入 */
   topic: string
@@ -202,9 +205,17 @@ export interface PracticeRecord {
   createdAt: string
 }
 
-export const KIND_LABEL: Record<Exercise['kind'], string> = {
+export const KIND_LABEL: Record<Exercise['mode'], string> = {
   term: '术语翻译',
   sentence: '句子翻译',
   paragraph: '段落翻译',
   article: '文章翻译',
 }
+
+/** 顶部导航栏用的短标签与说明。顺序即导航栏从左到右的顺序。 */
+export const MODE_TABS: ReadonlyArray<{ mode: Exercise['mode']; label: string; hint: string }> = [
+  { mode: 'article', label: '文章', hint: '整篇语篇翻译，英译汉 250–350 词，汉译英 200–300 字' },
+  { mode: 'paragraph', label: '段落', hint: '段落翻译，考查句间衔接与语篇连贯' },
+  { mode: 'sentence', label: '句子', hint: '单句翻译，改错最直观，适合打磨细节' },
+  { mode: 'term', label: '术语', hint: '关键术语与中华思想文化术语，按官方标准译法判定' },
+]

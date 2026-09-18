@@ -23,3 +23,9 @@ Thumbs.db
 # 日志
 *.log
 !grill-rounds.log
+
+# AI 失败存档：含原文与作答，只在本机保留，绝不入库
+.ai-failures/
+
+# 界面截屏：由 npm run smoke 或 node scripts/shots.mjs 生成，仅供人工查看
+.screenshots/

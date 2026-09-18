@@ -37,7 +37,9 @@ await build({
   target: 'node20',
   jsx: 'automatic',
   loader: { '.tsx': 'tsx' },
-  external: ['jsdom', 'react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
+  // 这些包按 CommonJS 发布（或本身有原生依赖），打进 ESM bundle 后它们的内部 require 会失效，
+  // 因此交给 Node 直接解析，不参与打包。
+  external: ['jsdom', 'ws', 'esbuild', 'react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
   // 界面代码里引用了 CSS，Node 侧不需要它
   plugins: [
     {

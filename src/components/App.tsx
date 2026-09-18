@@ -1,6 +1,15 @@
 import { useMemo, useState, type JSX } from 'react'
-import { DEMO_ANSWER_TAIL, DEMO_ANSWERS, MOCK_CASES, fixtureCorrectionFor } from '../domain/mock'
-import { DIRECTION_LABEL, GENRE_LABEL, KIND_LABEL, LEVEL_LABEL, type Correction, type PolishLevel } from '../domain/types'
+import { DEMO_ANSWER_TAIL, MOCK_CASES, fixtureCorrectionFor } from '../domain/mock'
+import {
+  DIRECTION_LABEL,
+  GENRE_LABEL,
+  LEVEL_LABEL,
+  MODE_TABS,
+  type Correction,
+  type Exercise,
+  type Mode,
+  type PolishLevel,
+} from '../domain/types'
 import { validateCorrection, type ValidatedCorrection } from '../domain/validate'
 import { requestJudgment } from '../domain/client'
 import type { JudgeFailureKind } from '../domain/ai'
@@ -9,11 +18,8 @@ import { CorrectionPanel } from './CorrectionPanel'
 import { DetailPanel, type SelectionData } from './DetailPanel'
 import type { Selection } from './AnnotationText'
 
-/** 演示时自动填入的作答：示例作答 + 一句中文，用来验证作答尾部也能正常显示。 */
-function hydrate(sample: string): string {
-  return sample + DEMO_ANSWER_TAIL
-}
-
+/** 右半屏当前显示什么：写译文、还是看批改结果。 */
+type Stage = 'compose' | 'review'
 type Source = 'live' | 'fixture'
 
 interface JudgeError {
@@ -21,10 +27,26 @@ interface JudgeError {
   message: string
 }
 
+const ALL_CASES = MOCK_CASES
+
+function casesOfMode(mode: Mode): typeof ALL_CASES {
+  return ALL_CASES.filter((item) => item.exercise.mode === mode)
+}
+
+function hydrate(sample: string): string {
+  return sample + DEMO_ANSWER_TAIL
+}
+
 export function App(): JSX.Element {
-  const [caseIndex, setCaseIndex] = useState(0)
-  const [answer, setAnswer] = useState(() => hydrate(MOCK_CASES[0]?.sampleAnswer ?? ''))
+  const firstCase = ALL_CASES[0]
+  if (!firstCase) throw new Error('题库为空')
+
+  const [mode, setMode] = useState<Mode>(firstCase.exercise.mode)
+  const [exerciseId, setExerciseId] = useState(firstCase.exercise.id)
+  const [answer, setAnswer] = useState(() => hydrate(firstCase.sampleAnswer))
   const [level, setLevel] = useState<PolishLevel>('polish')
+
+  const [stage, setStage] = useState<Stage>('compose')
   const [correction, setCorrection] = useState<Correction | null>(null)
   const [validated, setValidated] = useState<ValidatedCorrection | null>(null)
   const [source, setSource] = useState<Source>('live')
@@ -35,28 +57,23 @@ export function App(): JSX.Element {
   const [records, setRecords] = useState<RecordView[]>([])
   const [showRecord, setShowRecord] = useState<RecordView | null>(null)
 
-  const activeCase = MOCK_CASES[caseIndex] ?? MOCK_CASES[0]
-  if (!activeCase) throw new Error('题库为空')
-
-  const shownAnswer = showRecord ? showRecord.answer : answer
-  const shownCorrection = showRecord ? showRecord.correction : correction
-  const shownValidated = showRecord ? showRecord.validated : validated
-  const shownSource: Source = showRecord ? showRecord.source : source
+  const activeCase = ALL_CASES.find((item) => item.exercise.id === exerciseId) ?? firstCase
+  const exercise: Exercise = activeCase.exercise
 
   const selectionData: SelectionData = useMemo(() => {
-    const errors = new Map(shownValidated?.errors.map((entry) => [entry.error.id, entry]) ?? [])
-    const highlights = new Map(shownValidated?.highlights.map((entry) => [entry.highlight.id, entry.highlight]) ?? [])
+    const errors = new Map(validated?.errors.map((entry) => [entry.error.id, entry]) ?? [])
+    const highlights = new Map(validated?.highlights.map((entry) => [entry.highlight.id, entry.highlight]) ?? [])
     return { errors, highlights }
-  }, [shownValidated])
+  }, [validated])
 
-  const caseRecords = records.filter((record) => record.exerciseId === activeCase.exercise.id)
-  const isDemoAnswer = DEMO_ANSWERS.includes(answer)
+  const caseRecords = records.filter((record) => record.exerciseId === exercise.id)
+  const isFixtureAnswer = answer === activeCase.sampleAnswer + DEMO_ANSWER_TAIL
 
-  function selectCase(nextIndex: number): void {
-    const next = MOCK_CASES[nextIndex]
-    if (!next) return
-    setCaseIndex(nextIndex)
+  /** 重置到"写译文"状态。切换题目或模式时调用。 */
+  function resetTo(next: (typeof ALL_CASES)[number]): void {
+    setExerciseId(next.exercise.id)
     setAnswer(hydrate(next.sampleAnswer))
+    setStage('compose')
     setCorrection(null)
     setValidated(null)
     setSelection(null)
@@ -66,9 +83,20 @@ export function App(): JSX.Element {
     setSource('live')
   }
 
-  /** 把一次批改结果记入练习记录。 */
+  function selectMode(nextMode: Mode): void {
+    setMode(nextMode)
+    const inMode = casesOfMode(nextMode)
+    const next = inMode[0]
+    if (next) resetTo(next)
+  }
+
+  function selectExercise(id: string): void {
+    const next = ALL_CASES.find((item) => item.exercise.id === id)
+    if (next) resetTo(next)
+  }
+
   function commit(
-    exerciseId: string,
+    exerciseIdToStore: string,
     judged: Correction,
     checked: ValidatedCorrection,
     from: Source,
@@ -80,12 +108,13 @@ export function App(): JSX.Element {
     setSource(from)
     setSelection(null)
     setShowRecord(null)
+    setStage('review')
     setRecords((previous) => [
       ...previous,
       {
         id: `record-${previous.length + 1}`,
-        exerciseId,
-        attempt: previous.filter((r) => r.exerciseId === exerciseId).length + 1,
+        exerciseId: exerciseIdToStore,
+        attempt: previous.filter((r) => r.exerciseId === exerciseIdToStore).length + 1,
         level: attemptLevel,
         answer: submitted,
         correction: judged,
@@ -96,10 +125,8 @@ export function App(): JSX.Element {
     ])
   }
 
-  /** 用真实 AI 批改。 */
   async function submitLive(): Promise<void> {
-    if (!activeCase || answer.trim().length === 0 || judging) return
-    const exercise = activeCase.exercise
+    if (answer.trim().length === 0 || judging) return
     setJudging(true)
     setError(null)
     setNotice(null)
@@ -117,120 +144,125 @@ export function App(): JSX.Element {
 
     if (!outcome.ok) {
       setError({ kind: outcome.kind, message: outcome.message })
-      // 密钥缺失或无效时，提示可以先用内置示例看效果
-      if (outcome.kind === 'missing-key' || outcome.kind === 'unauthorized' || outcome.kind === 'insufficient-balance') {
-        setNotice(isDemoAnswer ? '这道题的作答正好是内置示例，你可以直接查看内置示例批改。' : null)
-      }
+      if (isFixtureAnswer) setNotice('这道题当前是内置示例作答，可以直接查看内置示例批改。')
       return
     }
 
-    if (outcome.attempts > 1) {
-      setNotice(`AI 第 ${outcome.attempts} 次返回才通过校验，本次结果已自动修正。`)
-    }
+    if (outcome.attempts > 1) setNotice(`AI 第 ${outcome.attempts} 次返回才通过校验，本次结果已自动修正。`)
     if (outcome.repaired.length > 0) {
-      setNotice(
-        `有 ${outcome.repaired.length} 处批注因位置与译文对不上而没有标出——位置校验拦住了它们，避免标到错的地方。`,
-      )
+      setNotice(`有 ${outcome.repaired.length} 处批注因位置与译文对不上而未标出——位置校验拦住了它们。`)
     }
+    setMode(exercise.mode)
     commit(exercise.id, outcome.correction, outcome.validated, 'live', level, answer)
   }
 
-  /** 直接用内置示例的批改结果，用于没有密钥时先看效果。 */
   function submitFixture(): void {
-    if (!activeCase || !isDemoAnswer || judging) return
-    const exercise = activeCase.exercise
+    if (!isFixtureAnswer || judging) return
     const fixture = fixtureCorrectionFor(exercise.id, answer)
     const checked = validateCorrection(fixture.errors, fixture.highlights, answer)
     setError(null)
     setNotice('这是内置示例的批改结果，不是 AI 现场批改的。')
+    setMode(exercise.mode)
     commit(exercise.id, fixture, checked, 'fixture', level, answer)
   }
 
+  function backToCompose(): void {
+    setStage('compose')
+    setShowRecord(null)
+    setSelection(null)
+  }
+
+  const shownAnswer = showRecord ? showRecord.answer : answer
+  const shownCorrection = showRecord ? showRecord.correction : correction
+  const shownValidated = showRecord ? showRecord.validated : validated
+  const shownSource: Source = showRecord ? showRecord.source : source
+  const inMode = casesOfMode(mode)
+
   return (
     <div className="app">
-      <header className="app-head">
-        <div className="brand">
+      {/* ── 顶部导航：模式切换 ───────────────────────── */}
+      <header className="topbar">
+        <div className="topbar-brand">
           <h1>英语翻译练习站</h1>
-          <span className="tagline">外研社·国才杯 笔译赛项 · 逐处批注练习</span>
+          <span className="tagline">外研社·国才杯 笔译赛项</span>
         </div>
-        {shownSource === 'fixture' && <div className="mock-banner">当前显示的是内置示例批改，不是 AI 现场批改的</div>}
+
+        <nav className="mode-tabs" aria-label="题型">
+          {MODE_TABS.map((tab) => (
+            <button
+              key={tab.mode}
+              type="button"
+              className={tab.mode === mode ? 'mode-tab mode-tab-active' : 'mode-tab'}
+              onClick={() => selectMode(tab.mode)}
+              title={tab.hint}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="topbar-right">
+          {shownSource === 'fixture' && <span className="chip chip-warn">内置示例批改</span>}
+          <span className="chip">{DIRECTION_LABEL[exercise.direction]}</span>
+          <span className="chip">{GENRE_LABEL[exercise.genre]}</span>
+          <span className="chip">{exercise.topic}</span>
+        </div>
       </header>
 
-      <nav className="case-strip">
-        <span className="strip-label">{KIND_LABEL[activeCase.exercise.kind]}</span>
-        {MOCK_CASES.map((item, index) => (
-          <button
-            key={item.exercise.id}
-            type="button"
-            className={index === caseIndex ? 'case-tab case-tab-active' : 'case-tab'}
-            onClick={() => selectCase(index)}
-          >
-            <span className="case-tab-title">
-              {DIRECTION_LABEL[item.exercise.direction]} · {item.exercise.topic}
-            </span>
-            <span className="case-tab-sub">{GENRE_LABEL[item.exercise.genre]}</span>
-          </button>
-        ))}
-      </nav>
+      {/* ── 当前模式的题目切换 ───────────────────────── */}
+      {inMode.length > 1 && (
+        <nav className="case-strip" aria-label="题目">
+          <span className="strip-label">题目</span>
+          {inMode.map((item) => (
+            <button
+              key={item.exercise.id}
+              type="button"
+              className={item.exercise.id === exercise.id ? 'case-tab case-tab-active' : 'case-tab'}
+              onClick={() => selectExercise(item.exercise.id)}
+            >
+              <span className="case-tab-title">
+                {DIRECTION_LABEL[item.exercise.direction]} · {item.exercise.topic}
+              </span>
+            </button>
+          ))}
+        </nav>
+      )}
 
-      <main className="grid">
-        <ExerciseList exercise={activeCase.exercise} records={caseRecords} onOpenRecord={setShowRecord} />
-
-        <section className="panel panel-source">
-          <header className="panel-head">
-            <h2>待译原文</h2>
+      {/* ── 左右两屏 ─────────────────────────────────── */}
+      <main className="split">
+        <section className="screen screen-left">
+          <header className="screen-head">
+            <h2>原文</h2>
             <div className="head-meta">
-              <span className="chip">{DIRECTION_LABEL[activeCase.exercise.direction]}</span>
-              <span className="chip">{GENRE_LABEL[activeCase.exercise.genre]}</span>
-              <span className="chip">官方建议用时 {activeCase.exercise.suggestedMinutes} 分钟</span>
+              <span className="chip">
+                {exercise.mode === 'term' ? '术语' : `${exercise.source.length} 字符`}
+              </span>
+              <span className="chip">官方建议 {exercise.suggestedMinutes} 分钟</span>
             </div>
           </header>
-          <div className="panel-body">
-            <p className="source-text">{activeCase.exercise.source}</p>
+          <div className="screen-body">
+            <p className={exercise.mode === 'term' ? 'source-text source-term' : 'source-text'}>{exercise.source}</p>
             <details className="reference">
               <summary>参考译文（随题固定，可折叠）</summary>
-              <p>{activeCase.exercise.referenceTranslation}</p>
+              <p>{exercise.referenceTranslation}</p>
             </details>
+            <aside className="records-inline">
+              <ExerciseList exercise={exercise} records={caseRecords} onOpenRecord={setShowRecord} compact />
+            </aside>
           </div>
         </section>
 
-        <section className="panel panel-answer">
-          <header className="panel-head">
-            <h2>我的译文</h2>
+        <section className="screen screen-right">
+          <header className="screen-head">
+            <h2>{stage === 'compose' ? '我的译文' : '批改结果'}</h2>
             <div className="head-meta">
-              {showRecord ? (
-                <button type="button" className="btn btn-ghost" onClick={() => setShowRecord(null)}>
-                  返回编辑
+              {stage === 'review' && (
+                <button type="button" className="btn btn-ghost" onClick={backToCompose}>
+                  返回修改
                 </button>
-              ) : (
-                <>
-                  <span className="chip">{LEVEL_LABEL[level].split('（')[0]}</span>
-                  <span className="chip">{answer.length} 字符</span>
-                </>
               )}
-            </div>
-          </header>
-          <div className="panel-body">
-            {showRecord ? (
-              <p className="answer-static">{showRecord.answer}</p>
-            ) : (
-              <>
-                <textarea
-                  className="answer-input"
-                  value={answer}
-                  onChange={(event) => {
-                    setAnswer(event.target.value)
-                    // 作答一旦改动，之前的结果就不再对应这段文字
-                    setCorrection(null)
-                    setValidated(null)
-                    setSelection(null)
-                    setError(null)
-                    setNotice(null)
-                  }}
-                  placeholder="在这里写下你的译文……"
-                  spellCheck={false}
-                />
-                <div className="answer-bar">
+              {stage === 'compose' && (
+                <>
                   <div className="level-switch" role="group" aria-label="修改风格">
                     {(Object.keys(LEVEL_LABEL) as PolishLevel[]).map((key) => (
                       <button
@@ -252,43 +284,62 @@ export function App(): JSX.Element {
                   >
                     {judging ? '批改中…' : '提交批改'}
                   </button>
-                </div>
+                </>
+              )}
+            </div>
+          </header>
 
-                {judging && (
-                  <p className="hint judging">
-                    正在批改。长句通常需要十几秒，若第一次返回没能通过位置校验会自动重试，最慢可能要一分钟。
-                  </p>
+          <div className="screen-body">
+            {judging && (
+              <p className="hint judging">
+                正在批改。长句通常十几秒，段落与文章可能需要一分钟；若返回未通过位置校验会自动重试。
+              </p>
+            )}
+
+            {error && (
+              <div className="error-block">
+                <strong>批改未完成：</strong>
+                {error.message}
+                {isFixtureAnswer && (
+                  <button type="button" className="btn btn-ghost" onClick={submitFixture}>
+                    查看内置示例批改
+                  </button>
                 )}
+              </div>
+            )}
 
-                {error && (
-                  <div className="error-block">
-                    <strong>批改未完成：</strong>
-                    {error.message}
-                    {isDemoAnswer && (
-                      <button type="button" className="btn btn-ghost" onClick={submitFixture}>
-                        查看内置示例批改
-                      </button>
-                    )}
-                  </div>
-                )}
+            {notice && !error && <p className="hint notice">{notice}</p>}
 
-                {notice && !error && <p className="hint notice">{notice}</p>}
-              </>
+            {stage === 'compose' ? (
+              <textarea
+                className="answer-input answer-input-fill"
+                value={answer}
+                onChange={(event) => {
+                  setAnswer(event.target.value)
+                  setError(null)
+                  setNotice(null)
+                }}
+                placeholder="在这里写下你的译文，然后点右上角「提交批改」……"
+                spellCheck={false}
+              />
+            ) : shownCorrection && shownValidated ? (
+              <CorrectionPanel
+                correction={shownCorrection}
+                validated={shownValidated}
+                answer={shownAnswer}
+                level={showRecord ? showRecord.level : level}
+                attempt={showRecord ? showRecord.attempt : caseRecords.length}
+                onSelect={setSelection}
+                embedded
+              />
+            ) : (
+              <p className="hint">还没有批改结果。</p>
             )}
           </div>
+
+          {stage === 'review' && <DetailPanel selection={selection} data={selectionData} onClose={() => setSelection(null)} />}
         </section>
-
-        <DetailPanel selection={selection} data={selectionData} onClose={() => setSelection(null)} />
       </main>
-
-      <CorrectionPanel
-        correction={shownCorrection}
-        validated={shownValidated}
-        answer={shownAnswer}
-        level={showRecord ? showRecord.level : level}
-        attempt={showRecord ? showRecord.attempt : caseRecords.length + 1}
-        onSelect={setSelection}
-      />
 
       <footer className="app-foot">
         <span>颜色约定：红 = 语法错误与严重表达不当，橙 = 表达生硬别扭，绿 = 表达优秀。</span>

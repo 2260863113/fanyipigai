@@ -12,6 +12,7 @@
 
 import { buildRetryPrompt, buildSystemPrompt, buildUserPrompt, type CorrectionRequest } from './prompt'
 import { parseCorrection, type ParseSuccess } from './parse'
+import { FailureCollector } from './archive'
 
 export interface JudgeConfig {
   apiKey: string
@@ -162,11 +163,15 @@ async function callDeepSeek(
 /**
  * 执行一次批改。重试在内部完成：每轮把上一轮的具体失败原因交给模型。
  * onRetry 会收到每一轮的进展，便于界面显示"正在重试（第 2 次）"。
+ *
+ * collector 收集每一次不合格的原始返回。调用方据它把失败存档落盘，
+ * 用于事后优化提示词。批改失败时 collector 非空，成功时为空。
  */
 export async function judgeAnswer(
   request: CorrectionRequest,
   config: JudgeConfig,
   onRetry?: (info: { attempt: number; problems: string[] }) => void,
+  collector?: FailureCollector,
 ): Promise<JudgeOutcome> {
   if (!config.apiKey) return fail('missing-key', [])
 
@@ -204,6 +209,7 @@ export async function judgeAnswer(
     if (result.finishReason === 'length') {
       const problems = ['上一次的返回因为太长被截断了，请精简每条 explanation 与评语的文字，确保 JSON 完整闭合']
       allProblems.push(...problems)
+      collector?.record(attempt, lastRaw, result.finishReason, problems)
       if (attempt === config.maxAttempts) {
         return fail('truncated', problems, { rawExcerpt: lastRaw.slice(-400) })
       }
@@ -219,6 +225,7 @@ export async function judgeAnswer(
     }
 
     allProblems.push(...parsed.problems)
+    collector?.record(attempt, lastRaw, result.finishReason, parsed.problems)
     if (attempt === config.maxAttempts) {
       return fail('bad-output', parsed.problems, { rawExcerpt: lastRaw.slice(0, 400) })
     }

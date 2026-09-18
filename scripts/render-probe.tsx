@@ -14,9 +14,19 @@ import { validateCorrection } from '../src/domain/validate'
 
 export interface RenderProbe {
   html: string
+  /** 批改结果区域的文字 */
   text: string
-  /** 模拟接口被调用的次数 */
+  /** 提交前右屏是否有输入框 */
+  composeStageHadInput: boolean
+  /** 提交后输入框是否从右屏消失（结果在同一位置替换它） */
+  inputReplacedByResult: boolean
+  /** 顶部导航里的模式标签 */
+  modeTabLabels: string[]
+  /** 切换到的第一个示例（用来核对四类题型都有题） */
+  sampleIds: string[]
   judgeCalls: number
+  /** 还原被这个探针改写过的全局对象，避免污染后续检查 */
+  restore: () => void
 }
 
 /**
@@ -35,9 +45,12 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number } {
     calls += 1
 
     // 用请求里实际提交的作答来构造批注，与真实流程一致
-    const body = JSON.parse(String(init?.body ?? '{}')) as { answer?: string }
+    const body = JSON.parse(String(init?.body ?? '{}')) as { answer?: string; source?: string }
     const submitted = body.answer ?? ''
-    const exercise = MOCK_CASES.find((item) => submitted.startsWith(item.sampleAnswer)) ?? MOCK_CASES[0]
+    const exercise =
+      MOCK_CASES.find((item) => submitted.startsWith(item.sampleAnswer)) ??
+      MOCK_CASES.find((item) => item.exercise.source === body.source) ??
+      MOCK_CASES[0]
     if (!exercise) throw new Error('题库为空')
 
     const correction = fixtureCorrectionFor(exercise.exercise.id, submitted)
@@ -132,12 +145,20 @@ export async function renderApp(): Promise<RenderProbe> {
 
   const textOf = (selector: string): string => container.querySelector(selector)?.textContent ?? ''
 
+  const composeStageHadInput = container.querySelector('.answer-input') !== null
+  const modeTabLabels = [...container.querySelectorAll('.mode-tab')].map((node) => node.textContent?.trim() ?? '')
+  const sampleIds = MOCK_CASES.map((item) => item.exercise.id)
+
   // 提交批改
   const submit = container.querySelector<HTMLButtonElement>('.btn-primary')
   if (!submit) throw new Error('找不到「提交批改」按钮')
   await act(async () => {
     submit.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   })
+
+  // 关键：提交后输入框应当从右屏消失，同一个位置换成批改结果
+  const inputReplacedByResult =
+    container.querySelector('.answer-input') === null && container.querySelector('.result-body') !== null
 
   // 点第一处批注，验证详情面板
   const firstMark = container.querySelector<HTMLElement>('.mk-delete, .mk-replace, .mk-insert, .mk-highlight')
@@ -147,5 +168,21 @@ export async function renderApp(): Promise<RenderProbe> {
     })
   }
 
-  return { html: container.innerHTML, text: textOf('.panel-result'), judgeCalls: judgeFetch.calls() }
+  return {
+    html: container.innerHTML,
+    text: textOf('.result-body'),
+    composeStageHadInput,
+    inputReplacedByResult,
+    modeTabLabels,
+    sampleIds,
+    judgeCalls: judgeFetch.calls(),
+    restore: () => {
+      // 把改过的全局对象放回去。不做这一步，后面依赖 fetch 的检查（例如截屏的就绪探测）
+      // 会被这个探针的桩拦住，报出与真实原因无关的错误。
+      for (const [key, descriptor] of savedDescriptors) {
+        if (descriptor) Object.defineProperty(globalAny, key, descriptor)
+        else delete globalAny[key]
+      }
+    },
+  }
 }
