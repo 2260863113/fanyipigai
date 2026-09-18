@@ -155,6 +155,15 @@ export interface ErrorObject {
   contextBefore?: string
   /** 消歧用：片段右边紧邻的若干字 */
   contextAfter?: string
+  /**
+   * 最小修改后的区间：只覆盖真正变化的那几个字，划线与补入都按它来。
+   *
+   * 为什么要有它：AI 圈的 oldText 常比实际改动大得多。
+   * 例如它把 "have explore ways" 报成一处替换，而真正变的只有 explore 一个词。
+   * 这里由程序拿 AI 给的改后文字反算出最小差异（见 minimal.ts），
+   * 于是页面上只划掉 explore、只把 explored 写在上方，而不是划掉三个词。
+   */
+  changed?: { start: number; end: number; from: string; to: string }
   /** 正确的写法；只有「删除」类错误没有这一项 */
   targetText?: string
   /** 仅 type = 'reorder' 时存在 */

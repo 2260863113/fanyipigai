@@ -37,6 +37,11 @@ export interface RenderProbe {
   notesPaneHtml: string
   /** 左上角原文栏里有没有「换一换」按钮 */
   hasRotateButton: boolean
+  /**
+   * 切走再切回来之后，刚写的内容还在不在。
+   * 只测"作答内容是否保留"（textarea 的 value），因为它是用户最在意的东西。
+   */
+  survivedTabRoundTrip?: { typed: string; afterReturn: string }
   /** 顶部导航里的模式标签 */
   modeTabLabels: string[]
   /** 切换到的第一个示例（用来核对四类题型都有题） */
@@ -105,7 +110,9 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number } {
 }
 
 /** 在 jsdom 环境里挂载界面并与之交互，返回渲染出的 HTML 与纯文本。 */
-export async function renderApp(options: { exerciseId?: string } = {}): Promise<RenderProbe> {
+export async function renderApp(
+  options: { exerciseId?: string; checkTabRoundTrip?: boolean } = {},
+): Promise<RenderProbe> {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     pretendToBeVisual: true,
     url: 'http://localhost/',
@@ -249,6 +256,61 @@ export async function renderApp(options: { exerciseId?: string } = {}): Promise<
     })
   }
 
+  // 切走再切回来，检查会不会丢东西
+  let survivedTabRoundTrip: RenderProbe['survivedTabRoundTrip']
+  if (options.checkTabRoundTrip) {
+    const clickTab = async (label: string): Promise<void> => {
+      const tab = [...container.querySelectorAll<HTMLButtonElement>('.mode-tab')].find(
+        (node) => node.textContent?.trim() === label,
+      )
+      if (!tab) throw new Error(`找不到题型标签：${label}`)
+      await act(async () => {
+        tab.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+    }
+
+    // 先回到可编辑状态，写一段独有内容
+    const back = [...container.querySelectorAll<HTMLButtonElement>('.btn-ghost')].find((node) =>
+      node.textContent?.includes('返回修改'),
+    )
+    if (back) {
+      await act(async () => {
+        back.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+    }
+    const typed = '这是一段用来检查切换页面是否会丢失的文字'
+    await typeInto(typed)
+    const afterTyping = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
+
+    // 切到别的题型，再切回来
+    await clickTab('术语')
+    await clickTab(MODE_TAB_LABEL[sample.exercise.mode] ?? '文章')
+
+    const afterReturn = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
+    survivedTabRoundTrip = { typed: afterTyping, afterReturn }
+
+    // 再提交一次并把界面留在结果态，方便后面的断言（此时第一步已被切走，需要重新填满分段）
+    for (const [index, section] of answerSections.entries()) {
+      if (index > 0) {
+        const next = [...container.querySelectorAll<HTMLButtonElement>('.section-nav .btn')].find((button) =>
+          button.textContent?.includes('下一段'),
+        )
+        if (next) {
+          await act(async () => {
+            next.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+          })
+        }
+      }
+      await typeInto(section.text)
+    }
+    const submitAgain = container.querySelector<HTMLButtonElement>('.btn-primary')
+    if (submitAgain && !submitAgain.disabled) {
+      await act(async () => {
+        submitAgain.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+    }
+  }
+
   return {
     html: container.innerHTML,
     text: `${textOf('.pane-score')} ${textOf('.pane-notes')}`,
@@ -261,6 +323,7 @@ export async function renderApp(options: { exerciseId?: string } = {}): Promise<
     modeTabLabels,
     sampleIds,
     judgeCalls: judgeFetch.calls(),
+    survivedTabRoundTrip,
     restore: () => {
       // 把改过的全局对象放回去。不做这一步，后面依赖 fetch 的检查（例如截屏的就绪探测）
       // 会被这个探针的桩拦住，报出与真实原因无关的错误。

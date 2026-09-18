@@ -52,12 +52,18 @@ export function App(): JSX.Element {
   const [tab, setTab] = useState<Tab>(firstCase.exercise.mode)
   const [exerciseId, setExerciseId] = useState(firstCase.exercise.id)
 
-  /** 逐段作答：每一段自己一份文字 */
-  const [drafts, setDrafts] = useState<Record<number, string>>({})
-  const [sectionIndex, setSectionIndex] = useState(0)
+  /**
+   * 逐段作答：每一段自己一份文字。
+   *
+   * 按**题目编号**分别保存：切换题型或题目时不清空，
+   * 切回来还能看到刚才写到一半的内容与已经出来的批改结果。
+   */
+  const [draftsByExercise, setDraftsByExercise] = useState<Record<string, Record<number, string>>>({})
+  const [sectionByExercise, setSectionByExercise] = useState<Record<string, number>>({})
+  const [resultByExercise, setResultByExercise] = useState<Record<string, Draft>>({})
+  const [variantByExercise, setVariantByExercise] = useState<Record<string, number>>({})
   const [level, setLevel] = useState<PolishLevel>('polish')
 
-  const [result, setResult] = useState<Draft | null>(null)
   const [judging, setJudging] = useState(false)
   const [error, setError] = useState<JudgeError | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -81,7 +87,7 @@ export function App(): JSX.Element {
     ],
     [exercise.id, exercise.source, exercise.referenceTranslation],
   )
-  const [variantIndex, setVariantIndex] = useState(0)
+  const variantIndex = variantByExercise[exercise.id] ?? 0
   const safeVariantIndex = variantIndex < sourceOptions.length ? variantIndex : 0
   const current = sourceOptions[safeVariantIndex] ?? sourceOptions[0]
   const currentSource = current?.source ?? exercise.source
@@ -90,6 +96,9 @@ export function App(): JSX.Element {
   /** 原文按段落切分；单段题只有一个元素，因此下面所有逻辑对四类题型通用 */
   const sourceSections: Section[] = useMemo(() => splitSections(currentSource), [currentSource])
   const multiSection = sourceSections.length > 1
+  const drafts = draftsByExercise[exercise.id] ?? {}
+  const sectionIndex = sectionByExercise[exercise.id] ?? 0
+  const result = resultByExercise[exercise.id] ?? null
   const currentSection = sourceSections[sectionIndex] ?? sourceSections[0]
   const currentAnswer = drafts[sectionIndex] ?? ''
   const filledSections = sourceSections.filter((_, index) => (drafts[index] ?? '').trim().length > 0).length
@@ -108,51 +117,63 @@ export function App(): JSX.Element {
     return ALL_CASES.some((item) => item.sampleAnswer.trim() === trimmed)
   }, [currentAnswer])
 
-  function resetTo(next: (typeof ALL_CASES)[number]): void {
-    setExerciseId(next.exercise.id)
-    setDrafts({})
-    setSectionIndex(0)
-    setVariantIndex(0)
-    setResult(null)
+  /**
+   * 切到某道题。
+   * **不清空任何东西**：每道题的作答、批改结果、分段位置都各自留着，
+   * 切回来还是离开时的样子。清空的只有"提示与错误"这类一次性的界面状态。
+   */
+  function selectExercise(id: string): void {
+    setExerciseId(id)
     setSelection(null)
     setOpenRecord(null)
     setError(null)
     setNotice(null)
   }
 
-  /** 换一换：换成下一份原文，作答与批改结果都清空（原文变了，旧作答不再对应）。 */
+  /** 换一换：换成下一份原文。只清掉这道题的作答与结果（原文变了，旧作答不再对应）。 */
   function rotateSource(): void {
     if (sourceOptions.length < 2) return
-    setVariantIndex((index) => (index + 1) % sourceOptions.length)
-    setDrafts({})
-    setSectionIndex(0)
-    setResult(null)
+    const nextIndex = (safeVariantIndex + 1) % sourceOptions.length
+    setVariantByExercise((previous) => ({ ...previous, [exercise.id]: nextIndex }))
+    setDraftsByExercise((previous) => ({ ...previous, [exercise.id]: {} }))
+    setSectionByExercise((previous) => ({ ...previous, [exercise.id]: 0 }))
+    setResultByExercise((previous) => {
+      const next = { ...previous }
+      delete next[exercise.id]
+      return next
+    })
     setSelection(null)
     setError(null)
-    setNotice(null)
-    setNotice(`已换成第 ${((safeVariantIndex + 1) % sourceOptions.length) + 1} 篇原文，作答已清空。`)
+    setNotice(`已换成第 ${nextIndex + 1} 篇原文，这道题的作答已清空。`)
   }
 
   function selectTab(nextTab: Tab): void {
     setTab(nextTab)
     setOpenRecord(null)
     if (nextTab === 'records') return
+    // 切题型只换"当前在看哪道题"，不清空任何一道题的作答与结果
     const next = casesOfMode(nextTab)[0]
-    if (next) resetTo(next)
-  }
-
-  function selectExercise(id: string): void {
-    const next = ALL_CASES.find((item) => item.exercise.id === id)
-    if (next) resetTo(next)
+    if (next) selectExercise(next.exercise.id)
   }
 
   function updateAnswer(value: string): void {
-    setDrafts((previous) => ({ ...previous, [sectionIndex]: value }))
+    setDraftsByExercise((previous) => ({
+      ...previous,
+      [exercise.id]: { ...(previous[exercise.id] ?? {}), [sectionIndex]: value },
+    }))
     setError(null)
     setNotice(null)
     // 改动作答后，之前的结果不再对应这段文字
-    setResult(null)
+    setResultByExercise((previous) => {
+      const next = { ...previous }
+      delete next[exercise.id]
+      return next
+    })
     setSelection(null)
+  }
+
+  function setSection(nextIndex: number): void {
+    setSectionByExercise((previous) => ({ ...previous, [exercise.id]: nextIndex }))
   }
 
   /** 把逐段作答整理成接口需要的形状（每段带它在全文中的起点）。 */
@@ -172,7 +193,7 @@ export function App(): JSX.Element {
     submittedSections: JudgeSectionInput[],
     attemptLevel: PolishLevel,
   ): void {
-    setResult(judging_)
+    setResultByExercise((previous) => ({ ...previous, [exercise.id]: judging_ }))
     setSelection(null)
     setOpenRecord(null)
     setRecords((previous) => [
@@ -389,7 +410,7 @@ export function App(): JSX.Element {
                       className="btn btn-ghost"
                       onClick={() => {
                         // 回到作答状态：清掉结果，输入框重新出现（文字还在 drafts 里）
-                        setResult(null)
+                        setResultByExercise((previous) => { const next = { ...previous }; delete next[exercise.id]; return next })
                         setOpenRecord(null)
                         setSelection(null)
                       }}
@@ -476,7 +497,7 @@ export function App(): JSX.Element {
                     <button
                       type="button"
                       className="btn"
-                      onClick={() => setSectionIndex((index) => Math.max(0, index - 1))}
+                      onClick={() => setSection(Math.max(0, sectionIndex - 1))}
                       disabled={sectionIndex === 0}
                     >
                       ← 上一段
@@ -487,7 +508,7 @@ export function App(): JSX.Element {
                     <button
                       type="button"
                       className="btn"
-                      onClick={() => setSectionIndex((index) => Math.min(sourceSections.length - 1, index + 1))}
+                      onClick={() => setSection(Math.min(sourceSections.length - 1, sectionIndex + 1))}
                       disabled={sectionIndex >= sourceSections.length - 1}
                     >
                       下一段 →

@@ -122,21 +122,20 @@ function errorRow(entry: ValidatedError, order: number, answer: string): Row {
     selection: { kind: 'error' as const, id: error.id },
   }
 
+  // 清单里显示的是**最小修改**（真正变化的那几个字），与译文上的标注保持一致。
+  // 若这里显示 AI 圈的整段，而译文上只划了一个词，两边就对不上了。
+  const changed = error.changed
+
   switch (error.type) {
-    case 'replace': {
-      const from = answer.slice(entry.span.start, entry.span.end)
-      return { ...base, from, to: error.targetText ?? '' }
-    }
+    case 'replace':
+      return { ...base, from: changed?.from ?? answer.slice(entry.span.start, entry.span.end), to: changed?.to ?? error.targetText ?? '' }
     case 'delete':
-      return { ...base, from: answer.slice(entry.span.start, entry.span.end), to: '' }
+      return { ...base, from: changed?.from ?? answer.slice(entry.span.start, entry.span.end), to: '' }
     case 'rewrite':
+      // 整句重写要给出完整的改后句子，因此这里用 targetText 而不是最小差异
       return { ...base, from: answer.slice(entry.span.start, entry.span.end), to: error.targetText ?? '' }
     case 'insert':
-      return {
-        ...base,
-        from: error.insertAfter?.snippet ?? '',
-        to: error.targetText ?? '',
-      }
+      return { ...base, from: error.insertAfter?.snippet ?? '', to: changed?.to ?? error.targetText ?? '' }
     case 'reorder':
       return {
         ...base,

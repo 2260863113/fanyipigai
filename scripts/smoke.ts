@@ -84,6 +84,20 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     )
   }
 
+  // 最小修改：模型圈的范围常比实际改动大，必须收窄到真正变化的文字
+  console.log('\n[最小修改] 检查差异算法（每条都会把结果应用回原文验证）')
+  try {
+    const { checkMinimal } = await import('../src/domain/minimal-cases')
+    const results = checkMinimal()
+    for (const result of results) {
+      check(result.ok, result.name, result.detail)
+    }
+    const failed = results.filter((result) => !result.ok).length
+    if (failed === 0) console.log(`    共 ${results.length} 条用例全部通过`)
+  } catch (error) {
+    check(false, '最小修改用例可以执行', error instanceof Error ? error.message : String(error))
+  }
+
   // 反向验证：故意给出译文里没有的文字，定位器必须拒绝并说清原因
   console.log('\n[反向验证] 让定位器面对它找不到、或分不清的文字')
   try {
@@ -207,6 +221,20 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     )
     check(reorder.html.includes('arc-svg'), '语序题画出了配对弧线')
     reorder.restore()
+
+    // 切换页面不能丢东西：写一段独有文字 → 切到别的题型 → 切回来，内容必须还在
+    console.log('\n[界面渲染 · 切换不丢] 切走再切回来检查作答是否保留')
+    const roundTrip = await renderApp({ exerciseId: 'sentence-001', checkTabRoundTrip: true })
+    const survived = roundTrip.survivedTabRoundTrip
+    check(Boolean(survived), '拿到了切换前后的对照数据')
+    if (survived) {
+      check(survived.typed.length > 0, `切换前写入了 ${survived.typed.length} 字`)
+      check(
+        survived.afterReturn === survived.typed,
+        `切到别的题型再切回来，作答原样保留（回来是 ${survived.afterReturn.length} 字：${JSON.stringify(survived.afterReturn.slice(0, 24))}）`,
+      )
+    }
+    roundTrip.restore()
     sentence.restore()
   } catch (error) {
     check(false, '界面渲染没有抛出异常', error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error))

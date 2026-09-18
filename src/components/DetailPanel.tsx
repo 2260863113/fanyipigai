@@ -71,22 +71,40 @@ export function DetailPanel({ selection, data, onClose }: Props) {
       </header>
 
       <dl className="detail-list">
-        {error.anchor && (
+        {error.changed && error.changed.from && (
+          <>
+            <dt>要改的是（最小范围）</dt>
+            <dd className="detail-text">{error.changed.from}</dd>
+          </>
+        )}
+        {error.changed?.to && (
+          <>
+            <dt>{error.type === 'rewrite' ? '整句改为' : '改成'}</dt>
+            <dd className="detail-text">{error.changed.to}</dd>
+          </>
+        )}
+        {!error.changed && error.anchor && (
           <>
             <dt>原文</dt>
             <dd className="detail-text">{error.anchor.snippet}</dd>
           </>
         )}
-        {error.type === 'insert' && validated?.error.targetText && (
+        {error.type === 'insert' && error.targetText && !error.changed?.to && (
           <>
             <dt>需补入</dt>
-            <dd className="detail-text">{validated.error.targetText}</dd>
+            <dd className="detail-text">{error.targetText}</dd>
           </>
         )}
-        {error.type !== 'reorder' && validated?.error.targetText && (
+        {error.type !== 'reorder' && error.targetText && !error.changed?.to && (
           <>
             <dt>正确写法</dt>
-            <dd className="detail-text">{validated.error.targetText}</dd>
+            <dd className="detail-text">{error.targetText}</dd>
+          </>
+        )}
+        {error.type === 'rewrite' && error.targetText && (
+          <>
+            <dt>完整改后文字</dt>
+            <dd className="detail-text">{error.targetText}</dd>
           </>
         )}
         {error.type === 'reorder' && validated?.reordered && (

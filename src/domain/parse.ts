@@ -14,6 +14,7 @@
 import type { Correction, ErrorCategory, ErrorObject, ErrorType, Highlight } from './types'
 import { CATEGORY_PRIORITY } from './types'
 import { locate } from './locate'
+import { minimizeChange } from './minimal'
 import { validateCorrection, type ValidatedCorrection } from './validate'
 
 export interface ParseSuccess {
@@ -79,6 +80,47 @@ function resolveSpan(
   if (outcome.ok) return outcome.value
   problems.push(`${label}：${outcome.reason}`)
   return undefined
+}
+
+/**
+ * 算出这处修改的**最小**区间：只覆盖真正变化的那几个字。
+ *
+ * 做法是拿 AI 自己写的改后文字反算差异（见 minimal.ts）。
+ * 对替换与整句重写，把 AI 圈的 oldText 按它给的 targetText 修一遍，再取最小差异；
+ * 删除与插入没有可缩的余地（一个全是删、一个全是增），按原意给出。
+ *
+ * 返回的 start / end 是**答案文本里的绝对位置**，程序直接据此渲染，
+ * 不需要再按文字找一次——那样反而可能找到别处去。
+ */
+function resolveChanged(
+  span: { start: number; end: number; snippet: string },
+  errorType: ErrorType,
+  targetText: string | undefined,
+): { start: number; end: number; from: string; to: string } {
+  const original = span.snippet
+
+  // 删除：整块划掉就是最小改法
+  if (errorType === 'delete') {
+    return { start: span.start, end: span.end, from: original, to: '' }
+  }
+
+  // 插入：没有可删的内容，落点即区间（零长度）
+  if (errorType === 'insert' || typeof targetText !== 'string') {
+    return { start: span.end, end: span.end, from: '', to: targetText ?? '' }
+  }
+
+  const minimal = minimizeChange(original, targetText)
+  if (!minimal) {
+    // 新旧文字完全相同：AI 标了一处其实没改的地方，按原区间展示
+    return { start: span.start, end: span.end, from: original, to: targetText }
+  }
+
+  return {
+    start: span.start + minimal.startOffset,
+    end: span.start + minimal.endOffset,
+    from: minimal.from,
+    to: minimal.to,
+  }
 }
 
 function readSegments(
@@ -161,24 +203,40 @@ function readError(value: unknown, index: number, answer: string, problems: stri
       const text = readText(value.oldText, `${label} 的 oldText`, problems)
       const targetText = typeof value.targetText === 'string' ? value.targetText.trim() : ''
       if (!targetText) problems.push(`${label} 是 ${errorType}，但没有给出 targetText`)
-      const anchor = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
-      if (!anchor || !targetText) return undefined
-      return { ...base, oldText: text, anchor, targetText }
+      const span = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
+      if (!span || !targetText) return undefined
+      const changed = resolveChanged(span, errorType, targetText)
+      return {
+        ...base,
+        oldText: text,
+        changed,
+        anchor: { start: changed.start, end: changed.end, snippet: changed.from },
+        targetText,
+      }
     }
     case 'delete': {
       const text = readText(value.oldText, `${label} 的 oldText`, problems)
-      const anchor = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
-      if (!anchor) return undefined
-      return { ...base, oldText: text, anchor }
+      const span = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
+      if (!span) return undefined
+      const changed = resolveChanged(span, errorType, undefined)
+      return { ...base, oldText: text, changed, anchor: { start: changed.start, end: changed.end, snippet: changed.from } }
     }
     case 'insert': {
       // 落点用「补在这个片段之后」表达；也兼容旧字段名 afterText
       const text = readText(value.insertAfterText ?? value.oldText, `${label} 的 insertAfterText`, problems)
       const targetText = typeof value.targetText === 'string' ? value.targetText : ''
       if (!targetText) problems.push(`${label} 是 insert，但没有给出要补入的 targetText`)
-      const anchor = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
-      if (!anchor || !targetText) return undefined
-      return { ...base, oldText: text, insertAfter: anchor, targetText }
+      const span = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
+      if (!span || !targetText) return undefined
+      const changed = resolveChanged(span, errorType, targetText)
+      return {
+        ...base,
+        oldText: text,
+        changed,
+        insertAfter: { start: span.start, end: span.end, snippet: span.snippet },
+        anchor: { start: changed.start, end: changed.end, snippet: '' },
+        targetText,
+      }
     }
     case 'reorder': {
       const segments = readSegments(value.segments, answer, label, problems)
