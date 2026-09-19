@@ -477,18 +477,30 @@ src/
     client.ts      前端调用 /api/judge 的封装
     mock.ts        11 道内置示例题与示例批改（覆盖四类题型，用于离线演示与测试）
   components/      界面
-    App.tsx            顶部导航、左右两屏、逐段作答与提交、返回修改
+    App.tsx             编排层：状态、动作、把各栏拼起来（本身不再画栏与弹窗）
+    session.ts          「每一道题各自的状态」的 reducer：作答/结果/看哪一面/第几份原文/生成的题池
+    TopBar.tsx          顶栏：站名、题型导航、设置、当前这一篇的元信息
+    CaseStrip.tsx       题目切换条（只有一道题时不显示）
+    SourcePane.tsx      左上栏：原文 + 换一换 / AI 出题 / 参考译文
+    AnswerPane.tsx      右上栏：作答框或带批注的译文 + 视图切换 + 提交
+    ScorePane.tsx       左下栏：分数与错误归类
+    NotesPane.tsx       右下栏：当前点中的那一处的说明 + 「查看 AI 完整返回内容」
+    Modal.tsx           弹窗外壳（三个弹窗共用，避免逐字重抄）
+    SettingsModal.tsx   设置：行距、译文视图、是否显示填补文字
+    PasteModal.tsx      贴一篇自己的题
+    GenerateModal.tsx   AI 出题：方向 + 文体 + 领域
     AnnotationText.tsx  批注渲染、调序弧线、点中后浮出的气泡
     annotation-summary.ts 每一处批注「哪段文字 → 改成什么 → 为什么」的唯一来源
-    DetailPanel.tsx     右下角：只显示当前点中的那一处，底部是「收藏」
+    DetailPanel.tsx     一处批注的完整说明，底部是「收藏」
     RawResponseButton.tsx 「查看 AI 返回完整内容」+ 屏幕中央的弹窗
     CompareView.tsx     对照视图（一句一句，改前 / 改后）
     settings.ts         界面偏好：行距、是否显示填补文字、默认视图（存 localStorage）
     AnnotationList.tsx  全量清单（只用在练习记录页）
-    ScoreSummary.tsx    左下角：分数与错误归类
+    ScoreSummary.tsx    分数与错误归类的具体呈现（由 ScorePane 包一栏）
     RecordsView.tsx     练习记录页（导航栏的一栏，两屏之间也能拖）
     FavoritesView.tsx   收藏页（导航栏的一栏）
     FixLayer.tsx        上方补写的字：先量再摆，跨行时一段对一行
+    split-drag.ts       四栏分隔条的拖动（练习页与记录页同一套）
 vite-plugin-judge-api.ts  本地开发用的 /api/judge（密钥只在服务端使用）
 启动.bat / start.ps1      Windows 一键启动
 start.sh                  macOS / Linux 一键启动
