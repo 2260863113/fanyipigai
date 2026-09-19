@@ -505,9 +505,14 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         JSON.stringify(stored ?? {}).slice(0, 240),
       )
       check(
-        (stored?.colorEnd ?? 0) > (stored?.colorStart ?? 0) && (stored?.colorOn === 'after' || stored?.colorOn === 'before'),
-        '收藏里记下了"给哪一句的哪一段上色"（只标这一处）',
-        `${stored?.colorOn} ${stored?.colorStart}–${stored?.colorEnd}`,
+        (stored?.beforeEnd ?? 0) > (stored?.beforeStart ?? 0) || (stored?.afterEnd ?? 0) > (stored?.afterStart ?? 0),
+        '收藏里记下了"改前那句标哪一段、改后那句标哪一段"（只标这一处）',
+        `改前 ${stored?.beforeStart}–${stored?.beforeEnd} ／ 改后 ${stored?.afterStart}–${stored?.afterEnd}`,
+      )
+      check(
+        /ann-bubble-num[^>]*>[①②③]/.test(it.firstBubbleHtml),
+        '小卡片里说明的每一行开头带圈号（①②…）',
+        (it.firstBubbleHtml.match(/<span class="ann-bubble-num"[^>]*>[^<]*</) ?? ['（没找到圈号）'])[0],
       )
     }
 
@@ -831,6 +836,16 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         '着色用的是行内 span 而不是 button（长内容才会在内部自动折行）',
       )
       check(views.compareText.includes('I am'), '对照视图下方给出的是"修改后的完整那句"')
+      /*
+       * 荧光只出现在**原文那一行**：原文里被改过的那一段带底色（compare-mark-original），
+       * 而"修改后的那句"只染文字颜色、不带底色。两行分开数，别混在一起。
+       */
+      const originalMarks = (views.compareHtml.match(/class="compare-mark compare-mark-original"/g) ?? []).length
+      const originalTinted = (views.compareHtml.match(/compare-mark-original"[^>]*background:\s*var\(--mark-/g) ?? []).length
+      const correctedTinted = (views.compareHtml.match(/class="compare-mark"[^>]*background:/g) ?? []).length
+      check(originalMarks >= 1, `对照视图的原文那一行也标出了改动（${originalMarks} 处）`)
+      check(originalTinted >= 1, '原文那一行的改动带荧光底色（荧光出现在原译文里）')
+      check(correctedTinted === 0, '改后那一行只标字体颜色、不加荧光底色')
       check(views.settingsOpened, '导航栏的「设置」能打开设置面板')
       check(views.toggledBoxes && views.boxesBefore && !views.boxesAfter, '关掉「显示填补的正确写法」后填补文字消失')
       check(
@@ -1005,12 +1020,10 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(/background:\s*none/.test(fixTextRule), '填补内容的背景是透明的', fixTextRule.trim())
     check(/border:\s*none/.test(fixTextRule), '填补内容没有边框线条', fixTextRule.trim())
     /*
-     * 允许折行：宽度由 FixLayer 限在"那一行带子减左右各 4 个空格"。
-     * 带子按"补写内容 + 左右各 4 个空格"撑开时，方框正好是补写内容一行排完的宽度（不折行）；
-     * 带子被栏宽顶住、撑不到位时，补写内容就在词与词之间折行——
-     * 所以 CSS 里不能锁 nowrap（锁上就成了用户抱怨的那句"总是捆绑"）。
+     * 方框**永不折行**：需要更多地方时，靠 FixLayer 把荧光带用空白继续拓宽
+     * （带子总宽 = 补写内容一行排完的宽度 + 左右各 4 个空格），而不是让补写内容自己折。
      */
-    check(/white-space:\s*normal/.test(fixTextRule), '填补方框允许折行（词与词之间随便断）', fixTextRule.trim())
+    check(/white-space:\s*nowrap/.test(fixTextRule), '填补方框永不折行（地方不够就拓宽荧光带）', fixTextRule.trim())
     /*
      * 插入空位：一块 inline-block 的荧光笔空格，宽度由 FixLayer 量出补写内容的宽度后写上去。
      * CSS 里那个 0.6em 只是兜底——关掉「显示填补的正确写法」时量不到宽度，

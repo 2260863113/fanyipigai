@@ -38,12 +38,15 @@ export interface Favorite {
   /** 修改后的整句（把这一处的改法应用上去之后的整句） */
   sentenceAfter: string
   /**
-   * 上色范围：在 `sentenceAfter` 上（纯删除时改标在 `sentenceBefore` 上，因为它没有"改后"的内容可标）。
-   * 只给**这一处**上色——同一句里别的错误一律不标，重点突出的是这一处。
+   * 上色范围（相对各自那句话的字符下标）。
+   * **改前那句**加荧光底色（文字也跟着变色）——荧光只出现在原译文上；
+   * **改后那句**只给文字上色，不加底色（那是"改成了什么"，不该再被当成被改内容）。
+   * 只标**这一处**：同一句里别的错误一律不标，重点就是这一处。
    */
-  colorOn: 'before' | 'after'
-  colorStart: number
-  colorEnd: number
+  beforeStart: number
+  beforeEnd: number
+  afterStart: number
+  afterEnd: number
   /** 当时是哪道题 */
   exerciseId: string
   mode: Mode
@@ -81,26 +84,31 @@ export function sentenceAround(answer: string, start: number, end: number): stri
 }
 
 /**
- * 收藏里要的两句话：**修改前的整句**与**修改后的整句**。
+ * 收藏里要的两句话：**修改前的整句**与**修改后的整句**，以及各自要上色的那一段。
  *
  * 改后的整句＝把这一处的改法（`span` 换成 `to`）应用上去之后的同一句。
- * 上色范围跟着算出来：有插入/替换内容就标在改后那句话上；纯删除没东西可标，改标在改前那句话上。
+ * 改前那句上色的是**被改掉的那一截**（纯插入时为零宽、没有可标的），
+ * 改后那句上色的是**新写上去的那一截**（纯删除时为零宽）。
+ * 于是"荧光在原译文上、改后的内容只标字体颜色"这件事，数据上就是分开的两段。
  */
 export function sentencePair(
   answer: string,
   span: { start: number; end: number },
   to: string,
-): { before: string; after: string; colorOn: 'before' | 'after'; colorStart: number; colorEnd: number } {
+): { before: string; after: string; beforeStart: number; beforeEnd: number; afterStart: number; afterEnd: number } {
   const range = sentenceRange(answer, span.start, span.end)
   const before = answer.slice(range.from, range.to)
   const from = Math.max(0, Math.min(span.start - range.from, before.length))
   const to_ = Math.max(from, Math.min(span.end - range.from, before.length))
   const after = `${before.slice(0, from)}${to}${before.slice(to_)}`
-  if (to.length === 0) {
-    // 纯删除：改后那句里没有"新内容"，就把被删掉的那一截标在改前那句上
-    return { before, after, colorOn: 'before', colorStart: from, colorEnd: to_ }
+  return {
+    before,
+    after,
+    beforeStart: from,
+    beforeEnd: to_,
+    afterStart: from,
+    afterEnd: from + to.length,
   }
-  return { before, after, colorOn: 'after', colorStart: from, colorEnd: from + to.length }
 }
 
 /** 把「选中的那一处 + 当时那道题」整理成一条收藏。 */
@@ -137,9 +145,10 @@ export function favoriteOf(input: {
     color: input.summary.color,
     sentenceBefore: sentences.before,
     sentenceAfter: sentences.after,
-    colorOn: sentences.colorOn,
-    colorStart: sentences.colorStart,
-    colorEnd: sentences.colorEnd,
+    beforeStart: sentences.beforeStart,
+    beforeEnd: sentences.beforeEnd,
+    afterStart: sentences.afterStart,
+    afterEnd: sentences.afterEnd,
     exerciseId: input.context.exerciseId,
     mode: input.context.mode,
     direction: input.context.direction,

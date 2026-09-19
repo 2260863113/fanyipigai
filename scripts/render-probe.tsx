@@ -60,9 +60,10 @@ export interface RenderProbe {
       why?: string
       sentenceBefore?: string
       sentenceAfter?: string
-      colorOn?: string
-      colorStart?: number
-      colorEnd?: number
+      beforeStart?: number
+      beforeEnd?: number
+      afterStart?: number
+      afterEnd?: number
     }>
     secondMark: string
     secondNotes: string

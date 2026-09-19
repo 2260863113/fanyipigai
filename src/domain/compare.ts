@@ -20,8 +20,10 @@ export interface CompareSpan {
 }
 
 export interface CompareLine {
-  /** 原文那一句 */
+  /** 原文那一句（按改动切开：被改过的那一段带颜色） */
   original: string
+  /** 原文那一句的片段：被改动/被点赞的那一段带 color（界面给它加荧光底色） */
+  originalSpans: CompareSpan[]
   /** 修改后的完整那一句（按改动拼出来） */
   corrected: CompareSpan[]
   /** 这一句有没有被改动（没有的话两行一样，界面可以淡化处理） */
@@ -114,10 +116,18 @@ export function buildCompareLines(validated: ValidatedCorrection, answer: string
       .sort((a, b) => a.start - b.start || a.end - b.end)
 
     let cursor = sentence.start
+    /*
+     * 原文那一句也按同一批改动切开：改过的那一段在**原文里**标出来
+     * （荧光出现在原译文上，这正是用户要的）。改后那一句只染文字颜色。
+     */
+    const originalParts: CompareSpan[] = []
+    let originalCursor = sentence.start
+
     for (const item of touched) {
       const start = Math.max(item.start, sentence.start)
       const end = Math.min(item.end, sentence.end)
       if (start > cursor) parts.push({ text: answer.slice(cursor, start) })
+      if (start > originalCursor) originalParts.push({ text: answer.slice(originalCursor, start) })
 
       const inside = item.start >= sentence.start && item.end <= sentence.end
       if (item.kind === 'edit' && inside) {
@@ -132,12 +142,27 @@ export function buildCompareLines(validated: ValidatedCorrection, answer: string
           highlightId: item.kind === 'mark' ? item.highlightId : undefined,
         })
       }
+      if (start < end) {
+        originalParts.push({
+          text: answer.slice(start, end),
+          color: item.color,
+          errorId: item.kind === 'edit' ? item.errorId : undefined,
+          highlightId: item.kind === 'mark' ? item.highlightId : undefined,
+        })
+      }
       cursor = Math.max(cursor, end)
+      originalCursor = Math.max(originalCursor, end)
     }
     if (cursor < sentence.end) parts.push({ text: answer.slice(cursor, sentence.end) })
+    if (originalCursor < sentence.end) originalParts.push({ text: answer.slice(originalCursor, sentence.end) })
 
     const corrected = mergeSpans(parts)
-    return { original, corrected, changed: corrected.some((part) => part.color !== undefined) }
+    return {
+      original,
+      originalSpans: mergeSpans(originalParts),
+      corrected,
+      changed: corrected.some((part) => part.color !== undefined),
+    }
   })
 }
 

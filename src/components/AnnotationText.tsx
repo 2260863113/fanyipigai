@@ -284,17 +284,28 @@ interface Bubble {
 }
 
 /**
- * 小卡片里的「为什么」按**分号**断行。
+ * 小卡片里的「为什么」按**分号**断行，每行前面带一个圈号（①②③…）。
  *
  * AI 写的说明常是"第一人称代词 I 必须大写；主语 I 搭配的 be 动词是 am，不是 is"这种
- * 两三个分句挤在一句里，卡片又窄，一处不看头就找不到第二处——所以在分号后断开。
- * 分号本身留着：它是句子的标点，去掉就成了两句没头没尾的话。
+ * 两三个分句挤在一句里，卡片又窄，一处不看头就找不到第二处——所以在分号处断开，
+ * 并给每一行编上号，一眼能数出有几条。分号本身留着：它是句子的标点。
  */
+const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩']
+
 function withSemicolonBreaks(text: string): JSX.Element[] {
-  const parts = text.split('；')
-  return parts.flatMap((part, index) =>
-    index === parts.length - 1 ? [<span key={index}>{part}</span>] : [<span key={index}>{part}；</span>, <br key={`br-${index}`} />],
-  )
+  const parts = text.split('；').filter((part) => part.trim().length > 0)
+  if (parts.length <= 1) return [<span key="only">{text}</span>]
+  return parts.flatMap((part, index) => {
+    const marker = CIRCLED[index] ?? `${index + 1}.`
+    const text = index === parts.length - 1 ? part : `${part}；`
+    const line = (
+      <span key={`line-${index}`} className="ann-bubble-line">
+        <span className="ann-bubble-num">{marker}</span>
+        {text}
+      </span>
+    )
+    return index === parts.length - 1 ? [line] : [line, <br key={`br-${index}`} />]
+  })
 }
 
 /**
@@ -507,8 +518,7 @@ export function AnnotationText({
             这里**不写**"某某 → 某某"：改前改后本来就画在译文上（荧光带 + 上方小字），
             卡片再抄一遍反而占地方。卡片只说"这是什么问题、为什么"，完整说明在右下角。
           */}
-          <span className="ann-bubble-why">{withSemicolonBreaks(bubble.summary.why)}</span>
-          <span className="ann-bubble-more">完整说明见右下角</span>
+          <span className="ann-bubble-why">{withSemicolonBreaks(bubble.summary.why)}</span>          <span className="ann-bubble-more">完整说明见右下角</span>
         </div>
       )}
     </div>

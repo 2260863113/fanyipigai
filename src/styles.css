@@ -1001,8 +1001,11 @@ button {
   /* 行高不再压到 1.35——那是"被压扁"的直接原因；1.6 读起来才舒展 */
   line-height: 1.6;
   text-align: left;
-  /* 允许在词与词之间折行；具体宽度由 FixLayer 写在 style 上（max-width） */
-  white-space: normal;
+  /*
+   * **永不折行**：需要更多地方时，靠第 6 步把荧光带用空白继续拓宽，而不是让补写内容自己折。
+   * 方框的宽度因此就是补写内容一行排完的宽度。
+   */
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -1107,6 +1110,16 @@ button {
  */
 .ann-bubble-why {
   color: var(--ink-soft);
+}
+
+/* 说明按分号断成几行，每行开头一个圈号（与这一处的颜色一致） */
+.ann-bubble-line {
+  display: inline;
+}
+
+.ann-bubble-num {
+  color: inherit;
+  margin-right: 3px;
 }
 
 .ann-bubble-more {
@@ -1397,6 +1410,11 @@ button {
 
 .fav-hi {
   border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* 改前那句上的荧光（改后那句只变色、不加底色） */
+.fav-hi-tinted {
   padding: 0 2px;
 }
 
@@ -1716,6 +1734,15 @@ button {
  */
 .compare-mark {
   cursor: pointer;
+}
+
+/*
+ * 原文那一行上的标记：**带荧光底色**（与批改视图上同一套荧光笔），
+ * 改后那一行只给文字上色。底色由行内 style 给（颜色随改动类型变），这里只补圆角与内边距。
+ */
+.compare-mark-original {
+  border-radius: 2px;
+  padding: 0 2px;
 }
 
 .compare-mark[data-selected='true'] {

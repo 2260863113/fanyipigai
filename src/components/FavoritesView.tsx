@@ -10,25 +10,29 @@ interface Props {
 }
 
 /**
- * 一句话，其中**这一处改动**用相应颜色标出来。
+ * 一句话，其中**这一处改动**标出来。
  *
- * 只标这一处：同一句里别的错误一律不上色——收藏是"我要记这一处"，
- * 整句都花掉就没了重点。上色用的是与译文上同一套荧光笔底色 + 同色文字。
+ * `tinted`：改前那句加荧光底色（与译文上同一套荧光笔），改后那句只给文字上色——
+ * 用户要的就是"荧光出现在原译文里，改后的内容只标字体颜色"。
+ * 只标这一处：同一句里别的错误一律不上色，收藏的重点就是这一处。
  */
-function withHighlight(favorite: Favorite, text: string): JSX.Element {
-  const start = Math.max(0, Math.min(favorite.colorStart, text.length))
-  const end = Math.max(start, Math.min(favorite.colorEnd, text.length))
-  if (end <= start) return <>{text}</>
+function withHighlight(favorite: Favorite, text: string, tinted: boolean, start: number, end: number): JSX.Element {
+  const from = Math.max(0, Math.min(start, text.length))
+  const to = Math.max(from, Math.min(end, text.length))
+  if (to <= from) return <>{text}</>
   return (
     <>
-      {text.slice(0, start)}
+      {text.slice(0, from)}
       <span
-        className="fav-hi"
-        style={{ background: MARK_BG_VALUE[favorite.color], color: MARK_COLOR_VALUE[favorite.color] }}
+        className={tinted ? 'fav-hi fav-hi-tinted' : 'fav-hi'}
+        style={{
+          color: MARK_COLOR_VALUE[favorite.color],
+          ...(tinted ? { background: MARK_BG_VALUE[favorite.color] } : null),
+        }}
       >
-        {text.slice(start, end)}
+        {text.slice(from, to)}
       </span>
-      {text.slice(end)}
+      {text.slice(to)}
     </>
   )
 }
@@ -86,17 +90,13 @@ export function FavoritesView({ favorites, onRemove, onClear }: Props) {
                 {favorite.sentenceBefore && (
                   <p className="fav-sentence">
                     <span className="fav-label">改前</span>
-                    {favorite.colorOn === 'before'
-                      ? withHighlight(favorite, favorite.sentenceBefore)
-                      : favorite.sentenceBefore}
+                    {withHighlight(favorite, favorite.sentenceBefore, true, favorite.beforeStart, favorite.beforeEnd)}
                   </p>
                 )}
                 {favorite.sentenceAfter && favorite.sentenceAfter !== favorite.sentenceBefore && (
                   <p className="fav-sentence fav-sentence-after">
                     <span className="fav-label">改后</span>
-                    {favorite.colorOn === 'after'
-                      ? withHighlight(favorite, favorite.sentenceAfter)
-                      : favorite.sentenceAfter}
+                    {withHighlight(favorite, favorite.sentenceAfter, false, favorite.afterStart, favorite.afterEnd)}
                   </p>
                 )}
 
