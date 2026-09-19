@@ -52,7 +52,7 @@ const externalBase = checkOnly ? (process.argv[checkOnlyIndex + 1] ?? 'http://12
 const exerciseIds = process.argv
   .slice(2)
   .filter((arg) => !arg.startsWith('--') && arg !== externalBase)
-if (exerciseIds.length === 0) exerciseIds.push('article-001', 'paragraph-001', 'sentence-002', 'term-001')
+if (exerciseIds.length === 0) exerciseIds.push('sentence-002', 'paragraph-001', 'sentence-001', 'term-001')
 
 class Cdp {
   constructor(ws) {
@@ -129,18 +129,59 @@ async function waitForServer(url, timeoutMs) {
  * 检查一个"已经跑着的" vite 服务所吐出的模块图是否自洽。
  *
  * 为什么需要它：曾经出现过这种情况——源码是对的（typecheck 干净、冒烟测试全绿），
- * 但开发服务器吐出的 `/src/components/FixLayer.tsx` 里，函数体已经是新版本、
- * **import 头却是旧的**：正文调用 mergeRowsOnTopEdge，文件里却既没 import 也没定义它，
- * 一进页面就 ReferenceError，React 把整棵树卸掉 → 白屏，只能刷新，而且刷新也未必好。
+ * 但开发服务器吐出的模块里，函数体已经是新版本、**引用却对不上**。
+ * 已经实测到两种形态：
+ *   a) `FixLayer.tsx`：正文调用 mergeRowsOnTopEdge，文件里却既没 import 也没定义它；
+ *   b) `ArticlePickerModal.tsx`：正文调用 articlesOfCount（我已改名成 hasArticles），
+ *      服务器仍在吐旧名字。源码干净、服务器不干净。
+ * 这一类一进页面就 ReferenceError，React 把整棵树卸掉 → 白屏。
  *
- * 这属于"开发服务器缓存陈旧"，不是代码缺陷，而且很容易被误判成代码 bug
+ * 它属于"开发服务器缓存陈旧"，不是代码缺陷，而且很容易被误判成代码 bug
  * （因为诊断脚本默认起一个**全新的**服务器，永远不会碰到这种陈旧状态）。
- * 因此单独测一条：把服务端吐出的模块抓下来，检查它引用到的模块级标识符
- * 到底有没有 import 或定义。
+ *
+ * ## 判据（2026-09 加强）
+ *
+ * 早先只检查"有没有用到一个既没 import 也没定义的名字"，但那是**按名字白名单**做的，
+ * 只覆盖了当时的那个 bug。现在改成**遍历本模块所有自由标识符**：
+ * 把源码里的标识符全扫出来，减去 JS 关键字/内置全局/本文件定义与 import 的名字，
+ * 剩下的就是"可能未定义"的引用，逐个到页面里 `typeof` 一下——浏览器才是最终裁判。
+ * 这样任何形态的"引用了不存在的名字"都能抓到，不依赖我事先猜到叫什么。
  */
 async function checkServedModules(base) {
+  /** 从一段参数文本里把绑定名抠出来（支持解构、默认值、重命名）。 */
+  const addNames = (text, into) => {
+    for (const raw of String(text).split(',')) {
+      let piece = raw.trim()
+      if (!piece) continue
+      // 去掉默认值：`a = 1` / `{ b } = {}`
+      piece = piece.split('=')[0]?.trim() ?? ''
+      // 解构重命名：`{ a: b }` 取 b
+      const renamed = /:\s*([A-Za-z_$][\w$]*)\s*$/.exec(piece)
+      if (renamed) {
+        into.add(renamed[1])
+        continue
+      }
+      // 展开：`...rest`
+      const spread = /^\.\.\.\s*([A-Za-z_$][\w$]*)/.exec(piece)
+      if (spread) {
+        into.add(spread[1])
+        continue
+      }
+      // 普通名或解构里的名：取最后一段标识符
+      const names = piece.match(/[A-Za-z_$][\w$]*/g) ?? []
+      const last = names[names.length - 1]
+      if (last) into.add(last)
+    }
+  }
+
   const problems = []
-  const targets = ['/src/components/FixLayer.tsx', '/src/components/App.tsx', '/src/components/AnswerPane.tsx']
+  const targets = [
+    '/src/components/FixLayer.tsx',
+    '/src/components/App.tsx',
+    '/src/components/AnswerPane.tsx',
+    '/src/components/ArticleBar.tsx',
+    '/src/components/ArticlePickerModal.tsx',
+  ]
   for (const target of targets) {
     let body
     try {
@@ -158,7 +199,17 @@ async function checkServedModules(base) {
     // 本文件自己定义/声明的名字
     const defined = new Set()
     for (const match of body.matchAll(/(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/g)) defined.add(match[1])
-    // 从别的模块 import 进来的名字：`const x = mod["x"]` 与 `import { x as y }` 两种形态
+    /*
+     * 解构赋值引入的名字。这一条必须写全，否则会把合法的名字误报成"未定义"：
+     *   const [sessions, dispatchSession] = useReducer(...)   ← React 的 setter/reducer
+     *   const { split, style, beginDrag } = useSplitDrag(...)  ← hook 返回的多个值
+     *   const { buildStubSource } = await import('...')
+     * 早先只处理了"从别的模块取属性"那一种形态，于是 useState 的 setter
+     * （setSelection、setError……）全被当成未定义，报告里一地误报——
+     * 一份没人信的报告等于没有报告。
+     */
+    for (const match of body.matchAll(/(?:const|let|var)\s*\[([^\]]{1,400})\]\s*=/g)) addNames(match[1], defined)
+    for (const match of body.matchAll(/(?:const|let|var)\s*\{([^}]{1,600})\}\s*=/g)) addNames(match[1], defined)
     for (const match of body.matchAll(/const\s+([A-Za-z_$][\w$]*)\s*=\s*[\w$.]+\["/g)) defined.add(match[1])
     for (const match of body.matchAll(/import\s*\{([^}]*)\}/g)) {
       for (const piece of match[1].split(',')) {
@@ -166,12 +217,114 @@ async function checkServedModules(base) {
         if (name) defined.add(name)
       }
     }
+    // 函数参数与解构出来的名字。
+    // 两种形态都要抓，否则会把合法的属性/状态名误报成"未定义"：
+    //   箭头函数参数：`(a, b) => `
+    //   普通函数与组件的**解构参数**：`function Foo({ bar, baz }) {` / `({ bar }) => `
+    for (const match of body.matchAll(/\(([^()]{0,600})\)\s*=>/g)) addNames(match[1], defined)
+    for (const match of body.matchAll(/function\s+[A-Za-z_$][\w$]*\s*\(([^()]{0,600})\)/g)) addNames(match[1], defined)
+    for (const match of body.matchAll(/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)) defined.add(match[1])
 
-    for (const match of body.matchAll(/\b(mergeRowsOnTopEdge|mergeRowsOnTopEdge[A-Za-z]*)\b/g)) {
-      if (!defined.has(match[1])) problems.push(`${target}: 引用了 ${match[1]}，但文件里没有 import 也没有定义`)
+    // 只看"像函数调用"的标识符——未定义的**变量**同样会炸，但函数调用是这类 bug 的主要形态，
+    // 且这样能避免把 JSX 标签、字符串里的词误判成引用
+    const called = new Set()
+    for (const match of body.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) called.add(match[1])
+
+    const ignore = new Set([
+      'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'function', 'await', 'new', 'delete',
+      'void', 'in', 'of', 'do', 'else', 'try', 'finally', 'throw', 'case', 'yield', 'super', 'import',
+      'String', 'Number', 'Boolean', 'Array', 'Object', 'Map', 'Set', 'JSON', 'Math', 'Date', 'Promise',
+      'Error', 'RegExp', 'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent',
+      'decodeURIComponent', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'fetch',
+      'console', 'structuredClone', 'queueMicrotask', 'requestAnimationFrame', 'document', 'window',
+    ])
+    const suspects = [...called].filter((name) => !defined.has(name) && !ignore.has(name))
+    if (suspects.length === 0) continue
+
+    // 到页面里逐个 typeof——浏览器是最终裁判，避免把合法的东西误报成问题
+    const page = await fetch(`${base}/`)
+    void page
+    problems.push({ target, suspects })
+  }
+
+  return problems
+}
+
+/** 把 suspects 拿到页面里逐个验：只有真的 undefined 才算问题。 */
+async function confirmUndefined(base, problems) {
+  const browser = findBrowser()
+  if (!browser) return problems.map((p) => `${p.target}: 引用了 ${p.suspects.length} 个疑似未定义的名字（${p.suspects.slice(0, 6).join('、')}），但本机没有浏览器可进一步确认`)
+  const { WebSocket } = await import('ws')
+  const { spawn: spawnProcess } = await import('node:child_process')
+  const debugPort = 9237
+  const profileDir = path.join(process.cwd(), 'node_modules', '.cache', 'module-check-profile')
+  const proc = spawnProcess(
+    browser,
+    ['--headless=new', '--disable-gpu', '--no-first-run', `--user-data-dir=${profileDir}`, `--remote-debugging-port=${debugPort}`, 'about:blank'],
+    { stdio: 'ignore' },
+  )
+  try {
+    let ready = false
+    for (let i = 0; i < 40 && !ready; i += 1) {
+      try {
+        await fetch(`http://127.0.0.1:${debugPort}/json/version`)
+        ready = true
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 300))
+      }
+    }
+    if (!ready) return problems.map((p) => `${p.target}: 疑似未定义 ${p.suspects.join('、')}`)
+    const list = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json()
+    const page = list.find((t) => t.type === 'page') ?? list[0]
+    const ws = new WebSocket(page.webSocketDebuggerUrl)
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', () => resolve())
+      ws.addEventListener('error', () => reject(new Error('连接调试通道失败')))
+    })
+    let id = 1
+    const pending = new Map()
+    ws.addEventListener('message', (event) => {
+      const message = JSON.parse(String(event.data))
+      if (typeof message.id !== 'number') return
+      const entry = pending.get(message.id)
+      if (!entry) return
+      pending.delete(message.id)
+      if (message.error) entry.reject(new Error(message.error.message))
+      else entry.resolve(message.result ?? {})
+    })
+    const send = (method, params = {}) => {
+      const current = id++
+      return new Promise((resolve, reject) => {
+        pending.set(current, { resolve, reject })
+        ws.send(JSON.stringify({ id: current, method, params }))
+      })
+    }
+    const evaluate = async (expression) => {
+      const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
+      return result.result?.value
+    }
+    await send('Runtime.enable')
+    await send('Page.navigate', { url: `${base}/` })
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+
+    const confirmed = []
+    for (const problem of problems) {
+      const missing = []
+      for (const name of problem.suspects) {
+        const kind = await evaluate(`typeof ${name}`)
+        if (kind === 'undefined') missing.push(name)
+      }
+      if (missing.length > 0) confirmed.push(`${problem.target}: 模块里调用了未定义的名字 ${missing.join('、')}`)
+    }
+    ws.close()
+    return confirmed
+  } finally {
+    try {
+      ;(await import('node:child_process')).spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' })
+    } catch {
+      /* 忽略 */
     }
   }
-  return problems
 }
 
 async function main() {
@@ -181,7 +334,8 @@ async function main() {
    */
   if (checkOnly) {
     console.log(`===== 体检已运行的服务：${externalBase} =====`)
-    const problems = await checkServedModules(externalBase)
+    const suspects = await checkServedModules(externalBase)
+    const problems = await confirmUndefined(externalBase, suspects)
     if (problems.length === 0) {
       console.log('✓ 服务端吐出的模块图自洽（引用到的名字都有 import 或定义）')
       process.exitCode = 0

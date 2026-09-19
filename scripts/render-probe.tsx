@@ -416,16 +416,37 @@ export async function renderApp(
   if (!sample) throw new Error('题库为空')
   const answerSections = splitSections(sample.sampleAnswer)
 
-  // 如果指定了题目，需要先切到对应题型与题目
-  if (options.exerciseId && sample.exercise.id !== MOCK_CASES[0]?.exercise.id) {
+  /*
+   * 切到目标题型（必要时再切题目）。
+   *
+   * 为什么**无条件**切，而不是只在指定了 exerciseId 时切：
+   * 界面打开时落在哪一栏是**会变的**——「文章」栏现在由文章库供题（真实新闻选段），
+   * 而文章库的选段没有示例作答，探针没法自动填答。若探针假定"打开就是目标题"，
+   * 它会往一个不存在示例的界面上打字，于是提交按钮一直是禁用的
+   * （表现为"提交后调用了批改接口 0 次"）。本探针用的是题库示例作答，
+   * 因此必须显式把自己切到那道题所在的题型。
+   */
+  const targetMode = sample.exercise.mode
+  const activeTabLabel = container.querySelector('.mode-tab.mode-tab-active')?.textContent?.trim()
+  if (process.env.DSH_PROBE_DEBUG) {
+    console.log(
+      `[probe] 目标题型=${targetMode}(${MODE_TAB_LABEL[targetMode]}) 当前高亮=${activeTabLabel ?? '(无)'} ` +
+        `共 ${container.querySelectorAll('.mode-tab').length} 个题型标签`,
+    )
+  }
+  const alreadyThere = activeTabLabel === MODE_TAB_LABEL[targetMode]
+  if (!alreadyThere) {
     const modeTab = [...container.querySelectorAll<HTMLButtonElement>('.mode-tab')].find(
-      (node) => node.textContent?.trim() === MODE_TAB_LABEL[sample.exercise.mode],
+      (node) => node.textContent?.trim() === MODE_TAB_LABEL[targetMode],
     )
     if (modeTab) {
       await act(async () => {
         modeTab.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       })
     }
+  }
+  if (options.exerciseId) {
+    // 该题型下有多道题时靠题号切；文章库那类没有按钮的题干不在此列
     const caseTab = [...container.querySelectorAll<HTMLButtonElement>('.case-tab')].find((node) =>
       node.textContent?.includes(sample.exercise.topic),
     )

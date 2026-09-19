@@ -55,8 +55,14 @@ export interface ShotSpec {
   clickMark?: number
 }
 
-/** 不指定题目时用哪一道（与题库第一道一致）。 */
-const DEFAULT_EXERCISE_ID = 'article-001'
+/**
+ * 不指定题目时用哪一道（截图脚本的默认落点）。
+ *
+ * 为什么不是 article-001：**「文章」栏现在由文章库供题**（真实新闻选段），
+ * 而文章库的选段没有示例作答，因此不能被截图脚本自动填答并提交。
+ * 句子题 sentence-002 同时含替换、插入、删除三种标记，是更好的截图样本。
+ */
+const DEFAULT_EXERCISE_ID = 'sentence-002'
 
 /** 极简 CDP 客户端。错误响应会被抛出，不静默吞掉。 */
 class Cdp {

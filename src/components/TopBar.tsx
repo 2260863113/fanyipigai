@@ -44,6 +44,11 @@ export function TopBar({
         ))}
       </nav>
 
+      {/*
+        「设置」留在顶栏，**不进文章库那一行**：那一行只在「文章」栏出现，
+        而设置（行距、译文视图、是否显示填补文字）是每一栏都要用的，
+        放到那里会导致段落/句子/术语栏没有设置入口。
+      */}
       <div className="topbar-right">
         <button
           type="button"

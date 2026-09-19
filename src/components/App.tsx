@@ -40,7 +40,11 @@ import { AnswerPane } from './AnswerPane'
 import { ScorePane } from './ScorePane'
 import { NotesPane } from './NotesPane'
 import { TopBar } from './TopBar'
-import { CaseStrip } from './CaseStrip'
+import { ArticleBar } from './ArticleBar'
+import { ArticlePickerModal } from './ArticlePickerModal'
+import { ARTICLE_EXCERPTS, articleById, articlesOf } from '../domain/articles'
+import { exerciseOfArticle } from '../domain/article-exercise'
+import { loadSelection, saveSelection, type ArticleSelection } from './article-selection'
 
 type Tab = Mode | 'records' | 'custom' | 'favorites'
 
@@ -50,6 +54,8 @@ interface JudgeError {
 }
 
 const ALL_CASES = MOCK_CASES
+/** 文章库的第一篇：启动时的落点（文章栏由文章库供题，见 ADR 0007） */
+const FIRST_ARTICLE = ARTICLE_EXCERPTS[0]
 const EMPTY_GENERATED: GeneratedExercise[] = []
 const EMPTY_LAYOUT: AnnotatedLayout = { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 }
 
@@ -62,8 +68,14 @@ export function App(): JSX.Element {
   const firstCase = ALL_CASES[0]
   if (!firstCase) throw new Error('题库为空')
 
-  const [tab, setTab] = useState<Tab>(firstCase.exercise.mode)
-  const [exerciseId, setExerciseId] = useState(firstCase.exercise.id)
+  /**
+   * 启动时落在「文章」栏 —— 而文章栏现在由**文章库**供题，
+   * 因此默认题号取文章库的第一篇，而不是内置题库的 article-001。
+   * 文章库为空（理论上不会，抓取脚本有断言守着）时退回内置题库，保证界面照样能开。
+   */
+  const startup = FIRST_ARTICLE
+  const [tab, setTab] = useState<Tab>(startup ? 'article' : firstCase.exercise.mode)
+  const [exerciseId, setExerciseId] = useState(startup ? startup.id : firstCase.exercise.id)
 
   /**
    * 每一道题各自的会话状态（作答、结果、看哪一面、用第几份原文、AI 生成的题池）。
@@ -103,11 +115,21 @@ export function App(): JSX.Element {
   /** 收藏（存在浏览器里；做题时点卡片下方的「收藏」，在顶栏的「收藏」里看） */
   const [favorites, setFavorites] = useState<Favorite[]>(() => loadFavorites())
 
+  /**
+   * 文章库的「领域 × 方向」选择（存在浏览器里，每次打开回到上次那一格）。
+   * 只进「文章」栏；段落/句子/术语栏仍然用内置题库（见 ADR 0007）。
+   */
+  const [articleSelection, setArticleSelection] = useState<ArticleSelection>(() => loadSelection())
+  const [articlePickerOpen, setArticlePickerOpen] = useState(false)
+
   const activeCase = ALL_CASES.find((item) => item.exercise.id === exerciseId) ?? firstCase
   /** 当前在做的是不是自己贴的那一篇 */
   const customExercise = useMemo(() => (custom ? exerciseOf(custom) : null), [custom])
   const isCustom = customExercise !== null && customExercise.id === exerciseId
-  const exercise: Exercise = isCustom && customExercise ? customExercise : activeCase.exercise
+  /** 当前在做的是不是文章库里的一篇 */
+  const activeArticle = useMemo(() => articleById(exerciseId), [exerciseId])
+  const exercise: Exercise =
+    isCustom && customExercise ? customExercise : activeArticle ? exerciseOfArticle(activeArticle) : activeCase.exercise
   const mode = exercise.mode
   /** 这道题自己的会话状态（作答、结果、看哪一面、第几份原文、AI 生成的题池） */
   const session = sessionOf(sessions, exercise.id)
@@ -433,8 +455,6 @@ export function App(): JSX.Element {
   /** 有上一次的结果、且当前停在作答框上（点了「返回修改」但还没改字） */
   const canReturnToResult = Boolean(result) && view === 'answer'
 
-  const inMode = tab === 'records' ? [] : casesOfMode(tab)
-
   /**
    * 右上角要显示的带批注的作答。
    * 位置早已由校验结果给出（validated 里带 span），这里只是把它排版成片段序列。
@@ -508,7 +528,25 @@ export function App(): JSX.Element {
         />
       ) : (
         <>
-          <CaseStrip cases={inMode} activeExerciseId={exercise.id} onSelect={selectExercise} />
+          {/*
+            文章库那一行只在「文章」栏出现：领域与方向是**文章库**的组织方式，
+            段落/句子/术语栏仍然用内置题库，摆一个点了没用的下拉反而更乱。
+          */}
+          {tab === 'article' && (
+            <ArticleBar
+              selection={articleSelection}
+              onChange={(next) => {
+                setArticleSelection(next)
+                saveSelection(next)
+                // 换格子时自动落到那一格的第一篇，免得停在上一个领域的那篇上让人以为没生效
+                const first = articlesOf(next.domain, next.direction)[0]
+                if (first) selectExercise(first.id)
+                // 用户点领域是为了挑文章，所以顺手把选文章的弹窗打开（方向切换不打开）
+                if (next.domain !== articleSelection.domain) setArticlePickerOpen(true)
+              }}
+              onPickArticle={() => setArticlePickerOpen(true)}
+            />
+          )}
 
           <main className={`split${split ? ' split-manual' : ''}`} ref={splitRef} style={splitStyle}>
             <div className="split-row split-row-top">
@@ -615,6 +653,27 @@ export function App(): JSX.Element {
       {/* 设置：行距、是否显示填补的文字、译文默认视图。纯界面偏好，存在浏览器里 */}
       {settingsOpen && (
         <SettingsModal settings={settings} update={updateSettings} onClose={() => setSettingsOpen(false)} />
+      )}
+
+      {/* 选文章：点领域那一行的「选择文章」打开，以卡片罗列该「领域 × 方向」下的文章 */}
+      {articlePickerOpen && (
+        <ArticlePickerModal
+          domain={articleSelection.domain}
+          direction={articleSelection.direction}
+          activeArticleId={activeArticle ? activeArticle.id : null}
+          onSwitchDirection={(direction) => {
+            const next = { ...articleSelection, direction }
+            setArticleSelection(next)
+            saveSelection(next)
+            const first = articlesOf(next.domain, next.direction)[0]
+            if (first) selectExercise(first.id)
+          }}
+          onPick={(article) => {
+            selectExercise(article.id)
+            setArticlePickerOpen(false)
+          }}
+          onClose={() => setArticlePickerOpen(false)}
+        />
       )}
 
       {/*

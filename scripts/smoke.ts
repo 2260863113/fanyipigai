@@ -377,7 +377,13 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   // 界面渲染：类型正确不等于能渲染出来，白屏是用户无法自行修复的故障
   console.log('\n[界面渲染] 在 jsdom 中挂载界面并走一遍提交 → 批改 → 点批注')
   try {
-    const rendered = await renderApp()
+    /*
+     * 显式指定 sentence-002：这一块要"自动填示例作答再提交"，因此必须用**带示例作答的内置题**。
+     * 不能依赖界面的默认落点——「文章」栏现在由文章库供题（真实新闻选段），
+     * 而文章库的选段没有示例作答，探针打进去的字不会让提交按钮可用
+     * （症状是"提交后调用了批改接口 0 次"，一路查下来根因在这里）。
+     */
+    const rendered = await renderApp({ exerciseId: 'sentence-002' })
     check(rendered.html.length > 0, '界面渲染出了内容')
     check(rendered.judgeCalls === 1, `提交后调用了批改接口 ${rendered.judgeCalls} 次`)
 
@@ -1018,9 +1024,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   try {
     const { captureScreens } = await import('./visual')
     const result = await captureScreens([
-      { name: '01-compose', width: 1600, height: 950, action: 'plain' },
-      // 点了结果页里的一处勾画：能看到那一行下面的气泡与右下角的单处说明
-      { name: '02-result', width: 1600, height: 950, action: 'submit', clickMark: 0 },
+      // 前两张落在句子题上：它是截图首屏的默认样本（见 visual.ts 的 DEFAULT_EXERCISE_ID）。
+      // **必须显式点题型**——界面打开时停在「文章」栏，而那一栏现在由文章库供题
+      // （真实新闻选段，没有示例作答可自动填入）。
+      { name: '01-compose', width: 1600, height: 950, action: 'plain', clickTab: '句子' },
+      { name: '02-result', width: 1600, height: 950, action: 'submit', clickTab: '句子', clickMark: 0 },
       // 再用句子题截一张：它同时含替换、插入、删除三种标记，
       // 默认的文章题只有一处亮点，看不出标注长什么样
       { name: '03-marks', width: 1600, height: 950, action: 'submit', exerciseId: 'sentence-002', clickTab: '句子', clickMark: 0 },

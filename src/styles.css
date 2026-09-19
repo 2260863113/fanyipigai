@@ -152,49 +152,199 @@ button {
   color: #8a5200;
 }
 
-/* ── 题目切换条 ─────────────────────────────────── */
+/* ── 文章库那一行：领域下拉 · 方向切换 · 设置 ───────────
+   它取代了原来的「题目切换条」——那条是一排按钮，题目一多就铺不完。
+   现在左边是下拉、中间是两段方向切换、右边是设置，三块各占一区。 */
 
-.case-strip {
+.article-bar {
   flex: none;
   min-height: var(--strip-h);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   padding: 6px 18px;
   background: var(--paper);
   border-bottom: 1px solid var(--line);
-  overflow-x: auto;
 }
 
-.strip-label {
-  flex: none;
-  font-size: 12px;
-  color: var(--ink-faint);
-  border-right: 1px solid var(--line-strong);
-  padding-right: 10px;
+.article-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.case-tab {
-  flex: none;
+/* 领域下拉 */
+.domain-select {
+  position: relative;
+}
+
+.domain-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: var(--paper-soft);
   border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 4px 14px;
+  border-radius: 6px;
+  padding: 5px 12px;
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--ink-soft);
-  white-space: nowrap;
 }
 
-.case-tab:hover {
+.domain-trigger:hover {
   border-color: var(--line-strong);
 }
 
-.case-tab-active {
+.domain-trigger-label {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.domain-trigger-value {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.domain-trigger-caret {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+
+.domain-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 220px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
   background: var(--paper);
-  border-color: var(--accent);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+.domain-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.domain-item:hover {
+  background: var(--paper-soft);
+}
+
+.domain-item-active {
   color: var(--accent);
   font-weight: 600;
+  background: var(--paper-soft);
+}
+
+.domain-item-note {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+/* 方向切换（中译英 / 英译中） */
+.dir-switch {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--paper-soft);
+}
+
+.dir-btn {
+  background: none;
+  border: none;
+  padding: 5px 18px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.dir-btn:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.dir-btn:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.dir-btn-active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ── 选文章的卡片 ─────────────────────────────────── */
+
+.article-cards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.article-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.article-card:hover {
+  border-color: var(--accent);
+}
+
+.article-card-active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.article-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+.article-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.article-card-source {
+  color: var(--ink-soft);
+}
+
+/* 篇幅不符赛制区间时标出来——用户据此判断这题值不值得练 */
+.article-card-units-off {
+  color: #b06a00;
 }
 
 /* ── 四栏 2×2：左上原文 / 右上译文 / 左下计分 / 右下批注 ──── */
