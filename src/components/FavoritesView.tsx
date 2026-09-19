@@ -1,5 +1,6 @@
+import type { JSX } from 'react'
 import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
-import { MARK_COLOR_VALUE } from '../domain/color'
+import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 import type { Favorite } from '../domain/favorites'
 
 interface Props {
@@ -9,11 +10,35 @@ interface Props {
 }
 
 /**
+ * 一句话，其中**这一处改动**用相应颜色标出来。
+ *
+ * 只标这一处：同一句里别的错误一律不上色——收藏是"我要记这一处"，
+ * 整句都花掉就没了重点。上色用的是与译文上同一套荧光笔底色 + 同色文字。
+ */
+function withHighlight(favorite: Favorite, text: string): JSX.Element {
+  const start = Math.max(0, Math.min(favorite.colorStart, text.length))
+  const end = Math.max(start, Math.min(favorite.colorEnd, text.length))
+  if (end <= start) return <>{text}</>
+  return (
+    <>
+      {text.slice(0, start)}
+      <span
+        className="fav-hi"
+        style={{ background: MARK_BG_VALUE[favorite.color], color: MARK_COLOR_VALUE[favorite.color] }}
+      >
+        {text.slice(start, end)}
+      </span>
+      {text.slice(end)}
+    </>
+  )
+}
+
+/**
  * 收藏页。
  *
  * 与「练习记录」不同：这里**不是**按次存档，而是用户自己挑出来的句子——
- * 所以每条都把「改前 / 改后 / 为什么」和**它所在的那一整句**一起摊开，
- * 一屏能扫过去，不用点开。做题时点一下卡片下方的「收藏」就会进来。
+ * 所以每条都把**修改前的整句**与**修改后的整句**都摊开，一屏能扫过去，不用点开；
+ * 改后那句里只给这一处上色，别的错误不上色，重点就是这一处。
  */
 export function FavoritesView({ favorites, onRemove, onClear }: Props) {
   return (
@@ -58,23 +83,22 @@ export function FavoritesView({ favorites, onRemove, onClear }: Props) {
                   </button>
                 </div>
 
-                {favorite.sentence && <p className="fav-sentence">{favorite.sentence}</p>}
-
-                <p className="fav-change">
-                  {favorite.from && (
-                    <>
-                      <span className="fav-label">{favorite.fromLabel}</span>
-                      <span className="fav-from">{favorite.from}</span>
-                    </>
-                  )}
-                  {favorite.from && favorite.to && <span className="fav-arrow">→</span>}
-                  {favorite.to && (
-                    <>
-                      {favorite.from && <span className="fav-label">{favorite.toLabel}</span>}
-                      <span className="fav-to">{favorite.to}</span>
-                    </>
-                  )}
-                </p>
+                {favorite.sentenceBefore && (
+                  <p className="fav-sentence">
+                    <span className="fav-label">改前</span>
+                    {favorite.colorOn === 'before'
+                      ? withHighlight(favorite, favorite.sentenceBefore)
+                      : favorite.sentenceBefore}
+                  </p>
+                )}
+                {favorite.sentenceAfter && favorite.sentenceAfter !== favorite.sentenceBefore && (
+                  <p className="fav-sentence fav-sentence-after">
+                    <span className="fav-label">改后</span>
+                    {favorite.colorOn === 'after'
+                      ? withHighlight(favorite, favorite.sentenceAfter)
+                      : favorite.sentenceAfter}
+                  </p>
+                )}
 
                 <p className="fav-why">{favorite.why}</p>
               </li>

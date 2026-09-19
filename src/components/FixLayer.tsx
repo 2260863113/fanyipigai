@@ -196,36 +196,15 @@ interface Entry {
 }
 
 /**
- * 撑宽的分法：把"补写内容比带子宽出来的那部分"分到左右两边去。
- *
- * 优先左右各一半（看着最自然），但**不能把那一行顶得重新折行**：
- * 加在左边的空档会把被改内容自己往后推，推过头它就换行、甚至整块挪到下一行
- * （实测踩过：549px 栏宽下加 228px 左空档，整处被改内容从两行被顶成一整行、整块挪到下一行）。
- * 所以哪一边本来就没多少地方，就少给它一点、多给另一边。
- * 两边的余地都不够时左边的空档仍会超出余量（`first = extra - last`）——
- * 那种情况下被改内容会多折一行，这是"荧光必须与补写内容等宽"换来的。
- */
-function spread(extra: number, leftRoom: number, rightRoom: number): { first: number; last: number } {
-  const room = (value: number): number => Math.max(0, value)
-  let first = Math.min(Math.max(extra / 2, 0), room(leftRoom))
-  let last = extra - first
-  if (last > rightRoom) {
-    last = room(rightRoom)
-    first = Math.min(extra - last, room(leftRoom))
-  }
-  return { first: room(first), last: room(last) }
-}
-
-/**
  * 填补内容层。
  *
  * 为什么单独成层：正确写法要画成互不覆盖的方框，而方框的宽高只有渲染出来才知道，
  * 所以必须"先渲染在文字流之外量一次、再摆位置"。
  *
- * 一条约定：**批注不改变译文本身的排版**。方框是绝对定位的，根本不占行内宽度；
- * "两边加空档把被改内容撑到与补写的字等宽"这一步看着像是在动排版，其实不然——
- * 空档一定配着等量的**负 margin**，外边距盒的宽度分毫不变（详见 applyPad）。
- * 于是文字怎么排还怎么排，只是底色那条带子长到了该有的宽度。
+ * 一条约定：**补写内容去适配被改内容，而不是反过来**。
+ * 荧光带只比被改内容宽出左右各 2 个空格（见第 6 步），补写内容限宽到那条带子再左右各缩 2 个空格，
+ * 放不下就在词与词之间折行（见第 8 步）——"任意相邻两个单词都能断开"就是这么做出来的。
+ * 撑宽那一小段空档是真占地方的（相邻文字会被推开），但它只有 8–9px，整段排版几乎不动。
  *
  * 一次测量分七步，**顺序不能换**：
  *   1. 先清掉上一轮加的空档与空位宽度；
@@ -367,29 +346,45 @@ export function FixLayer({
     const probe = document.createElement('div')
     probe.className = 'fix-layer fix-layer-probe'
     container.appendChild(probe)
-    const measure = (text: string): { width: number; height: number; flowsOver: boolean } => {
+    /**
+     * 量一段补写内容的尺寸。
+     *
+     * `cap` 给了就**限宽并允许折行**（词与词之间随便断）：补写内容一律在"被改内容那么宽"的框里排，
+     * 排不下就自己往下折，绝不把荧光带撑宽——这是用户明确要的（见文件头那段）。
+     * 不给 cap 就是量"一行排完要多少宽度"，用来量那块插入空位与一个空格的宽度。
+     */
+    const measure = (text: string, cap = 0): { width: number; height: number } => {
       const node = document.createElement('span')
       node.className = 'fix-text'
       node.textContent = text
-      probe.appendChild(node)
-      const flowsOver = node.getBoundingClientRect().width > available
-      if (flowsOver) {
+      if (cap > 0) {
         node.style.whiteSpace = 'normal'
-        node.style.maxWidth = `${available}px`
+        node.style.maxWidth = `${cap}px`
       }
+      probe.appendChild(node)
       const rect = node.getBoundingClientRect()
       probe.removeChild(node)
-      return { width: rect.width, height: rect.height, flowsOver }
+      return { width: rect.width, height: rect.height }
     }
     for (const entry of entries) {
       const full = measure(entry.item.text)
       entry.fullWidth = full.width
       entry.fullHeight = full.height
-      // 默认只有一段：整句就是那一段（跨行且补写更宽时下面会重新拆）
+      // 默认只有一段：整句就是那一段（跨行时下面会重新拆）
       entry.partWidths = [full.width]
       entry.partHeights = [full.height]
-      entry.partFlows = [full.flowsOver]
+      entry.partFlows = [false]
     }
+    /*
+     * 一个空格有多宽（按补写字号量）。撑宽与内缩都以"空格"为单位：
+     * 用户要的是"荧光带比被改内容左右各宽 2 个空格"、"补写内容再往带子里缩"。
+     *
+     * 不能直接量一个空格：块级盒子里行首行尾的空白会被丢掉，量出来是 0。
+     * 拿 "x x" 减 "xx" 才是那个空格真正的宽度。
+     */
+    const spaceWidth = Math.max(1, measure('x x').width - measure('xx').width)
+    /** 左右各 2 个空格的宽度：荧光带的呼吸量 */
+    const GUTTER = spaceWidth * 2
 
     /*
      * 3. 插入点：译文上那块荧光笔空位的宽度，与上方补写内容的宽度分毫不差。
@@ -455,44 +450,16 @@ export function FixLayer({
     }
 
     /*
-     * 先把"这一摞需要多少竖直空间"报上去：正文会据此加大行间距（这样方框压在上一行文字上的问题
-     * 从根上消失），同时顶部也留出同样多的空白给第一行。
+     * 6. 荧光带只比被改内容宽出**左右各 2 个空格**（padding）。
      *
-     * 只比手上这份多才再要一次——否则在测不出真实排版的环境里
-     * （坐标不随样式变化）会陷在"要空间 → 重新量 → 还要空间"里出不来。
-     * 这一步在"加空档"之前：撑多宽不影响这一摞有多高（量的是方框到它自己那一行的距离，
-     * 行被推到哪儿都不改变这个差值）。
-     */
-    const estimate = buildPlan((entry) => (entry.rows.length === entry.parts.length ? entry.rows : null)).inputs
-    const placements = placeFixBoxes(estimate, containerWidth)
-    let needAbove = 0
-    for (const input of estimate) {
-      const placement = placements.find((candidate) => candidate.id === input.id)
-      if (!placement) continue
-      needAbove = Math.max(needAbove, input.anchorTop - placement.top)
-    }
-    // 只算竖直方向需要的量：EDGE_PADDING 是左右留白，加到行间距里会白白撑开一大截
-    needAbove = Math.ceil(needAbove)
-    if (needAbove > grantedSpace) {
-      // 提前退出前必须把量尺寸用的副本摘掉，否则它会留在译文栏里、下一轮再挂一个
-      probe.remove()
-      onNeedSpace(needAbove)
-      return
-    }
-
-    /*
-     * 6. 让被改内容的宽度与上方补写的字齐平：**在两边各加一段真空档**（padding）。
+     * 这一段是这一轮改掉的核心：以前是"补写内容多宽，荧光就撑多宽"，
+     * 于是补写内容一长（重写常见），带子就变成一条横贯半行的大色块，把相邻文字推得老远；
+     * 用户要的是反过来——**带子贴着被改内容**（左右各留 2 个空格当呼吸），
+     * 补写内容排不下就自己往下折（见 measure 的 cap 与第 8 步）。
      *
-     * 为什么不碰字与字之间的间距：词间距一拉就成了 `i  is`、字间距一拉就成了 `b e c a m e`，
-     * 读起来散架，荧光笔底色还会跟着裂开。两边加空档则内外分明：文字本身怎么排还怎么排，
-     * 多出来的宽度全在两头——**而且那是真的占地方**，相邻的文字会被推到带子的左右两侧去，
-     * 这正是"荧光区域里只能有被改内容"的做法。
-     *
-     * 代价是整段会跟着重新折行（补写的字越长，推得越多）。这是明确选定的取舍：
-     * 另一种做法是原文一个字都不动、让补写内容自己折行去适配原文，用户要的是撑宽这一条。
-     *
-     * 空档只加在**有文字**的锚点上：插入点自己就是一块量好宽度的空位，没有"内容"可撑开；
-     * 已经宽到要自己折行的方框也不加（它自己都不是一行了，无从等宽）。
+     * 空档是真占地方的：相邻的文字会被推到带子的左右两侧去，
+     * 这正是"荧光区域里只有被改内容"的做法。空档只有 6–7px，整段排版几乎不动。
+     * 插入点不加：它自己就是一块量好宽度的空位，没有"内容"可撑开。
      */
     const applyPad = (entry: Entry): void => {
       const style = entry.element.style
@@ -501,27 +468,10 @@ export function FixLayer({
     }
 
     for (const entry of entries) {
-      if (entry.isInsert || !entry.hasText) continue
-      if (entry.partFlows.some((flows) => flows)) continue
-      // 天然宽度取"撑开前"量到的那一份：这轮开头刚把空档清掉，量到的就是真身
-      const natural = entry.bands.reduce((sum, band) => sum + band.width, 0)
-      const surplus = entry.fullWidth - natural
-      if (surplus <= 1) continue
-      const firstRow = entry.rows[0]
-      const lastRow = entry.rows[entry.rows.length - 1]
-      if (!firstRow || !lastRow) continue
-      /*
-       * 每一行还剩多少地方可以吃下空档。
-       * 左边的空档会把被改内容**自己**往后推，推过头它就换行、甚至整块挪到下一行
-       * （实测踩过：549px 栏宽下加 228px 左空档，整处被改内容从两行被顶成一整行、整块挪到下一行），
-       * 所以先紧着"这一行还放得下"的那一侧给。
-       */
-      const roomFirst = Math.max(0, containerWidth - (firstRow.left + firstRow.width))
-      const roomLast = Math.max(0, containerWidth - (lastRow.left + lastRow.width))
-      const pads = spread(surplus, roomFirst, roomLast)
-      entry.padFirst = pads.first
-      entry.padLast = pads.last
-      if (entry.padFirst > 0 || entry.padLast > 0) applyPad(entry)
+      if (entry.isInsert || !entry.hasText || entry.rows.length === 0) continue
+      entry.padFirst = GUTTER
+      entry.padLast = GUTTER
+      applyPad(entry)
     }
 
     /*
@@ -537,32 +487,48 @@ export function FixLayer({
       entry.bands = fragmentRects(entry.element, base)
     }
 
-    /*
-     * 8. 补写内容跟随原译文换行：被改内容跨行、且补写的字**比它宽**时，
-     *    按**最终各行带子的宽度占比**把补写的字切开，一段对一行。
+    /**
+     * 第 i 段能有多宽：这一行带子的宽度，再**扣掉合计 2 个空格**（左右各让出 1 个）。
      *
-     *    只有"更宽"才拆：补写的字更短时撑不开原文，上下也就无从对齐，
-     *    这时仍旧是一个方框居中于最宽那一行（与单行时同一套做法）。
-     *    断点只落在词与词之间——词内部一旦断开，读起来就不是句子了。
+     * 为什么不按"左右各 2 个空格"扣：那样连 `I am` 这种四个字符的短改动都会被硬拆成两行
+     * （实测 `i is → I am` 真的折成了 `I` / `am`）。合计 2 个空格既能保证补写内容不贴住带子边缘，
+     * 又不会把短改动拆散；长短两种情形都量过（见 README）。
+     */
+    const capFor = (entry: Entry, index: number): number => {
+      const band = entry.bands[index] ?? entry.bands[entry.bands.length - 1]
+      const cap = (band?.width ?? 0) - GUTTER
+      return Math.max(24, Math.min(cap, available))
+    }
+
+    /*
+     * 8. 补写内容排进这一行那么宽的框里，**词与词之间随便断**（词内部不拆）。
+     *
+     *    被改内容跨行、且整句一行放不进最宽那一行时，按各行的带子宽度占比把它切成几段，
+     *    一段对一行；每段再各自限宽（本行带子宽 − 左右各 2 个空格），放不下就继续往下折。
+     *    于是"跟随原译文换行"与"任意相邻两个词都能断"同时成立——正是用户这两条要求。
      */
     const measureParts = (entry: Entry, parts: string[]): void => {
       entry.parts = parts
       entry.partWidths = []
       entry.partHeights = []
       entry.partFlows = []
-      for (const part of parts) {
-        const size = measure(part)
+      parts.forEach((part, index) => {
+        const size = measure(part, capFor(entry, index))
         entry.partWidths.push(size.width)
         entry.partHeights.push(size.height)
-        entry.partFlows.push(size.flowsOver)
-      }
+        entry.partFlows.push(size.width >= capFor(entry, index) - 0.5)
+      })
     }
 
     for (const entry of entries) {
-      if (entry.isInsert || entry.rows.length < 2) continue
+      if (entry.isInsert) continue
+      // 单行：整句就一段，限宽后自己折行；跨行：按行切段（下面这段）
+      if (entry.rows.length < 2 || entry.parts.length > 1) continue
       const bands = entry.bands
       if (bands.length !== entry.rows.length) continue
-      if (entry.fullWidth <= bands.reduce((sum, band) => sum + band.width, 0)) continue
+      // 一行放得下就不切：切了反而会把词硬分到两行去
+      const widest = bands.reduce((best, band) => Math.max(best, band.width - GUTTER * 2), 0)
+      if (entry.fullWidth <= widest) continue
       const words = entry.item.text.split(/\s+/).filter(Boolean)
       if (words.length < 2) continue
       const prefix: number[] = [0]
@@ -585,7 +551,45 @@ export function FixLayer({
         .filter((part) => part.length > 0)
       if (parts.length > 1) measureParts(entry, parts)
     }
+
+    /*
+     * 没切开的那几处（单行、或一行就放得下）：整句按"最宽那条带子减左右各 2 个空格"限宽量一次，
+     * 放不下就在词与词之间折行——这就是"任意相邻两个单词都可以自由断开"。
+     */
+    for (const entry of entries) {
+      if (entry.isInsert || entry.parts.length > 1) continue
+      const widest = entry.bands.reduce((best, band, index) => (band.width > (entry.bands[best]?.width ?? 0) ? index : best), 0)
+      const cap = capFor(entry, widest)
+      const size = measure(entry.item.text, cap)
+      entry.partWidths = [size.width]
+      entry.partHeights = [size.height]
+      entry.partFlows = [size.width >= cap - 0.5]
+    }
     probe.remove()
+
+    /*
+     * 先把"这一摞需要多少竖直空间"报上去：正文会据此加大行间距（方框压在上一行文字上的问题
+     * 从根上消失），同时顶部也留出同样多的空白给第一行。
+     *
+     * **必须在限宽折行量完之后**：补写内容折成两三行时方框会高一倍，
+     * 早算一步就会按"一行"去要空间，方框于是顶出栏外、或者压到上一行去（实测踩过）。
+     * 只比手上这份多才再要一次——否则在测不出真实排版的环境里
+     * （坐标不随样式变化）会陷在"要空间 → 重新量 → 还要空间"里出不来。
+     */
+    const estimate = buildPlan((entry) => (entry.rows.length === entry.parts.length ? entry.rows : null)).inputs
+    const placements = placeFixBoxes(estimate, containerWidth)
+    let needAbove = 0
+    for (const input of estimate) {
+      const placement = placements.find((candidate) => candidate.id === input.id)
+      if (!placement) continue
+      needAbove = Math.max(needAbove, input.anchorTop - placement.top)
+    }
+    // 只算竖直方向需要的量：EDGE_PADDING 是左右留白，加到行间距里会白白撑开一大截
+    needAbove = Math.ceil(needAbove)
+    if (needAbove > grantedSpace) {
+      onNeedSpace(needAbove)
+      return
+    }
 
     /*
      * 9. 摆位置。多段：每段的锚点取**那一行画出来的带子**，于是每一段都正对在自己那一行的上方。
@@ -626,7 +630,7 @@ export function FixLayer({
 
   return (
     <div className="fix-layer" aria-hidden={false}>
-      {boxes.map(({ key, item, text, placement, width, flowsOver }) => (
+      {boxes.map(({ key, item, text, placement, width }) => (
         <span
           key={key}
           className="fix-text"
@@ -639,8 +643,12 @@ export function FixLayer({
             left: placement.left,
             top: placement.top,
             color: item.color,
-            // 放不下的那些才限宽折行（安全阀），其余永远一行
-            ...(flowsOver ? { maxWidth: width, whiteSpace: 'normal' as const } : null),
+            /*
+             * 一律限宽到"被改内容那么宽"并允许折行：宽了就在词与词之间断开，
+             * 绝不把荧光带撑宽（见文件头那段与第 6、8 步）。
+             */
+            maxWidth: width,
+            whiteSpace: 'normal',
           }}
           title="点击查看这一处的说明"
           onClick={() => onSelect({ kind: 'error', id: item.errorId })}

@@ -486,12 +486,23 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         it.firstBubbleHtml.slice(0, 160),
       )
       // 收藏：点卡片下方那颗按钮 → 文案变「已收藏」→ 内容存进浏览器
+      check(
+        it.firstBubbleHtml.length > 0 && !it.firstBubbleHtml.includes('ann-bubble-change'),
+        '小卡片里不再抄一遍「某某 → 某某」（译文上本来就画着）',
+        it.firstBubbleHtml.slice(0, 160),
+      )
       check(it.firstFavoriteButton === '收藏', `卡片下方有「收藏」按钮（实际「${it.firstFavoriteButton}」）`)
       check(it.favoriteButtonAfterClick === '已收藏', '点过之后按钮变成「已收藏」')
+      const stored = it.favoriteStored[0]
       check(
-        it.favoriteStored.length === 1 && Boolean(it.favoriteStored[0]?.why) && Boolean(it.favoriteStored[0]?.sentence),
-        `收藏里存下了改前/改后/原因/所在的整句（${it.favoriteStored.length} 条）`,
-        JSON.stringify(it.favoriteStored[0] ?? {}).slice(0, 200),
+        it.favoriteStored.length === 1 && Boolean(stored?.why) && Boolean(stored?.sentenceBefore) && Boolean(stored?.sentenceAfter),
+        `收藏里存下了改前整句 / 改后整句 / 原因（${it.favoriteStored.length} 条）`,
+        JSON.stringify(stored ?? {}).slice(0, 240),
+      )
+      check(
+        (stored?.colorEnd ?? 0) > (stored?.colorStart ?? 0) && (stored?.colorOn === 'after' || stored?.colorOn === 'before'),
+        '收藏里记下了"给哪一句的哪一段上色"（只标这一处）',
+        `${stored?.colorOn} ${stored?.colorStart}–${stored?.colorEnd}`,
       )
     }
 
@@ -835,9 +846,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       check(records.record.manualAfterDrag, '拖过之后按拖出来的比例分（split-manual）')
       check(records.record.autoAfterDoubleClick, '双击分隔条恢复自动')
       check(
-        (records.record.favoritesCount ?? 0) >= 1 && (records.record.favoritesText ?? '').includes('改成'),
-        `「收藏」那一栏里看得到刚才收藏的那一条（${records.record.favoritesCount ?? 0} 条）`,
-        (records.record.favoritesText ?? '').slice(0, 160),
+        (records.record.favoritesCount ?? 0) >= 1 &&
+          (records.record.favoritesText ?? '').includes('改前') &&
+          (records.record.favoritesText ?? '').includes('改后'),
+        `「收藏」那一栏里看得到刚才收藏的那一条（改前 / 改后整句都在，${records.record.favoritesCount ?? 0} 条）`,
+        (records.record.favoritesText ?? '').slice(0, 200),
       )
     }
     records.restore()

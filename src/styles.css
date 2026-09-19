@@ -288,13 +288,18 @@ button {
 /*
  * 手动模式：用户拖过之后，按他定的比例分（--col-left/-right、--row-top/-bottom）。
  * 这时候不再按内容让位，最小/最大高度限制也一并放开——手动调过就以手动为准。
+ *
+ * 子选择器（`>`）不能省：练习记录页里是**嵌套**的两层 split，
+ * 写成后代选择器时外层那套列模板会漏到内层的两栏上去——内层只有两个 pane，
+ * 却被按"两栏 + 8px 分隔条"三列去排，于是译文那一栏被塞进 8px 那一列，
+ * 表现就是"拖动分隔条之后译文每行只剩一个字符"（实际踩过这个坑）。
  */
 .split-manual {
   display: grid;
   grid-template-rows: minmax(0, var(--row-top)) 8px minmax(0, var(--row-bottom));
 }
 
-.split-manual .split-row {
+.split-manual > .split-row {
   display: grid;
   grid-template-columns: minmax(0, var(--col-left)) 8px minmax(0, var(--col-right));
   flex: none;
@@ -302,7 +307,7 @@ button {
   min-height: 0;
 }
 
-.split-manual .split-row > .pane {
+.split-manual > .split-row > .pane {
   min-height: 0;
 }
 
@@ -1089,26 +1094,16 @@ button {
   color: var(--ink-soft);
 }
 
-.ann-bubble-change {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  flex-wrap: wrap;
-}
-
-.ann-bubble-from {
-  color: var(--ink-faint);
-  text-decoration: line-through;
-}
-
-.ann-bubble-arrow-text {
+.ann-bubble-order {
+  margin-left: auto;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 
-.ann-bubble-to {
-  font-family: var(--serif);
-}
-
+/*
+ * 卡片里**不再**显示「某某 → 某某」：改前改后本来就画在译文上（荧光带 + 上方小字），
+ * 再抄一遍只是占地方。所以 .ann-bubble-change / -from / -to / -arrow-text 这几条规则已经删掉。
+ */
 .ann-bubble-why {
   color: var(--ink-soft);
 }
@@ -1371,40 +1366,37 @@ button {
   margin-left: auto;
 }
 
-/* 被改的那句话：收藏的价值主要在这儿，排得比别的显眼一点 */
+/*
+ * 收藏里的两句话：**改前**与**改后**各一行。
+ * 改后那句里只有"这一处"上色（.fav-hi，与译文上同一套荧光笔底色），
+ * 同一句里别的错误一律不标——收藏的重点就是这一处。
+ */
 .fav-sentence {
   margin: 8px 0 0;
   font-family: var(--serif);
   font-size: 16px;
   line-height: 1.75;
   color: var(--ink);
-}
-
-.fav-change {
-  margin: 8px 0 0;
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  flex-wrap: wrap;
-  font-family: var(--serif);
-  font-size: 15px;
-  line-height: 1.7;
+  gap: 8px;
 }
 
+.fav-sentence-after {
+  color: var(--ink);
+}
+
+/* 「改前 / 改后」两个小标签 */
 .fav-label {
+  flex: none;
   font-family: var(--sans);
   font-size: 11.5px;
   color: var(--ink-faint);
 }
 
-.fav-from {
-  text-decoration: line-through;
-  text-decoration-thickness: 1.5px;
-  color: var(--ink-soft);
-}
-
-.fav-arrow {
-  color: var(--ink-faint);
+.fav-hi {
+  border-radius: 2px;
+  padding: 0 2px;
 }
 
 .fav-why {
@@ -1522,7 +1514,7 @@ button {
     display: flex;
   }
 
-  .split-manual .split-row {
+  .split-manual > .split-row {
     display: flex;
   }
 

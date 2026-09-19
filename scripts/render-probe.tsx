@@ -54,7 +54,16 @@ export interface RenderProbe {
     firstFavoriteButton: string
     favoriteButtonAfterClick: string
     /** 点「收藏」之后浏览器里存下来的那几条 */
-    favoriteStored: Array<{ from?: string; to?: string; why?: string; sentence?: string }>
+    favoriteStored: Array<{
+      from?: string
+      to?: string
+      why?: string
+      sentenceBefore?: string
+      sentenceAfter?: string
+      colorOn?: string
+      colorStart?: number
+      colorEnd?: number
+    }>
     secondMark: string
     secondNotes: string
     secondBubble: string

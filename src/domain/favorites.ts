@@ -33,8 +33,17 @@ export interface Favorite {
   typeLabel: string
   categoryLabel: string
   color: MarkColor
-  /** 这一处所在的那一整句 */
-  sentence: string
+  /** 修改前的整句 */
+  sentenceBefore: string
+  /** 修改后的整句（把这一处的改法应用上去之后的整句） */
+  sentenceAfter: string
+  /**
+   * 上色范围：在 `sentenceAfter` 上（纯删除时改标在 `sentenceBefore` 上，因为它没有"改后"的内容可标）。
+   * 只给**这一处**上色——同一句里别的错误一律不标，重点突出的是这一处。
+   */
+  colorOn: 'before' | 'after'
+  colorStart: number
+  colorEnd: number
   /** 当时是哪道题 */
   exerciseId: string
   mode: Mode
@@ -43,13 +52,13 @@ export interface Favorite {
 }
 
 /**
- * 取"这一处所在的那一整句"。
+ * 取"这一处所在的那一整句"在原文里的区间。
  *
  * 从错误区间往两边扩到句末标点或换行为止，并把句末标点带上——不这么扩的话，
- * 界面上的收藏就只剩两个词，回头根本看不出上下文。
+ * 收藏里就只剩两个词，回头根本看不出上下文。
  * 英文句点要跟着空格或结尾才算断句，免得把 `e.g.` 这种切碎。
  */
-export function sentenceAround(answer: string, start: number, end: number): string {
+export function sentenceRange(answer: string, start: number, end: number): { from: number; to: number } {
   const boundary = (index: number): boolean => {
     const char = answer[index] ?? ''
     if (/[。！？!?…\n]/.test(char)) return true
@@ -57,12 +66,41 @@ export function sentenceAround(answer: string, start: number, end: number): stri
     const next = answer[index + 1] ?? ''
     return next === '' || /\s/.test(next)
   }
-  let from = Math.max(0, start)
+  let from = Math.max(0, Math.min(start, answer.length))
   while (from > 0 && !boundary(from - 1)) from -= 1
   let to = Math.max(from, Math.min(answer.length, end))
   while (to < answer.length && !boundary(to)) to += 1
   if (to < answer.length) to += 1
-  return answer.slice(from, to).trim()
+  return { from, to }
+}
+
+/** 取"这一处所在的那一整句"（只要文字）。 */
+export function sentenceAround(answer: string, start: number, end: number): string {
+  const range = sentenceRange(answer, start, end)
+  return answer.slice(range.from, range.to).trim()
+}
+
+/**
+ * 收藏里要的两句话：**修改前的整句**与**修改后的整句**。
+ *
+ * 改后的整句＝把这一处的改法（`span` 换成 `to`）应用上去之后的同一句。
+ * 上色范围跟着算出来：有插入/替换内容就标在改后那句话上；纯删除没东西可标，改标在改前那句话上。
+ */
+export function sentencePair(
+  answer: string,
+  span: { start: number; end: number },
+  to: string,
+): { before: string; after: string; colorOn: 'before' | 'after'; colorStart: number; colorEnd: number } {
+  const range = sentenceRange(answer, span.start, span.end)
+  const before = answer.slice(range.from, range.to)
+  const from = Math.max(0, Math.min(span.start - range.from, before.length))
+  const to_ = Math.max(from, Math.min(span.end - range.from, before.length))
+  const after = `${before.slice(0, from)}${to}${before.slice(to_)}`
+  if (to.length === 0) {
+    // 纯删除：改后那句里没有"新内容"，就把被删掉的那一截标在改前那句上
+    return { before, after, colorOn: 'before', colorStart: from, colorEnd: to_ }
+  }
+  return { before, after, colorOn: 'after', colorStart: from, colorEnd: from + to.length }
 }
 
 /** 把「选中的那一处 + 当时那道题」整理成一条收藏。 */
@@ -84,6 +122,7 @@ export function favoriteOf(input: {
   now?: Date
 }): Favorite {
   const createdAt = (input.now ?? new Date()).toISOString()
+  const sentences = sentencePair(input.answer, input.span, input.summary.to)
   return {
     id: `fav-${input.context.exerciseId}-${input.summary.key}`,
     createdAt,
@@ -96,7 +135,11 @@ export function favoriteOf(input: {
     typeLabel: input.summary.typeLabel,
     categoryLabel: input.summary.categoryLabel,
     color: input.summary.color,
-    sentence: sentenceAround(input.answer, input.span.start, input.span.end),
+    sentenceBefore: sentences.before,
+    sentenceAfter: sentences.after,
+    colorOn: sentences.colorOn,
+    colorStart: sentences.colorStart,
+    colorEnd: sentences.colorEnd,
     exerciseId: input.context.exerciseId,
     mode: input.context.mode,
     direction: input.context.direction,

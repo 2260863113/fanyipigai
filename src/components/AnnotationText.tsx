@@ -498,18 +498,12 @@ export function AnnotationText({
               {bubble.summary.typeLabel}
             </span>
             <span className="ann-bubble-cat">{bubble.summary.categoryLabel}</span>
+            <span className="ann-bubble-order">第 {bubble.summary.order} 处</span>
           </span>
-          {(bubble.summary.from || bubble.summary.to) && (
-            <span className="ann-bubble-change">
-              {bubble.summary.from && <span className="ann-bubble-from">{bubble.summary.from}</span>}
-              {bubble.summary.from && bubble.summary.to && <span className="ann-bubble-arrow-text">→</span>}
-              {bubble.summary.to && (
-                <span className="ann-bubble-to" style={{ color: MARK_COLOR_VALUE[bubble.summary.color] }}>
-                  {bubble.summary.to}
-                </span>
-              )}
-            </span>
-          )}
+          {/*
+            这里**不写**"某某 → 某某"：改前改后本来就画在译文上（荧光带 + 上方小字），
+            卡片再抄一遍反而占地方。卡片只说"这是什么问题、为什么"，完整说明在右下角。
+          */}
           <span className="ann-bubble-why">{withSemicolonBreaks(bubble.summary.why)}</span>
           <span className="ann-bubble-more">完整说明见右下角</span>
         </div>

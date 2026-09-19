@@ -222,6 +222,13 @@ const MEASURE = `(() => {
           leftDelta: fragment ? +(left - fragment.left).toFixed(2) : null,
           rightDelta: fragment ? +((left + br.width) - (fragment.left + fragment.width)).toFixed(2) : null,
           widthDelta: fragment ? +(br.width - fragment.width).toFixed(2) : null,
+          /**
+           * 方框边缘离带子边缘有多远。
+           * 现在方框**本来就该比带子窄**（补写内容要往带子里缩），所以这两个数是正数才对；
+           * 负数＝方框越出带子（那才是问题）。两者之差＝有没有居中。
+           */
+          insetLeft: fragment ? +(left - fragment.left).toFixed(2) : null,
+          insetRight: fragment ? +((fragment.left + fragment.width) - (left + br.width)).toFixed(2) : null,
           // 这一段的上边到**上一行内容盒底边**还有多少：负数说明压在上一行的字上
           clearAbove: above ? +(top - (above.top + above.height)).toFixed(2) : null,
           font: style.fontSize + '/' + style.lineHeight,
@@ -658,24 +665,27 @@ function report(label, data) {
         `      · 第 ${part.part + 1} 段 ${JSON.stringify(part.text)}\n` +
           `        方框 左${part.left} 上${part.top} 宽${part.width} 高${part.height}（字号 ${part.font}）\n` +
           `        对应带子 左${part.bandLeft} 上${part.bandTop} 宽${part.bandWidth}\n` +
-          `        左偏差 ${part.leftDelta}px ｜ 右偏差 ${part.rightDelta}px ｜ 宽度差 ${part.widthDelta}px ｜ ` +
-          `上一行内容盒下的余量 ${part.clearAbove === null ? '—' : part.clearAbove + 'px'}` +
+          `        离带子边缘 左 ${part.insetLeft}px / 右 ${part.insetRight}px（都应为正：方框比带子窄）｜ ` +
+          `宽度差 ${part.widthDelta}px ｜ 上一行内容盒下的余量 ${part.clearAbove === null ? '—' : part.clearAbove + 'px'}` +
           (inkGap === null ? '' : ` ｜ 墨迹间隔 ${inkGap}px`),
       )
     }
     const hasText = (pair.anchorText ?? '').trim() !== ''
     if (hasText) {
       for (const part of pair.parts) {
-        worst = Math.max(worst, Math.abs(part.leftDelta ?? 0))
-        worstEdge = Math.max(worstEdge, Math.abs(part.rightDelta ?? 0))
+        const left = part.insetLeft ?? 0
+        const right = part.insetRight ?? 0
+        // 方框越出带子（负数）才算问题；两者之差是居中误差
+        worst = Math.max(worst, Math.max(0, -left), Math.max(0, -right))
+        worstEdge = Math.max(worstEdge, Math.abs(left - right))
         worstBand = Math.max(worstBand, Math.abs(part.widthDelta ?? 0))
       }
     }
   }
   /*
-   * "被栏边顶回来"：方框被顶到栏的边上、因而没法与下面的带子对齐。
-   * 判据不能只看"中心离栏边近不近"——补写的字更长时，被改内容两边加出来的空档
-   * 本来就会把带子顶到栏边，那是正常居中，不是顶回来。
+   * 小结口径：
+   *   - "越出带子"应当是 0（补写内容该比带子窄，而不是压出去）；
+   *   - "居中误差"是方框左右留白之差，应当很小（差得多说明没居中）。
    */
   let offByThresh = 0
   let clamped = 0
@@ -684,14 +694,16 @@ function report(label, data) {
     if ((pair.anchorText ?? '').trim() === '') continue
     if (pair.parts.length > 1) splitting += 1
     for (const part of pair.parts) {
-      if (Math.abs(part.leftDelta ?? 0) <= 0.5 && Math.abs(part.rightDelta ?? 0) <= 0.5) continue
+      const left = part.insetLeft ?? 0
+      const right = part.insetRight ?? 0
+      if (left >= -0.5 && right >= -0.5 && Math.abs(left - right) <= 1.5) continue
       offByThresh += 1
-      if (part.left <= 0.5 || part.left + part.width >= data.containerWidth - 0.5) clamped += 1
+      if ((part.left ?? 0) <= 0.5 || (part.left ?? 0) + (part.width ?? 0) >= data.containerWidth - 0.5) clamped += 1
     }
   }
   console.log(
-    `  小结：分段的有 ${splitting} 处 ｜ 最大左偏差 ${worst.toFixed(2)}px ｜ 最大右偏差 ${worstEdge.toFixed(2)}px ｜ ` +
-      `与带子的最大宽度差 ${worstBand.toFixed(2)}px ｜ 左右对不齐（>0.5px）的有 ${offByThresh} 处` +
+    `  小结：分段的有 ${splitting} 处 ｜ 最大越出带子 ${worst.toFixed(2)}px ｜ 最大居中误差 ${worstEdge.toFixed(2)}px ｜ ` +
+      `与带子的最大宽度差 ${worstBand.toFixed(2)}px ｜ 越出或明显不居中的有 ${offByThresh} 处` +
       `（其中"被栏边顶回来"的有 ${clamped} 处）`,
   )
 }
@@ -941,6 +953,98 @@ async function main() {
           ` ｜ 气泡：${item.bubble ? '出来了「' + item.bubble + '…」' : '没出来'}` +
           (item.breaks === undefined ? '' : ` ｜ 说明里的分号断行 ${item.breaks} 处`),
       )
+    }
+
+    /*
+     * 练习记录页的三条分隔条都要能拖（外层左右、右边屏里上下、以及上排的原文/译文）。
+     *
+     * 这里必须用真实浏览器量：布局是纯 CSS 的事，jsdom 不排版，量不出"拖完之后译文每行只剩一个字符"
+     * 这种毛病（那是嵌套的两层 split 共用了同一套列模板造成的）。
+     */
+    if (process.argv.includes('--records')) {
+      const openRecord = await cdp.evaluate(
+        `(async () => {
+           const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+           const tab = [...document.querySelectorAll('.mode-tab')].find((b) => b.textContent.trim() === '练习记录');
+           if (!tab) return '找不到「练习记录」标签';
+           tab.click(); await sleep(500);
+           const item = document.querySelector('.record-item');
+           if (!item) return '还没有练习记录';
+           item.click(); await sleep(600);
+           return 'ok';
+         })()`,
+      )
+      if (openRecord !== 'ok') {
+        console.log(`\n=== 练习记录页的分隔条 ===\n  跳过：${openRecord}`)
+      } else {
+        const readLayout = () =>
+          cdp.evaluate(
+            `(() => {
+               const pick = (sel) => document.querySelector(sel);
+               const width = (sel) => { const el = pick(sel); return el ? +el.getBoundingClientRect().width.toFixed(1) : null };
+               const answer = pick('.split-nested .pane-answer');
+               const lines = answer ? answer.querySelector('.annotated-lines') : null;
+               const lineHeight = lines ? getComputedStyle(lines).fontSize : null;
+               return {
+                 outerManual: (pick('.split-records')?.className || '').includes('split-manual'),
+                 nestedManual: (pick('.split-nested')?.className || '').includes('split-manual'),
+                 splitters: document.querySelectorAll('.splitter').length,
+                 sourceWidth: width('.split-nested .pane-source'),
+                 answerWidth: width('.split-nested .pane-answer'),
+                 linesWidth: lines ? +lines.getBoundingClientRect().width.toFixed(1) : null,
+                 fontSize: lineHeight,
+               };
+             })()`,
+          )
+        const drag = async (selector, dx, dy) => {
+          const spot = await cdp.evaluate(
+            `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null;
+               const r = el.getBoundingClientRect();
+               return { x: r.left + r.width / 2, y: r.top + Math.min(30, r.height / 2) }; })()`,
+          )
+          if (!spot) return false
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: spot.x, y: spot.y, button: 'left', clickCount: 1, buttons: 1 })
+          for (let step = 1; step <= 6; step += 1) {
+            await cdp.send('Input.dispatchMouseEvent', {
+              type: 'mouseMoved',
+              x: spot.x + (dx * step) / 6,
+              y: spot.y + (dy * step) / 6,
+              button: 'left',
+              buttons: 1,
+            })
+            await sleep(40)
+          }
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: spot.x + dx, y: spot.y + dy, button: 'left', buttons: 0 })
+          await sleep(500)
+          return true
+        }
+
+        const before = await readLayout()
+        const draggedOuter = await drag('.split-records > .splitter-v', 150, 0)
+        const afterOuter = await readLayout()
+        const draggedNestedV = await drag('.split-nested > .split-row > .splitter-v', -70, 0)
+        const afterNestedV = await readLayout()
+        const draggedNestedH = await drag('.split-nested > .splitter-h', 0, 50)
+        const afterNestedH = await readLayout()
+
+        console.log('\n=== 练习记录页的三条分隔条（真实浏览器） ===')
+        for (const [label, state] of [
+          ['初始', before],
+          ['拖外层左右之后', afterOuter],
+          ['再拖上排的原文/译文之后', afterNestedV],
+          ['再拖上下之后', afterNestedH],
+        ]) {
+          console.log(
+            `  ${label}：分隔条 ${state.splitters} 条 ｜ 外层手动 ${state.outerManual ? '是' : '否'} ｜ 内层手动 ${state.nestedManual ? '是' : '否'}\n` +
+              `      原文栏 ${state.sourceWidth}px ｜ 译文栏 ${state.answerWidth}px ｜ 译文文字宽 ${state.linesWidth}px（字号 ${state.fontSize}）`,
+          )
+        }
+        const bad = afterNestedV.answerWidth !== null && afterNestedV.answerWidth < 60
+        console.log(
+          `  结论：译文栏 ${afterNestedV.answerWidth}px ${bad ? '✗ 太窄了（正是"每行一个字符"那个 bug）' : '✓ 正常'} ｜ ` +
+            `三条都拖到了：${[draggedOuter, draggedNestedV, draggedNestedH].filter(Boolean).length}/3`,
+        )
+      }
     }
 
     /*

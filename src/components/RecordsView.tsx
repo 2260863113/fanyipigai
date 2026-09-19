@@ -63,10 +63,13 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
 
   /*
    * 左右两屏的边界也能拖（与练习页同一套 useSplitDrag）。
-   * 记录页只有左右两栏，所以只用得上横向那一个比例；双击分隔条恢复自动。
+   * 记录页有三条边界：外层左右、右边那一屏里上下两排、以及上排的原文/译文——
+   * 三条都各自一个实例（双层嵌套的 split 各有各的比例）。
    */
   const splitRef = useRef<HTMLElement | null>(null)
   const { split, style: splitStyle, beginDrag, resetSplit } = useSplitDrag(splitRef)
+  const nestedRef = useRef<HTMLDivElement | null>(null)
+  const nested = useSplitDrag(nestedRef)
 
   /** 当前选中那一处的收藏内容（记录页也要能收藏） */
   const favorite = openRecord
@@ -178,7 +181,11 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
             <p className="hint">从左边选一条记录，这里会显示当时的完整批改。</p>
           </div>
         ) : (
-          <div className="split split-nested">
+          <div
+            className={`split split-nested${nested.split ? ' split-manual' : ''}`}
+            ref={nestedRef}
+            style={nested.style}
+          >
             <div className="split-row split-row-top">
             <section className="pane pane-source">
               <header className="pane-head">
@@ -188,6 +195,15 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                 <p className="source-text">{source || '（未保存题干）'}</p>
               </div>
             </section>
+
+            <div
+              className="splitter splitter-v"
+              role="separator"
+              aria-orientation="vertical"
+              title="拖动调整左右宽度；双击恢复自动"
+              onPointerDown={(event) => nested.beginDrag('v', event)}
+              onDoubleClick={nested.resetSplit}
+            />
 
             <section className="pane pane-answer">
               <header className="pane-head">
@@ -207,6 +223,15 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
             </section>
 
             </div>
+
+            <div
+              className="splitter splitter-h"
+              role="separator"
+              aria-orientation="horizontal"
+              title="拖动调整上下高度；双击恢复自动"
+              onPointerDown={(event) => nested.beginDrag('h', event)}
+              onDoubleClick={nested.resetSplit}
+            />
 
             <div className="split-row split-row-bottom">
             <section className="pane pane-score">
