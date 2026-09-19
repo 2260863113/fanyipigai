@@ -45,7 +45,13 @@ const debugPort = 9231
  * 桩覆盖不到的路径：真实的响应形状、真实的失败分类、真实的耗时）。
  */
 const live = process.argv.includes('--live')
-const exerciseIds = process.argv.slice(2).filter((arg) => !arg.startsWith('--'))
+/** 只体检"已经在跑的那个服务"，不自己起：`--check-only [地址]` */
+const checkOnlyIndex = process.argv.indexOf('--check-only')
+const checkOnly = checkOnlyIndex >= 0
+const externalBase = checkOnly ? (process.argv[checkOnlyIndex + 1] ?? 'http://127.0.0.1:5180') : null
+const exerciseIds = process.argv
+  .slice(2)
+  .filter((arg) => !arg.startsWith('--') && arg !== externalBase)
 if (exerciseIds.length === 0) exerciseIds.push('article-001', 'paragraph-001', 'sentence-002', 'term-001')
 
 class Cdp {
@@ -119,7 +125,76 @@ async function waitForServer(url, timeoutMs) {
   return false
 }
 
+/**
+ * 检查一个"已经跑着的" vite 服务所吐出的模块图是否自洽。
+ *
+ * 为什么需要它：曾经出现过这种情况——源码是对的（typecheck 干净、冒烟测试全绿），
+ * 但开发服务器吐出的 `/src/components/FixLayer.tsx` 里，函数体已经是新版本、
+ * **import 头却是旧的**：正文调用 mergeRowsOnTopEdge，文件里却既没 import 也没定义它，
+ * 一进页面就 ReferenceError，React 把整棵树卸掉 → 白屏，只能刷新，而且刷新也未必好。
+ *
+ * 这属于"开发服务器缓存陈旧"，不是代码缺陷，而且很容易被误判成代码 bug
+ * （因为诊断脚本默认起一个**全新的**服务器，永远不会碰到这种陈旧状态）。
+ * 因此单独测一条：把服务端吐出的模块抓下来，检查它引用到的模块级标识符
+ * 到底有没有 import 或定义。
+ */
+async function checkServedModules(base) {
+  const problems = []
+  const targets = ['/src/components/FixLayer.tsx', '/src/components/App.tsx', '/src/components/AnswerPane.tsx']
+  for (const target of targets) {
+    let body
+    try {
+      const response = await fetch(`${base}${target}`)
+      if (!response.ok) {
+        problems.push(`${target}: HTTP ${response.status}`)
+        continue
+      }
+      body = await response.text()
+    } catch (error) {
+      problems.push(`${target}: 取不到（${error instanceof Error ? error.message : String(error)}）`)
+      continue
+    }
+
+    // 本文件自己定义/声明的名字
+    const defined = new Set()
+    for (const match of body.matchAll(/(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/g)) defined.add(match[1])
+    // 从别的模块 import 进来的名字：`const x = mod["x"]` 与 `import { x as y }` 两种形态
+    for (const match of body.matchAll(/const\s+([A-Za-z_$][\w$]*)\s*=\s*[\w$.]+\["/g)) defined.add(match[1])
+    for (const match of body.matchAll(/import\s*\{([^}]*)\}/g)) {
+      for (const piece of match[1].split(',')) {
+        const name = piece.trim().split(/\s+as\s+/).pop()?.trim()
+        if (name) defined.add(name)
+      }
+    }
+
+    for (const match of body.matchAll(/\b(mergeRowsOnTopEdge|mergeRowsOnTopEdge[A-Za-z]*)\b/g)) {
+      if (!defined.has(match[1])) problems.push(`${target}: 引用了 ${match[1]}，但文件里没有 import 也没有定义`)
+    }
+  }
+  return problems
+}
+
 async function main() {
+  /*
+   * 先体检"已经在跑的服务"（如果指定了）——这一类问题只在既有的服务上出现，
+   * 自己新起的服务器永远复现不到。
+   */
+  if (checkOnly) {
+    console.log(`===== 体检已运行的服务：${externalBase} =====`)
+    const problems = await checkServedModules(externalBase)
+    if (problems.length === 0) {
+      console.log('✓ 服务端吐出的模块图自洽（引用到的名字都有 import 或定义）')
+      process.exitCode = 0
+    } else {
+      console.log(`✗ 发现 ${problems.length} 处问题：`)
+      for (const problem of problems) console.log('  - ' + problem)
+      console.log('\n这通常意味着**开发服务器缓存陈旧**：源码是对的，但它吐出的模块少了 import。')
+      console.log('处理办法：停掉它，清掉 node_modules/.vite 之后重新 `npm run dev`，再硬刷新页面。')
+      process.exitCode = 1
+    }
+    return
+  }
+
   const browser = findBrowser()
   if (!browser) throw new Error('没有找到 Edge 或 Chrome')
 
