@@ -26,6 +26,7 @@ import { clearDir } from './lib/clear-dir'
 // 与 src/domain/row-merge.ts 是刻意的两份实现，由下面的断言保证它们一致。
 import { mergeRowsOnTopEdge as mergePageRows } from './lib/row-merge.mjs'
 import { mergeRowsOnTopEdge } from '../src/domain/row-merge'
+import { INITIAL_SESSIONS, sessionOf, sessionReducer, type ExerciseSession } from '../src/components/session'
 import path from 'node:path'
 
 // 本文件由 scripts/run-smoke.mjs 用 esbuild 打包后交给 Node 运行，
@@ -1427,6 +1428,110 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(mismatches === 0, `行归并的两份实现结果一致（${cases.length} 组代表性输入）`)
   } catch (error) {
     check(false, '行归并的两份实现可以比对', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 会话 reducer（"每一道题各自的状态"）。
+   *
+   * 这个 reducer 取代了原先六个按题号索引的 useState 与三处手写的"清空清单"，
+   * 因此它必须自己被固定住：跨题互不影响、换原文只清当前这道、改动作答作废旧结果。
+   */
+  try {
+    let sessions = INITIAL_SESSIONS
+    const at = (id: string): ExerciseSession => sessionOf(sessions, id)
+
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第一段' })
+    check(at('a').drafts[0] === '第一段', '写入作答进 drafts')
+
+    sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 2 })
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第三段' })
+    check(at('a').drafts[2] === '第三段', '换段之后的作答写进那一段')
+    check(at('a').drafts[0] === '第一段', '先写的那一段没被覆盖')
+
+    /*
+     * 真实交互的顺序是「点下一段 → 在新的一段里打字」，而不是「先切段、再打字」。
+     * 第一版 reducer 的 `answerChanged` 复用了"换原文"那套清空逻辑，顺手把段号也归零，
+     * 于是每打一个字人就被弹回第一段：界面显示"第 2 / 4 段"，但写进去的却是第 1 段，
+     * 四段永远填不满、提交按钮一直禁用。
+     *
+     * 上面那两条断言**抓不到**它——它们先切段、紧接着就打字，把段号归零这一步给"用掉了"。
+     * 下面这条专门盯住它：切段之后先再打一次字，段号必须纹丝不动。
+     */
+    sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 3 })
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四段' })
+    check(at('a').sectionIndex === 3, '在新的一段里打字后，段号不会被弹回第一段')
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四段改' })
+    check(at('a').sectionIndex === 3, '在同一段里连续打字，段号保持不动')
+    check(at('a').drafts[3] === '第四段改', '连续打字覆盖的是同一段，而不是写回第一段')
+    check(at('a').drafts[2] === '第三段', '第三段的内容没有被后面的打字冲掉')
+
+    // 跨题目互不影响：这正是原先六个 useState 要各自维护、容易漏的地方
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'b', text: '另一道题' })
+    check(at('a').drafts[0] === '第一段', '另一道题的改动不影响这一道')
+    check(at('b').drafts[0] === '另一道题', '另一道题自己存住了')
+    check(at('c').drafts !== undefined, '没碰过的题号返回空会话而不是 undefined')
+
+    // 提交结果 → 画面切到结果那一面
+    const draft = {
+      correction: { errors: [], highlights: [] },
+      validated: { errors: [], highlights: [], rejections: [] },
+      level: 'polish' as const,
+      source: 'live' as const,
+      sectionCount: 1,
+      raw: '{}',
+    }
+    sessions = sessionReducer(sessions, { type: 'resultCommitted', exerciseId: 'a', draft })
+    check(at('a').result !== null, '提交后存下了结果')
+    check(at('a').view === 'result', '提交后切到结果那一面')
+
+    // 「返回修改」只切视图，结果要留着（否则要重新提交、花十几秒）
+    sessions = sessionReducer(sessions, { type: 'viewChanged', exerciseId: 'a', view: 'answer' })
+    check(at('a').view === 'answer', '「返回修改」切到作答框')
+    check(at('a').result !== null, '「返回修改」之后结果仍然留着')
+    check(at('a').drafts[0] === '第一段', '「返回修改」之后作答也还在')
+
+    // 改动作答 → 旧结果作废
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '改过了' })
+    check(at('a').result === null, '改动作答后旧结果作废（不再对应这段文字）')
+    check(at('a').view === 'result', '改动作答后视图回到结果那一面')
+
+    // 换原文 → 只清当前这道题的作答与结果，别的题不受影响
+    sessions = sessionReducer(sessions, { type: 'sourceRotated', exerciseId: 'a', variantIndex: 1 })
+    check(at('a').variantIndex === 1, '换原文后记下用的是第几份')
+    check(Object.keys(at('a').drafts).length === 0, '换原文后这道题的作答已清空')
+    check(at('a').result === null, '换原文后这道题的结果已清空')
+    check(at('b').drafts[0] === '另一道题', '换原文不影响别的题')
+
+    // 用一篇 AI 生成的题：存进池子、切过去、清掉旧的作答
+    const generated = {
+      article: { topic: 't', genre: 'news' as const, paragraphs: [], terms: [] },
+      source: '生成的原文',
+      referenceTranslation: '',
+      topic: '生成',
+      genre: 'news' as const,
+    }
+    sessions = sessionReducer(sessions, {
+      type: 'generatedApplied',
+      exerciseId: 'a',
+      generated,
+      variantIndex: 1,
+    })
+    check(at('a').generated.length === 1, '生成的题存进了池子（以后「换一换」翻得回来）')
+    check(Object.keys(at('a').drafts).length === 0, '用新生成的题之后旧作答已清空')
+
+    // sectionChanged 不该顺手把作答清掉
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: 'x' })
+    sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 1 })
+    check(at('a').drafts[0] === 'x', '仅切换段落不会清掉已写的作答')
+  } catch (error) {
+    check(false, '会话 reducer 可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  try {
+    const diag = await renderApp({})
+    check(diag.sectionNavTrace.length > 0, '分段导航的诊断数据拿到了')
+  } catch (error) {
+    check(false, '分段导航诊断可以执行', error instanceof Error ? error.message : String(error))
   }
 
   return { checks, failures, skipped }

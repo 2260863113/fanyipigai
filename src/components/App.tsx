@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type JSX } from 'react'
+import { useMemo, useReducer, useRef, useState, type JSX } from 'react'
 import { MOCK_CASES, fixtureCorrectionFor } from '../domain/mock'
 import {
   DIRECTION_LABEL,
@@ -7,14 +7,13 @@ import {
   LEVEL_LABEL,
   MODE_TABS,
   UNIT_LABEL,
-  type Correction,
   type Exercise,
   type Direction,
   type Genre,
   type Mode,
   type PolishLevel,
 } from '../domain/types'
-import { validateCorrection, type ValidatedCorrection } from '../domain/validate'
+import { validateCorrection } from '../domain/validate'
 import { buildLayout, type AnnotatedLayout } from '../domain/layout'
 import { toAiShape } from '../domain/parse'
 import { AnnotationText } from './AnnotationText'
@@ -41,9 +40,9 @@ import {
 import { FavoritesView } from './FavoritesView'
 import { favoriteFor } from './annotation-summary'
 import type { Selection } from './AnnotationText'
+import { INITIAL_SESSIONS, sessionOf, sessionReducer, type JudgeDraft } from './session'
 
 type Tab = Mode | 'records' | 'custom' | 'favorites'
-type Source = 'live' | 'fixture'
 
 interface JudgeError {
   kind: JudgeFailureKind | 'bad-request'
@@ -59,16 +58,6 @@ function casesOfMode(mode: Tab): typeof ALL_CASES {
   return ALL_CASES.filter((item) => item.exercise.mode === mode)
 }
 
-interface Draft {
-  correction: Correction
-  validated: ValidatedCorrection
-  level: PolishLevel
-  source: Source
-  sectionCount: number
-  /** AI 原样返回的完整文本；界面上的「查看 AI 完整返回内容」用它 */
-  raw: string
-}
-
 export function App(): JSX.Element {
   const firstCase = ALL_CASES[0]
   if (!firstCase) throw new Error('题库为空')
@@ -77,31 +66,19 @@ export function App(): JSX.Element {
   const [exerciseId, setExerciseId] = useState(firstCase.exercise.id)
 
   /**
-   * 逐段作答：每一段自己一份文字。
+   * 每一道题各自的会话状态（作答、结果、看哪一面、用第几份原文、AI 生成的题池）。
    *
-   * 按**题目编号**分别保存：切换题型或题目时不清空，
-   * 切回来还能看到刚才写到一半的内容与已经出来的批改结果。
+   * 为什么用一个 reducer 而不是原先那六个按题号索引的 useState：
+   * "切换题目/换原文该清哪些东西"原先在三处各手写了一遍，且三份清单并不一致——
+   * 漏一项就是 bug，没有任何机制守着。现在它由 action 命名表达，写在 session.ts 里一处。
    */
-  const [draftsByExercise, setDraftsByExercise] = useState<Record<string, Record<number, string>>>({})
-  const [sectionByExercise, setSectionByExercise] = useState<Record<string, number>>({})
-  const [resultByExercise, setResultByExercise] = useState<Record<string, Draft>>({})
-  /**
-   * 每道题当前看的是哪一面：'answer' 作答框 / 'result' 上次的批改结果。
-   *
-   * 点「返回修改」只切到作答框，**结果仍然留着**——只要没改一个字就能点回去看，
-   * 不用重新提交一次（重新提交要花十几秒，还可能因为模型波动给出不一样的结果）。
-   * 一旦真的改了作答，结果就作废（见 updateAnswer）。
-   */
-  const [viewByExercise, setViewByExercise] = useState<Record<string, 'answer' | 'result'>>({})
+  const [sessions, dispatchSession] = useReducer(sessionReducer, INITIAL_SESSIONS)
   /** 四栏边界：默认按内容自动平衡，用户拖过之后按他定的比例 */
   const splitRef = useRef<HTMLElement | null>(null)
   const { split, style: splitStyle, beginDrag, resetSplit } = useSplitDrag(splitRef)
   /** 界面偏好：行距、是否显示填补的文字、译文看哪种视图（存 localStorage） */
   const { settings, update: updateSettings } = useSettings()
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [variantByExercise, setVariantByExercise] = useState<Record<string, number>>({})
-  /** AI 现出的题：按题目留存，之后「换一换」还能翻回来 */
-  const [generatedByExercise, setGeneratedByExercise] = useState<Record<string, GeneratedExercise[]>>({})
   const [genOpen, setGenOpen] = useState(false)
   const [genTopic, setGenTopic] = useState(GENERATION_TOPICS[0] ?? '')
   const [genGenre, setGenGenre] = useState<Genre>(firstCase.exercise.genre)
@@ -132,8 +109,11 @@ export function App(): JSX.Element {
   const isCustom = customExercise !== null && customExercise.id === exerciseId
   const exercise: Exercise = isCustom && customExercise ? customExercise : activeCase.exercise
   const mode = exercise.mode
-  // 恒定的空数组：直接写 `?? []` 会每帧新建一个引用，让下面的 useMemo 失效
-  const generatedOptions = generatedByExercise[exercise.id] ?? EMPTY_GENERATED
+  /** 这道题自己的会话状态（作答、结果、看哪一面、第几份原文、AI 生成的题池） */
+  const session = sessionOf(sessions, exercise.id)
+  const { drafts, sectionIndex, result, view } = session
+  // 两个恒定的引用：直接写 `?? []` / `?? 0` 会每帧新建，让下面的 useMemo 失效
+  const generatedOptions = session.generated.length > 0 ? session.generated : EMPTY_GENERATED
 
   /**
    * 交替使用的原文。
@@ -153,7 +133,7 @@ export function App(): JSX.Element {
     ],
     [exercise, generatedOptions],
   )
-  const variantIndex = variantByExercise[exercise.id] ?? 0
+  const variantIndex = session.variantIndex
   const safeVariantIndex = variantIndex < sourceOptions.length ? variantIndex : 0
   const current = sourceOptions[safeVariantIndex] ?? sourceOptions[0]
   const currentSource = current?.source ?? exercise.source
@@ -165,14 +145,12 @@ export function App(): JSX.Element {
   /** 原文按段落切分；单段题只有一个元素，因此下面所有逻辑对四类题型通用 */
   const sourceSections: Section[] = useMemo(() => splitSections(currentSource), [currentSource])
   const multiSection = sourceSections.length > 1
-  const drafts = draftsByExercise[exercise.id] ?? {}
-  const sectionIndex = sectionByExercise[exercise.id] ?? 0
-  const result = resultByExercise[exercise.id] ?? null
-  const view = viewByExercise[exercise.id] ?? 'result'
   const currentSection = sourceSections[sectionIndex] ?? sourceSections[0]
   const currentAnswer = drafts[sectionIndex] ?? ''
   const filledSections = sourceSections.filter((_, index) => (drafts[index] ?? '').trim().length > 0).length
   const allFilled = filledSections === sourceSections.length
+
+
 
   const caseRecords = records.filter((record) => record.exerciseId === exercise.id)
 
@@ -201,6 +179,11 @@ export function App(): JSX.Element {
    */
   function selectExercise(id: string): void {
     setExerciseId(id)
+    clearTransientUi()
+  }
+
+  /** 这些是"一次性"的界面状态，切题目/换原文时一律清掉（per-exercise 的数据不在此列）。 */
+  function clearTransientUi(): void {
     setSelection(null)
     setOpenRecord(null)
     setError(null)
@@ -211,17 +194,10 @@ export function App(): JSX.Element {
   function rotateSource(): void {
     if (sourceOptions.length < 2) return
     const nextIndex = (safeVariantIndex + 1) % sourceOptions.length
-    setVariantByExercise((previous) => ({ ...previous, [exercise.id]: nextIndex }))
-    setDraftsByExercise((previous) => ({ ...previous, [exercise.id]: {} }))
-    setSectionByExercise((previous) => ({ ...previous, [exercise.id]: 0 }))
-    setResultByExercise((previous) => {
-      const next = { ...previous }
-      delete next[exercise.id]
-      return next
-    })
+    // 清作答、清结果、view 回 'result' 都在 reducer 里一处做完，这里不再手写清单
+    dispatchSession({ type: 'sourceRotated', exerciseId: exercise.id, variantIndex: nextIndex })
     setSelection(null)
     setError(null)
-    setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))
     setNotice(`已换成第 ${nextIndex + 1} 篇原文，这道题的作答已清空。`)
   }
 
@@ -231,25 +207,16 @@ export function App(): JSX.Element {
    * 同时清掉这道题旧的作答与结果——原文变了，旧作答不再对应。
    */
   function applyGeneratedExercise(generated: GeneratedExercise): void {
-    const pool = generatedByExercise[exercise.id] ?? []
     // 位置 0 是题目本身的原文，接着是手写备选，生成出来的排在最后
-    const nextIndex = 1 + variantsFor(exercise.id).length + pool.length
-
-    setGeneratedByExercise((previous) => ({
-      ...previous,
-      [exercise.id]: [...(previous[exercise.id] ?? []), generated],
-    }))
-    setVariantByExercise((previous) => ({ ...previous, [exercise.id]: nextIndex }))
-    setDraftsByExercise((previous) => ({ ...previous, [exercise.id]: {} }))
-    setSectionByExercise((previous) => ({ ...previous, [exercise.id]: 0 }))
-    setResultByExercise((previous) => {
-      const next = { ...previous }
-      delete next[exercise.id]
-      return next
+    const nextIndex = 1 + variantsFor(exercise.id).length + session.generated.length
+    dispatchSession({
+      type: 'generatedApplied',
+      exerciseId: exercise.id,
+      generated,
+      variantIndex: nextIndex,
     })
     setSelection(null)
     setError(null)
-    setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))
   }
 
   function openGenerator(): void {
@@ -319,24 +286,15 @@ export function App(): JSX.Element {
   }
 
   function updateAnswer(value: string): void {
-    setDraftsByExercise((previous) => ({
-      ...previous,
-      [exercise.id]: { ...(previous[exercise.id] ?? {}), [sectionIndex]: value },
-    }))
+    // 写入作答、作废旧结果、view 回 'result' 都在 reducer 里一处做完
+    dispatchSession({ type: 'answerChanged', exerciseId: exercise.id, text: value })
     setError(null)
     setNotice(null)
-    // 改动作答后，之前的结果不再对应这段文字
-    setResultByExercise((previous) => {
-      const next = { ...previous }
-      delete next[exercise.id]
-      return next
-    })
     setSelection(null)
-    setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))
   }
 
   function setSection(nextIndex: number): void {
-    setSectionByExercise((previous) => ({ ...previous, [exercise.id]: nextIndex }))
+    dispatchSession({ type: 'sectionChanged', exerciseId: exercise.id, sectionIndex: nextIndex })
   }
 
   /** 把逐段作答整理成接口需要的形状（每段带它在全文中的起点）。 */
@@ -352,12 +310,11 @@ export function App(): JSX.Element {
   }
 
   function commit(
-    judging_: Draft,
+    judging_: JudgeDraft,
     submittedSections: JudgeSectionInput[],
     attemptLevel: PolishLevel,
   ): void {
-    setResultByExercise((previous) => ({ ...previous, [exercise.id]: judging_ }))
-    setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))
+    dispatchSession({ type: 'resultCommitted', exerciseId: exercise.id, draft: judging_ })
     setSelection(null)
     setOpenRecord(null)
     setRecords((previous) => [
@@ -706,7 +663,7 @@ export function App(): JSX.Element {
                       onClick={() => {
                         // 回到作答状态：**结果留着**，输入框重新出现（文字还在 drafts 里）。
                         // 只要没改字，右上角就多一个「查看上次批改」能点回来
-                        setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'answer' }))
+                        dispatchSession({ type: 'viewChanged', exerciseId: exercise.id, view: 'answer' })
                         setOpenRecord(null)
                         setSelection(null)
                       }}
@@ -718,7 +675,7 @@ export function App(): JSX.Element {
                     <button
                       type="button"
                       className="btn btn-ghost"
-                      onClick={() => setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))}
+                      onClick={() => dispatchSession({ type: 'viewChanged', exerciseId: exercise.id, view: 'result' })}
                       title="回到上一次的批改结果（不重新提交，也不消耗 API）"
                     >
                       查看上次批改
@@ -822,6 +779,7 @@ export function App(): JSX.Element {
                       type="button"
                       className="btn"
                       onClick={() => setSection(Math.max(0, sectionIndex - 1))}
+                      data-nav="prev"
                       disabled={sectionIndex === 0}
                     >
                       ← 上一段
@@ -833,6 +791,7 @@ export function App(): JSX.Element {
                       type="button"
                       className="btn"
                       onClick={() => setSection(Math.min(sourceSections.length - 1, sectionIndex + 1))}
+                      data-nav="next"
                       disabled={sectionIndex >= sourceSections.length - 1}
                     >
                       下一段 →

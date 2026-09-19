@@ -26,6 +26,8 @@ const MODE_TAB_LABEL: Record<string, string> = {
 
 export interface RenderProbe {
   html: string
+  /** 逐段填入作答时，每一次「下一段」前后观察到的分段导航状态（诊断用） */
+  sectionNavTrace: Array<{ step: number; before: string; after: string; typedInto: string }>
   /** 批改结果区域的文字 */
   text: string
   /** 提交前右屏是否有输入框 */
@@ -434,6 +436,16 @@ export async function renderApp(
     }
   }
 
+  /**
+   * 逐段填入作答时记录分段导航的状态。
+   *
+   * 为什么要有这个：这一段的失败现象（"提交按钮一直禁用"）离根因很远，
+   * 光看断言只知道"没提交成功"。把每一步的导航文案记下来，
+   * 就能一眼看出"第几段没切过去"。
+   */
+  const sectionNavTrace: Array<{ step: number; before: string; after: string; typedInto: string }> = []
+  const navText = (): string => container.querySelector('.section-nav .hint')?.textContent?.trim() ?? '(无分段导航)'
+
   const typeInto = async (text: string): Promise<void> => {
     const target = container.querySelector<HTMLTextAreaElement>('.answer-input')
     if (!target) return
@@ -445,6 +457,7 @@ export async function renderApp(
   }
 
   for (const [index, section] of answerSections.entries()) {
+    const before = navText()
     if (index > 0) {
       const next = [...container.querySelectorAll<HTMLButtonElement>('.section-nav .btn')].find((button) =>
         button.textContent?.includes('下一段'),
@@ -454,7 +467,11 @@ export async function renderApp(
         next.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       })
     }
+    const afterNav = navText()
     await typeInto(section.text)
+    // 注意：typedInto 要在**填完之后**读，否则记下的是上一次的残留
+    const typedInto = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
+    sectionNavTrace.push({ step: index, before, after: afterNav, typedInto })
   }
 
   // 回到第一段，便于断言与截图
@@ -924,6 +941,7 @@ export async function renderApp(
   const submittedAnswer = answerSections.map((section) => section.text).join('\n\n')
 
   return {
+    sectionNavTrace,
     flow: { text: flowText, answer: submittedAnswer, matches: flowText === submittedAnswer },
     panels,
     custom,
