@@ -8,6 +8,45 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!--
+      极早的兜底：React 还没挂载时出的错，ErrorBoundary 是接不住的
+      （模块加载失败、语法错误、依赖解析失败都属于这一类，用户看到的同样是白屏）。
+      这里只做一件事——把错误显示到页面上，让人知道发生了什么、能复制出来。
+      一旦 React 成功挂载，这段提示就永远不会出现（它只在未挂载时才写 DOM）。
+    -->
+    <script>
+      (function () {
+        var shown = false
+        function show(message) {
+          if (shown) return
+          shown = true
+          var root = document.getElementById('root')
+          if (!root || root.childElementCount > 0) return
+          var box = document.createElement('div')
+          box.style.cssText =
+            'max-width:860px;margin:48px auto;padding:20px 24px;border:1px solid #d9534f;' +
+            'border-left:6px solid #d9534f;border-radius:6px;background:#fff8f8;color:#3a2b2b;' +
+            'font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;line-height:1.7'
+          box.innerHTML =
+            '<h2 style="margin:0 0 8px;font-size:18px">页面没能启动</h2>' +
+            '<p style="margin:0 0 12px">脚本还没跑起来就出错了——请把下面这段原样复制给开发者。' +
+            '如果是刚改了代码，刷新一次常常就好了。</p>' +
+            '<pre style="margin:0;padding:12px;max-height:320px;overflow:auto;background:#2b2b2b;' +
+            'color:#eee;border-radius:4px;font-size:12px;white-space:pre-wrap;word-break:break-word"></pre>'
+          box.querySelector('pre').textContent = message
+          root.appendChild(box)
+        }
+        window.addEventListener('error', function (event) {
+          show((event.message || '未知错误') + '\n' + (event.filename || '') + ':' + (event.lineno || 0))
+        })
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason
+          show('未处理的 Promise 拒绝：\n' + (reason && reason.stack ? reason.stack : String(reason)))
+        })
+      })()
+    </script>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

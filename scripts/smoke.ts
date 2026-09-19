@@ -1534,5 +1534,60 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(false, '分段导航诊断可以执行', error instanceof Error ? error.message : String(error))
   }
 
+  /*
+   * 兜底界面（ErrorBoundary）必须真的拦得住渲染错误。
+   *
+   * 为什么要有这条：用户看到过"提交后白屏、只能刷新"——那是 React 在渲染期
+   * 遇到未捕获错误时把整棵树卸掉的结果。加了兜底界面却没人验证过它拦不拦得住，
+   * 它就只是心理安慰。这里故意让子组件在渲染期抛错，检查界面上出现的是
+   * 一句能读的报错，而不是空白。
+   */
+  try {
+    const { JSDOM } = await import('jsdom')
+    const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>')
+    const previousWindow = (globalThis as { window?: unknown }).window
+    const previousDocument = (globalThis as { document?: unknown }).document
+    ;(globalThis as { window?: unknown }).window = dom.window
+    ;(globalThis as { document?: unknown }).document = dom.window.document
+
+    const { createRoot } = await import('react-dom/client')
+    const { createElement, Component } = await import('react')
+    const { act } = await import('react')
+    const { ErrorBoundary } = await import('../src/components/ErrorBoundary')
+
+    class Boom extends Component {
+      override render(): never {
+        throw new Error('故意抛出的渲染错误')
+      }
+    }
+
+    const container = dom.window.document.getElementById('root')
+    if (!container) throw new Error('没有挂载点')
+    const root = createRoot(container)
+    // React 会把渲染错误同时打到 console.error，这里静音掉免得刷屏
+    const originalError = console.error
+    console.error = () => undefined
+    try {
+      await act(async () => {
+        root.render(createElement(ErrorBoundary, null, createElement(Boom)))
+      })
+    } finally {
+      console.error = originalError
+    }
+
+    const text = container.textContent ?? ''
+    check(text.includes('界面出错了'), '子组件渲染抛错时，显示的是兜底界面而不是空白', text.slice(0, 120))
+    check(text.includes('故意抛出的渲染错误'), '兜底界面里带着错误信息（能直接复制报告）')
+    check(text.includes('组件栈') || text.includes('没有组件栈'), '兜底界面里给出了组件栈的位置')
+
+    await act(async () => {
+      root.unmount()
+    })
+    ;(globalThis as { window?: unknown }).window = previousWindow
+    ;(globalThis as { document?: unknown }).document = previousDocument
+  } catch (error) {
+    check(false, '兜底界面可以验证', error instanceof Error ? error.message : String(error))
+  }
+
   return { checks, failures, skipped }
 }
