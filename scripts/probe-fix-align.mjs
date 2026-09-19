@@ -908,14 +908,38 @@ async function main() {
          // 关掉气泡，别影响后面几次测量
          document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
          await sleep(200);
+
+         /*
+          * 再点一次**上方补写的字**：判定范围扩大了，它也该把小卡片打开。
+          * 以前文档级那句"点外面就收起来"把它当成外面，点上去等于没反应。
+          */
+         const box = container.querySelector('.fix-text');
+         if (box) {
+           const r = box.getBoundingClientRect();
+           const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) || box;
+           el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+           await sleep(200);
+           const bubble = document.querySelector('.ann-bubble');
+           const brs = bubble ? bubble.querySelectorAll('br').length : 0;
+           out.push({
+             key: '（补写的字）',
+             top: typeof el.className === 'string' ? el.className : el.tagName,
+             inside: true,
+             bubble: bubble ? (bubble.textContent || '').slice(0, 24) : null,
+             breaks: brs,
+           });
+           document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+           await sleep(150);
+         }
          return out;
        })()`,
     )
-    console.log('\n=== 点得中吗（点勾画上的文字，看气泡出不出来） ===')
+    console.log('\n=== 点得中吗（点勾画上的文字与上方补写的字，看气泡出不出来） ===')
     for (const item of clicks) {
       console.log(
         `  ${item.key}：最上面的是 ${item.top}（落在勾画内：${item.inside ? '是' : '否'}）` +
-          ` ｜ 气泡：${item.bubble ? '出来了「' + item.bubble + '…」' : '没出来'}`,
+          ` ｜ 气泡：${item.bubble ? '出来了「' + item.bubble + '…」' : '没出来'}` +
+          (item.breaks === undefined ? '' : ` ｜ 说明里的分号断行 ${item.breaks} 处`),
       )
     }
 

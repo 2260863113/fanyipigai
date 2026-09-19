@@ -322,9 +322,26 @@ button {
 
 /* 练习记录页：左边记录列表，右边沿用四栏结构 */
 .split-records {
+  display: flex;
+  flex-direction: row;
+}
+
+/* 拖过分隔条之后按 --col-left/-right 分（与练习页同一个变量，见 .split-manual） */
+.split-records.split-manual {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, var(--col-left)) 8px minmax(0, var(--col-right));
   grid-template-rows: 1fr;
+}
+
+.split-records > .screen {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 记录页左边那一屏占满整高（右边自己再分上下两排） */
+.split-records > .screen-left {
+  grid-row: 1 / -1;
 }
 
 .split-nested {
@@ -332,11 +349,6 @@ button {
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-/* 记录列表那一屏占满整高 */
-.split-records > .screen-left {
-  grid-row: 1 / -1;
 }
 
 .pane {
@@ -1135,6 +1147,23 @@ button {
   padding: 12px 14px;
 }
 
+/*
+ * 详情卡片底部那一行：**收藏**。
+ * 点译文上的勾画（或上方补写的字）打开卡片之后，它就在右下角这一栏里。
+ */
+.detail-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 12px;
+  flex-wrap: wrap;
+}
+
+.detail-foot .hint {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
 .detail-head {
   display: flex;
   align-items: center;
@@ -1278,9 +1307,7 @@ button {
 
 /* ── 练习记录页 ─────────────────────────────────── */
 
-.split-records .screen-left {
-  border-right: 1px solid var(--line);
-}
+/* 左右之间的那条线交给分隔条自己画（见 .splitter-v::after），这里不再另加边框 */
 
 .record-list {
   list-style: none;
@@ -1289,6 +1316,102 @@ button {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* ── 收藏页 ─────────────────────────────────────── */
+
+/*
+ * 收藏页不是"一次存档"，而是用户自己挑出来的句子，所以整页只有一个滚动区、
+ * 每条都摊开显示（改前 / 改后 / 为什么 / 所在的整句），一屏能扫过去。
+ */
+.favorites {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+}
+
+.fav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fav-item {
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--paper);
+  padding: 10px 14px 12px;
+}
+
+.fav-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fav-kind {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.fav-meta {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+.fav-head .detail-close {
+  margin-left: auto;
+}
+
+/* 被改的那句话：收藏的价值主要在这儿，排得比别的显眼一点 */
+.fav-sentence {
+  margin: 8px 0 0;
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.75;
+  color: var(--ink);
+}
+
+.fav-change {
+  margin: 8px 0 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.fav-label {
+  font-family: var(--sans);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+.fav-from {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  color: var(--ink-soft);
+}
+
+.fav-arrow {
+  color: var(--ink-faint);
+}
+
+.fav-why {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-soft);
 }
 
 .record-item {
@@ -1411,9 +1534,9 @@ button {
     min-height: 260px;
   }
 
+  /* 窄屏：记录页也从左右改成上下（分隔条在窄屏本来就藏起来了） */
   .split-records {
-    grid-template-columns: 1fr;
-    grid-template-rows: none;
+    flex-direction: column;
   }
 
   .screen-left {

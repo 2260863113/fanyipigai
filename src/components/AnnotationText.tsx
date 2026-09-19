@@ -284,6 +284,20 @@ interface Bubble {
 }
 
 /**
+ * 小卡片里的「为什么」按**分号**断行。
+ *
+ * AI 写的说明常是"第一人称代词 I 必须大写；主语 I 搭配的 be 动词是 am，不是 is"这种
+ * 两三个分句挤在一句里，卡片又窄，一处不看头就找不到第二处——所以在分号后断开。
+ * 分号本身留着：它是句子的标点，去掉就成了两句没头没尾的话。
+ */
+function withSemicolonBreaks(text: string): JSX.Element[] {
+  const parts = text.split('；')
+  return parts.flatMap((part, index) =>
+    index === parts.length - 1 ? [<span key={index}>{part}</span>] : [<span key={index}>{part}；</span>, <br key={`br-${index}`} />],
+  )
+}
+
+/**
  * 带批注的作答文本。
  *
  * 渲染只做两件事：把片段画出来，以及在**被点中的那一行下面**浮一个小气泡。
@@ -405,8 +419,10 @@ export function AnnotationText({
   /*
    * 点气泡卡片之外的地方，就把气泡收起来。
    *
-   * 两个例外：
+   * 三个例外：
    *   - 点到**勾画**本身（含调序弧线）：交给它自己的点击处理去切换选中，这里不插手；
+   *   - 点到**上方补写的字**（`.fix-text`）：它同样代表这一处，点它也该把小卡片打开
+   *     （它自己的点击处理已经选了，这里再关一次就等于"点了没反应"——实际踩过）；
    *   - 点到气泡的范围内：气泡不接管鼠标事件（pointer-events: none），
    *     所以那一击其实落在它下面的文字上，但用户的意思显然是"我要看这个气泡"。
    *     因此按坐标判断一次，落在气泡里就不关。
@@ -415,7 +431,12 @@ export function AnnotationText({
     if (!selection) return
     const onDocumentClick = (event: MouseEvent): void => {
       const target = event.target
-      if (target instanceof Element && (target.closest('[data-mark-id]') || target.closest('.arc-group'))) return
+      if (
+        target instanceof Element &&
+        (target.closest('[data-mark-id]') || target.closest('.arc-group') || target.closest('.fix-text'))
+      ) {
+        return
+      }
       const box = bubbleRef.current?.getBoundingClientRect()
       if (box && event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom) {
         return
@@ -489,7 +510,7 @@ export function AnnotationText({
               )}
             </span>
           )}
-          <span className="ann-bubble-why">{bubble.summary.why}</span>
+          <span className="ann-bubble-why">{withSemicolonBreaks(bubble.summary.why)}</span>
           <span className="ann-bubble-more">完整说明见右下角</span>
         </div>
       )}

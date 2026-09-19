@@ -48,6 +48,13 @@ export interface RenderProbe {
     firstMark: string
     firstNotes: string
     firstBubble: string
+    /** 卡片的 HTML：说明里的「；」应当断成 <br>（分号换行） */
+    firstBubbleHtml: string
+    /** 卡片下方那颗按钮点击前 / 点击后的文案（收藏 → 已收藏） */
+    firstFavoriteButton: string
+    favoriteButtonAfterClick: string
+    /** 点「收藏」之后浏览器里存下来的那几条 */
+    favoriteStored: Array<{ from?: string; to?: string; why?: string; sentence?: string }>
     secondMark: string
     secondNotes: string
     secondBubble: string
@@ -57,6 +64,10 @@ export interface RenderProbe {
     notesAfterOutsideClick: string
     /** 点勾画之外的地方之后，气泡里的文字（应当为空） */
     bubbleAfterOutsideClick: string
+    /** 点**上方补写的字**之后，气泡里的文字（应当等于那一处的说明） */
+    bubbleAfterFixClick: string
+    /** 点上方补写的字之后，右下栏的文字 */
+    notesAfterFixClick: string
     /** 右下角有没有「点击查看 AI 完整返回内容」 */
     hasRawLink: boolean
     /** 点开之后，弹窗里的完整文本 */
@@ -119,6 +130,13 @@ export interface RenderProbe {
     hasAnnotatedLines: boolean
     marks: number
     text: string
+    /** 记录页左右两屏之间有没有可拖动的分隔条，拖过之后是不是切到了手动比例 */
+    hasSplitter?: boolean
+    manualAfterDrag?: boolean
+    autoAfterDoubleClick?: boolean
+    /** 收藏页里有几条、上面写了什么（交互那一段点过一次「收藏」） */
+    favoritesCount?: number
+    favoritesText?: string
   }
   /**
    * 译文文字流（不含绝对定位的标记）与提交的作答是否**逐字相同**。
@@ -514,7 +532,33 @@ export async function renderApp(
   await clickMark(0)
   const firstNotes = notesText()
   const firstBubble = bubbleText()
+  const firstBubbleHtml = container.querySelector('.pane-answer .ann-bubble')?.innerHTML ?? ''
   const selectedDetailCount = container.querySelectorAll('.pane-notes .detail-list').length
+  // 卡片下方那颗「收藏」：点了之后文案要变成「已收藏」，并且真的进了收藏页
+  const favoriteButton = (): HTMLButtonElement | undefined =>
+    [...container.querySelectorAll<HTMLButtonElement>('.pane-notes .detail-foot .btn')].find(
+      (node) => node.textContent?.trim() === '收藏' || node.textContent?.trim() === '已收藏',
+    )
+  const favoriteBefore = favoriteButton()?.textContent?.trim() ?? ''
+  const favoriteBtn = favoriteButton()
+  if (favoriteBtn) {
+    await act(async () => {
+      favoriteBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+  }
+  const favoriteAfter = favoriteButton()?.textContent?.trim() ?? ''
+  const favoriteStored = (() => {
+    try {
+      return JSON.parse(dom.window.localStorage.getItem('translation-practice.favorites') ?? '[]') as Array<{
+        from?: string
+        to?: string
+        why?: string
+        sentence?: string
+      }>
+    } catch {
+      return []
+    }
+  })()
 
   await clickMark(1)
   const secondNotes = notesText()
@@ -529,6 +573,23 @@ export async function renderApp(
   })
   const notesAfterOutsideClick = notesText()
   const bubbleAfterOutsideClick = bubbleText()
+
+  /*
+   * 点**上方补写的字**（`.fix-text`）：它代表的是同一处，也该把小卡片打开。
+   * 之前文档级的"点外面就收起来"把它当成外面，于是点上去等于没反应（实际踩过）。
+   */
+  const fixBox = container.querySelector<HTMLElement>('.pane-answer .fix-text')
+  if (fixBox) {
+    await act(async () => {
+      fixBox.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+  }
+  const bubbleAfterFixClick = bubbleText()
+  const notesAfterFixClick = notesText()
+  // 收起来，别把选中状态带进后面那些"看结果"的检查里
+  await act(async () => {
+    outside.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, clientX: 900, clientY: 700 }))
+  })
 
   // 「点击查看 AI 完整返回内容」→ 屏幕中央的弹窗
   const rawLink = container.querySelector<HTMLElement>('.pane-notes .raw-link')
@@ -553,12 +614,18 @@ export async function renderApp(
           firstMark,
           firstNotes,
           firstBubble,
+          firstBubbleHtml,
+          firstFavoriteButton: favoriteBefore,
+          favoriteButtonAfterClick: favoriteAfter,
+          favoriteStored,
           secondMark,
           secondNotes,
           secondBubble,
           selectedDetailCount,
           notesAfterOutsideClick,
           bubbleAfterOutsideClick,
+          bubbleAfterFixClick,
+          notesAfterFixClick,
           hasRawLink: Boolean(rawLink),
           rawModalText,
         }
@@ -643,11 +710,44 @@ export async function renderApp(
     }
     const pane = container.querySelector('.split-nested .pane-answer')
     const paneHtml = pane?.innerHTML ?? ''
+
+    /*
+     * 记录页左右两屏之间的分隔条也要能拖：拖一下应当切到手动比例（split-manual），
+     * 双击恢复自动。这是这一轮新加的能力，量一次钉住。
+     */
+    const recordsSplitter = container.querySelector<HTMLElement>('.split-records > .splitter-v')
+    if (recordsSplitter) {
+      await act(async () => {
+        recordsSplitter.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true, clientX: 200, clientY: 200 }))
+      })
+      await act(async () => {
+        recordsSplitter.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 420, clientY: 200 }))
+      })
+      await act(async () => {
+        recordsSplitter.dispatchEvent(new dom.window.MouseEvent('pointerup', { bubbles: true }))
+      })
+    }
+    const recordsManual = container.querySelector('.split-records.split-manual') !== null
+    if (recordsSplitter) {
+      await act(async () => {
+        recordsSplitter.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true }))
+      })
+    }
+    const recordsBackToAuto = container.querySelector('.split-records.split-manual') === null
+
     record = {
       hasAnnotatedLines: Boolean(pane?.querySelector('.annotated-lines')),
       marks: (paneHtml.match(/class="mk /g) ?? []).length,
       text: pane?.textContent ?? '',
+      hasSplitter: Boolean(recordsSplitter),
+      manualAfterDrag: recordsManual,
+      autoAfterDoubleClick: recordsBackToAuto,
     }
+
+    // 收藏页：交互那一段点过一次「收藏」，这里应当看得到那一条
+    await clickTabByLabel('收藏')
+    record.favoritesCount = container.querySelectorAll('.fav-item').length
+    record.favoritesText = textOf('.favorites')
   }
 
   let views: RenderProbe['views']

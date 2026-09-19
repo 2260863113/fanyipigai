@@ -275,13 +275,15 @@ export const DIRECTION_LABEL: Record<Direction, string> = {
  * 顶部导航栏的顺序与文案。
  * 「练习记录」不是题型，而是所有题型的记录汇总页，因此单独放在最后。
  * 「自定义」也不是题型：它是用户自己贴一篇原文进来练的入口（见 domain/custom.ts）。
+ * 「收藏」同样不是题型：它是用户自己挑出来的那些句子（见 domain/favorites.ts）。
  */
-export const MODE_TABS: ReadonlyArray<{ mode: Mode | 'records' | 'custom'; label: string; hint: string }> = [
+export const MODE_TABS: ReadonlyArray<{ mode: Mode | 'records' | 'custom' | 'favorites'; label: string; hint: string }> = [
   { mode: 'article', label: '文章', hint: '整篇语篇翻译，英译汉 250–350 词，汉译英 200–300 字' },
   { mode: 'paragraph', label: '段落', hint: '段落翻译，考查句间衔接与语篇连贯' },
   { mode: 'sentence', label: '句子', hint: '单句翻译，改错最直观，适合打磨细节' },
   { mode: 'term', label: '术语', hint: '关键术语与中华思想文化术语，按官方标准译法判定' },
   { mode: 'custom', label: '自定义', hint: '自己贴一篇原文来练，不用等我们出题（只贴原文即可）' },
+  { mode: 'favorites', label: '收藏', hint: '做题时点「收藏」存下来的那些句子，回来复习用' },
   { mode: 'records', label: '练习记录', hint: '查看全部练习记录与当时的完整批改' },
 ]
 

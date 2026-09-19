@@ -31,9 +31,18 @@ import { LINE_HEIGHT_RANGE, useSettings } from './settings'
 import { RawResponseButton } from './RawResponseButton'
 import { RecordsView, type RecordView } from './RecordsView'
 import { exerciseOf, loadCustom, saveCustom, type CustomExercise } from '../domain/custom'
+import {
+  clearFavorites,
+  loadFavorites,
+  removeFavorite,
+  toggleFavorite,
+  type Favorite,
+} from '../domain/favorites'
+import { FavoritesView } from './FavoritesView'
+import { favoriteFor } from './annotation-summary'
 import type { Selection } from './AnnotationText'
 
-type Tab = Mode | 'records' | 'custom'
+type Tab = Mode | 'records' | 'custom' | 'favorites'
 type Source = 'live' | 'fixture'
 
 interface JudgeError {
@@ -46,7 +55,7 @@ const EMPTY_GENERATED: GeneratedExercise[] = []
 const EMPTY_LAYOUT: AnnotatedLayout = { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 }
 
 function casesOfMode(mode: Tab): typeof ALL_CASES {
-  if (mode === 'records' || mode === 'custom') return []
+  if (mode === 'records' || mode === 'custom' || mode === 'favorites') return []
   return ALL_CASES.filter((item) => item.exercise.mode === mode)
 }
 
@@ -113,6 +122,9 @@ export function App(): JSX.Element {
   const [pasteOpen, setPasteOpen] = useState(false)
   const [pasteText, setPasteText] = useState('')
   const [pasteError, setPasteError] = useState<string | null>(null)
+
+  /** 收藏（存在浏览器里；做题时点卡片下方的「收藏」，在顶栏的「收藏」里看） */
+  const [favorites, setFavorites] = useState<Favorite[]>(() => loadFavorites())
 
   const activeCase = ALL_CASES.find((item) => item.exercise.id === exerciseId) ?? firstCase
   /** 当前在做的是不是自己贴的那一篇 */
@@ -273,6 +285,7 @@ export function App(): JSX.Element {
     setTab(nextTab)
     setOpenRecord(null)
     if (nextTab === 'records') return
+    if (nextTab === 'favorites') return
     if (nextTab === 'custom') {
       // 贴过就直接切到那一篇；没贴过就把贴题弹窗打开
       if (customExercise) selectExercise(customExercise.id)
@@ -482,6 +495,25 @@ export function App(): JSX.Element {
     [shownValidated, shownAnswer],
   )
 
+  /**
+   * 当前选中那一处的**收藏**内容（没选中、或选中项已经不在结果里时是 null）。
+   * 有了它，右下角那颗「收藏」才知道该存什么；上下文（哪道题、什么方向、什么话题）只有这里知道。
+   */
+  const practiceFavorite =
+    shownValidated && shownAnswer !== undefined
+      ? favoriteFor({
+          selection,
+          validated: shownValidated,
+          answer: shownAnswer,
+          context: {
+            exerciseId: exercise.id,
+            mode,
+            direction: exercise.direction,
+            topic: currentTopic,
+          },
+        })
+      : null
+
   return (
     <div className="app">
       <header className="topbar">
@@ -515,7 +547,7 @@ export function App(): JSX.Element {
           </button>
         </div>
 
-        {tab !== 'records' && (
+        {tab !== 'records' && tab !== 'favorites' && (
           <div className="topbar-right">
             {shown?.source === 'fixture' && <span className="chip chip-warn">内置示例批改</span>}
             <span className="chip">{DIRECTION_LABEL[exercise.direction]}</span>
@@ -525,7 +557,13 @@ export function App(): JSX.Element {
         )}
       </header>
 
-      {tab === 'records' ? (
+      {tab === 'favorites' ? (
+        <FavoritesView
+          favorites={favorites}
+          onRemove={(id) => setFavorites((previous) => removeFavorite(previous, id))}
+          onClear={() => setFavorites(clearFavorites())}
+        />
+      ) : tab === 'records' ? (
         <RecordsView
           records={records}
           openRecord={openRecord}
@@ -533,6 +571,8 @@ export function App(): JSX.Element {
           onSelect={toggleSelection}
           selection={selection}
           settings={settings}
+          favorites={favorites}
+          onToggleFavorite={(favorite) => setFavorites((previous) => toggleFavorite(previous, favorite))}
         />
       ) : (
         <>
@@ -864,6 +904,12 @@ export function App(): JSX.Element {
                     answer={shown.answer}
                     onClose={() => setSelection(null)}
                     embedded
+                    {...(practiceFavorite
+                      ? {
+                          onToggleFavorite: () => setFavorites((previous) => toggleFavorite(previous, practiceFavorite)),
+                          favorited: favorites.some((item) => item.id === practiceFavorite.id),
+                        }
+                      : null)}
                   />
                 ) : (
                   <p className="hint">提交批改后，点译文上的任意一处勾画，这里显示那一处的说明。</p>

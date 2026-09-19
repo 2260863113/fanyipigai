@@ -36,17 +36,28 @@ export function useSplitDrag(containerRef: RefObject<HTMLElement | null>): {
   const splitRef = useRef<SplitState | null>(null)
   splitRef.current = split
 
-  /** 量出"现在看起来"的比例，作为拖动起点。 */
+  /**
+   * 量出"现在看起来"的比例，作为拖动起点。
+   *
+   * 两种布局都要认：
+   *   - 练习页：`.split` 里是两排 `.split-row`，横向分界在 `.split-row-top` 的两个 `.pane` 之间；
+   *   - 记录页：`.split-records` 直接就是左右两屏（`.screen`），没有排。
+   * 认不出来时才退回 0.5——不然从自动布局切到手动的一瞬间画面会跳一下。
+   */
   const measure = useCallback((): SplitState => {
     const container = containerRef.current
     if (!container) return { left: 0.5, top: 0.5 }
-    const topRow = container.querySelector<HTMLElement>('.split-row-top')
-    const bottomRow = container.querySelector<HTMLElement>('.split-row-bottom')
-    const panes = topRow ? [...topRow.querySelectorAll<HTMLElement>('.pane')] : []
-    const leftWidth = panes[0]?.getBoundingClientRect().width ?? 0
-    const rightWidth = panes[1]?.getBoundingClientRect().width ?? 0
-    const topHeight = topRow?.getBoundingClientRect().height ?? 0
-    const bottomHeight = bottomRow?.getBoundingClientRect().height ?? 0
+    const childrenOf = (parent: HTMLElement): HTMLElement[] =>
+      [...parent.children].filter(
+        (node): node is HTMLElement => node instanceof HTMLElement && !node.classList.contains('splitter'),
+      )
+    const rows = childrenOf(container).filter((node) => node.classList.contains('split-row'))
+    // 横向先看上面那一排里的两栏，没有排就取容器自己的前两个直系子元素
+    const columns = rows.length > 0 ? childrenOf(rows[0] as HTMLElement).filter((node) => node.classList.contains('pane')) : childrenOf(container)
+    const leftWidth = columns[0]?.getBoundingClientRect().width ?? 0
+    const rightWidth = columns[1]?.getBoundingClientRect().width ?? 0
+    const topHeight = rows[0]?.getBoundingClientRect().height ?? 0
+    const bottomHeight = rows[1]?.getBoundingClientRect().height ?? 0
     const sumX = leftWidth + rightWidth
     const sumY = topHeight + bottomHeight
     return {

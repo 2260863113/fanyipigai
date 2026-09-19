@@ -380,8 +380,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
 
     // 布局要求：左边整页原文，右边整页作答；提交后结果在右边同一个位置替换掉输入框
     check(
-      rendered.modeTabLabels.join(',') === '文章,段落,句子,术语,自定义,练习记录',
-      `顶部导航有四个题型、自定义与练习记录：${rendered.modeTabLabels.join(' / ')}`,
+      rendered.modeTabLabels.join(',') === '文章,段落,句子,术语,自定义,收藏,练习记录',
+      `顶部导航有四个题型、自定义、收藏与练习记录：${rendered.modeTabLabels.join(' / ')}`,
     )
     check(rendered.sampleIds.length >= 4, `题库覆盖 ${rendered.sampleIds.length} 道示例，四类题型都有题`)
 
@@ -465,6 +465,33 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       check(
         it.rawModalText.includes('"errors"') && it.rawModalText.includes('explanation'),
         '点开后弹窗里是 AI 的完整返回（未解析、未收窄）',
+      )
+
+      /*
+       * 点**上方补写的字**也算选中这一处（判定范围只是扩大了，语义没变）。
+       * 之前文档级那句"点外面就收起来"把它当成外面，点上去等于没反应。
+       */
+      check(
+        it.bubbleAfterFixClick.length > 0 && !it.notesAfterFixClick.includes('点右上角译文里的任意一处勾画'),
+        '点上方补写的字，小卡片照常打开、右下角也换到那一处',
+        it.bubbleAfterFixClick || '（气泡没出来）',
+      )
+      /*
+       * 卡片里的说明按分号断行：AI 常把两三个分句挤在一句里，卡片又窄。
+       * 光看文字是看不出来的（<br> 不产生字符），所以查 HTML。
+       */
+      check(
+        it.firstBubbleHtml.includes('<br>'),
+        '小卡片里的「说明」遇到「；」会断行',
+        it.firstBubbleHtml.slice(0, 160),
+      )
+      // 收藏：点卡片下方那颗按钮 → 文案变「已收藏」→ 内容存进浏览器
+      check(it.firstFavoriteButton === '收藏', `卡片下方有「收藏」按钮（实际「${it.firstFavoriteButton}」）`)
+      check(it.favoriteButtonAfterClick === '已收藏', '点过之后按钮变成「已收藏」')
+      check(
+        it.favoriteStored.length === 1 && Boolean(it.favoriteStored[0]?.why) && Boolean(it.favoriteStored[0]?.sentence),
+        `收藏里存下了改前/改后/原因/所在的整句（${it.favoriteStored.length} 条）`,
+        JSON.stringify(it.favoriteStored[0] ?? {}).slice(0, 200),
       )
     }
 
@@ -803,6 +830,15 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     if (records.record) {
       check(records.record.hasAnnotatedLines, '记录里的译文是带勾画的，不是纯文本')
       check(records.record.marks >= 3, `记录里的译文上有 ${records.record.marks} 处标注`)
+      // 左右两屏的分隔条也能拖（双击恢复自动），与练习页同一套
+      check(records.record.hasSplitter, '练习记录页的两屏之间有一条可拖动的分隔条')
+      check(records.record.manualAfterDrag, '拖过之后按拖出来的比例分（split-manual）')
+      check(records.record.autoAfterDoubleClick, '双击分隔条恢复自动')
+      check(
+        (records.record.favoritesCount ?? 0) >= 1 && (records.record.favoritesText ?? '').includes('改成'),
+        `「收藏」那一栏里看得到刚才收藏的那一条（${records.record.favoritesCount ?? 0} 条）`,
+        (records.record.favoritesText ?? '').slice(0, 160),
+      )
     }
     records.restore()
     sentence.restore()

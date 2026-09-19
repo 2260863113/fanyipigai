@@ -9,6 +9,13 @@ interface Props {
   onClose: () => void
   /** 直接铺在右下栏里（练习页）而不是贴在栏底（记录页）时，去掉外边距 */
   embedded?: boolean
+  /**
+   * 「收藏」：把这一处连同改前/改后/原因存起来（见 domain/favorites.ts）。
+   * 不传就不显示这个按钮——记录页里没有当前题目上下文时就是这样。
+   */
+  onToggleFavorite?: () => void
+  /** 这一处是否已经在收藏里（按钮文案跟着变） */
+  favorited?: boolean
 }
 
 /**
@@ -21,7 +28,7 @@ interface Props {
  * 「查看 AI 返回完整内容」不在这里，而在右下角标题栏的右侧（见 RawResponseButton）：
  * 那是整份批改的元信息，不属于某一条批注。
  */
-export function DetailPanel({ selection, validated, answer, onClose, embedded }: Props) {
+export function DetailPanel({ selection, validated, answer, onClose, embedded, onToggleFavorite, favorited }: Props) {
   const summary = summarize(validated, answer, selection)
 
   if (!summary) {
@@ -64,6 +71,24 @@ export function DetailPanel({ selection, validated, answer, onClose, embedded }:
         <dt>说明</dt>
         <dd className="detail-body">{summary.why}</dd>
       </dl>
+
+      {onToggleFavorite && (
+        <footer className="detail-foot">
+          <button
+            type="button"
+            className={favorited ? 'btn btn-primary' : 'btn'}
+            onClick={onToggleFavorite}
+            title={
+              favorited
+                ? '这一处已经在收藏里了；再点一次就取消收藏'
+                : '把这一处连同改前/改后/为什么存进收藏，以后在顶栏的「收藏」里看'
+            }
+          >
+            {favorited ? '已收藏' : '收藏'}
+          </button>
+          <span className="hint">存的是这一处所在的整句，方便以后复习</span>
+        </footer>
+      )}
     </aside>
   )
 }

@@ -7,9 +7,10 @@
  * 因此**范围的唯一来源是 validate 出来的 span**，AI 圈过的原文只在需要解释时才提。
  */
 
-import { CATEGORY_LABEL, type ErrorType, type MarkColor } from '../domain/types'
+import { CATEGORY_LABEL, type Direction, type ErrorType, type MarkColor, type Mode } from '../domain/types'
 import { colorForCategory, type ValidatedCorrection, type ValidatedError } from '../domain/validate'
 import { entryRenderedKind } from '../domain/layout'
+import { favoriteOf, type Favorite } from '../domain/favorites'
 
 /** 当前选中了哪一处批注。 */
 export type Selection =
@@ -143,4 +144,33 @@ export function summarize(
   // 只按编号找：错误与亮点的编号前缀不同，不会撞车，
   // 这样语序弧线（kind 是 reorder）也能直接复用同一个错误对象的说明。
   return summarizeAll(validated, answer).find((row) => row.key === selection.id) ?? null
+}
+
+/**
+ * 当前选中的那一处整理成一条**收藏**（见 domain/favorites.ts）。
+ *
+ * 放在这里而不是收藏模块里，是因为它要的东西刚好都在这一层：
+ * 「哪段文字 → 改成什么 + 为什么」由 summarize 给，位置区间由 validate 给的 span 给。
+ * 两处各写一遍的话，收藏里的说法迟早会和卡片上的对不上。
+ */
+export function favoriteFor(input: {
+  selection: Selection | null
+  validated: ValidatedCorrection
+  answer: string
+  context: { exerciseId: string; mode: Mode; direction: Direction; topic: string }
+  now?: Date
+}): Favorite | null {
+  const summary = summarize(input.validated, input.answer, input.selection)
+  if (!summary) return null
+  // 位置：错误与亮点分属两个数组，先当作错误找，找不到再当作亮点
+  const span =
+    input.validated.errors.find((entry) => entry.error.id === summary.key)?.span ??
+    input.validated.highlights.find((entry) => entry.highlight.id === summary.key)?.span
+  return favoriteOf({
+    summary,
+    answer: input.answer,
+    span: span ?? { start: 0, end: 0 },
+    context: input.context,
+    ...(input.now ? { now: input.now } : {}),
+  })
 }
