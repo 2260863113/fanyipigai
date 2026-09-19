@@ -70,6 +70,16 @@ function scoreCandidate(
 export type LocateOutcome = { ok: true; value: Located } | { ok: false; reason: string }
 
 /**
+ * 「译文里找不到这个片段」这条拒绝原因里固定出现的一段文字。
+ *
+ * 做成导出常量，是因为开发接口要按失败原因归档，而归档判断必须与这里的文案对上。
+ * 原先归档那边写死的是一句早已不存在的散文（'位置都与学生译文对不上'），
+ * 于是"位置对不上"这一类失败**永远归不进档**——实测 178 份存档里 anchor-mismatch 一个都没有。
+ * 现在两边引用同一份文本：改文案会在编译期暴露，而不是安静地失配。
+ */
+export const PROBLEM_ANCHOR_NOT_FOUND = '找不到片段'
+
+/**
  * 在 haystack 里定位 text。
  * 失败时给出**可操作的原因**，因为这段文字会被原样回传给 AI 作为重试提示。
  */
@@ -85,7 +95,7 @@ export function locate(haystack: string, input: LocateInput): LocateOutcome {
     return {
       ok: false,
       reason:
-        `译文里找不到片段「${excerpt}${text.length > 30 ? '…' : ''}」。` +
+        `译文里${PROBLEM_ANCHOR_NOT_FOUND}「${excerpt}${text.length > 30 ? '…' : ''}」。` +
         `请逐字复制译文中的原文，标点符号也必须一模一样，不要改写、不要补空格。`,
     }
   }

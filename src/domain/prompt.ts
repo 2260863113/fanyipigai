@@ -19,6 +19,7 @@
  */
 
 import type { Direction, Genre, Mode, PolishLevel } from './types'
+import { ERROR_CATEGORY_SPECS } from './types'
 import { LENGTH_RULE } from './generate'
 
 export interface CorrectionRequest {
@@ -58,22 +59,16 @@ const LEVEL_HINT: Record<PolishLevel, string> = {
 }
 
 /**
- * 错误分类表。与 types.ts 的 ErrorCategory 一一对应，顺序即判定优先级：
- * 一条错误同时像多个分类时，取靠前的那一个，保证统计不重复。
- * 硬性错误（红）排在前面。
+ * 错误分类表。**直接取自 types.ts 的 ERROR_CATEGORY_SPECS**，这里不再另抄一份。
+ *
+ * 原先这里手工维护着第五份分类表，与 types.ts 的四份平行列表靠人工对齐；
+ * 漏改其中任何一份都会出问题（尤其"只加进提示词、忘了加进联合类型"会让
+ * parse.ts 拒掉该类错误，整批批改作废）。现在提示词里的分类表、标签、
+ * 判定优先级全部与代码同源，改一处即可。
  */
-const CATEGORIES = [
-  ['terminology', '术语不准', '红', '固定术语、关键表述、专有名词译错或改写（如"改革开放"漏译成 reform）'],
-  ['omission', '漏译', '红', '原文有而译文没有的信息，含漏掉的逻辑关系（转折、因果、递进）'],
-  ['addition', '增译', '红', '译文里多出了原文没有的信息'],
-  ['grammar', '语法', '红', '时态、语态、主谓一致、词形、句子结构等语法错误——只要语法不成立就归这里'],
-  ['function-word', '冠词/介词/单复数', '红', '冠词、介词、单复数等形态细节'],
-  ['punctuation', '标点', '红', '标点使用不当'],
-  ['word-order', '语序错', '橙', '词序、修饰语位置、从句位置需要调整'],
-  ['collocation', '搭配不当', '橙', '词与词的搭配不成立，如 insist her dream'],
-  ['word-choice', '用词不当', '橙', '词义选错、词形用错（如把名词 success 当动词用）'],
-  ['register', '语体不符', '橙', '过于口语或过于生硬，与文体要求不匹配'],
-] as const
+const CATEGORIES = ERROR_CATEGORY_SPECS.map(
+  (spec) => [spec.key, spec.label, spec.hard ? '红' : '橙', spec.hint] as const,
+)
 
 const SYSTEM_RULES = `
 你是「外研社·国才杯」英语笔译赛项的阅卷老师，为一名参赛学生批改译文。
@@ -113,8 +108,7 @@ const SYSTEM_RULES = `
 
 ## 颜色由分类决定，不要自己选
 分类到颜色是固定的对应关系，你只需要选对分类：
-- **红（硬性错误）**：术语不准、漏译、增译、**语法**、冠词/介词/单复数、标点
-- **橙（表达问题）**：语序错、搭配不当、用词不当、语体不符
+${colorLegendBlock()}
 
 **只有确实算错的硬性错误才标红。** 读得懂、意思对，只是不够漂亮、不够地道、略显生硬的表达，
 一律标橙。拿不准的时候放到橙色，不要把表达问题标成红色。
@@ -148,6 +142,23 @@ function categoriesBlock(): string {
   return CATEGORIES.map(
     ([key, label, color, hint], index) => `${index + 1}. ${key}（${label}，${color}）：${hint}`,
   ).join('\n')
+}
+
+/**
+ * 颜色图例：把硬性/表达两类各有哪些分类列给模型。
+ *
+ * 同样从 ERROR_CATEGORY_SPECS 派生，而不是手写一份——
+ * 原先这里是写死的一句"红：术语不准、漏译…"，加分类时必然忘记同步。
+ *
+ * 注意 `语法` 要加粗：它是最常被模型误归到 word-choice（橙色）的一类，
+ * 而那是**唯一**一处原稿刻意加粗的分类。这个强调是刻意的，别在重构时弄丢。
+ */
+function colorLegendBlock(): string {
+  const names = (hard: boolean): string =>
+    ERROR_CATEGORY_SPECS.filter((spec) => spec.hard === hard)
+      .map((spec) => (spec.key === 'grammar' ? `**${spec.label}**` : spec.label))
+      .join('、')
+  return `- **红（硬性错误）**：${names(true)}\n- **橙（表达问题）**：${names(false)}`
 }
 
 /** 给 AI 的完整系统提示。 */
@@ -420,9 +431,6 @@ export function buildRetryPrompt(problems: string[]): string {
     `- 如果某段文字你无法确认，就不要输出这一处批注；宁少勿错`,
   ].join('\n')
 }
-
-/** 供解析与校验错误提示使用的分类中文名。 */
-export const CATEGORY_NAME = new Map<string, string>(CATEGORIES.map(([key, label]) => [key, label]))
 
 /* ── AI 出题 ──────────────────────────────────────────────── */
 

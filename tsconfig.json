@@ -16,5 +16,5 @@
     "noEmit": true,
     "types": ["vite/client", "node"]
   },
-  "include": ["src"]
+  "include": ["src", "vite.config.ts", "vite-plugin-judge-api.ts"]
 }

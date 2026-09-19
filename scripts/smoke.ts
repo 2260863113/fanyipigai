@@ -18,13 +18,20 @@ import { placeFixBoxes, type FixBoxInput } from '../src/domain/fix-layout'
 import { buildCompareLines, splitSentences } from '../src/domain/compare'
 import { renderApp } from './render-probe'
 import { DIRECTION_LABEL, KIND_LABEL, type Direction, type Mode } from '../src/domain/types'
+import { CATEGORY_LABEL, CATEGORY_PRIORITY, ERROR_CATEGORY_SPECS, HARD_CATEGORIES } from '../src/domain/types'
 import { directionOf, modeOf } from '../src/domain/custom'
+import { classifyFailure } from '../vite-plugin-judge-api'
+import { clearDir } from './lib/clear-dir'
+import { existsSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 
 // 本文件由 scripts/run-smoke.mjs 用 esbuild 打包后交给 Node 运行，
 // 因此这里沿用与前端一致的无后缀导入写法。
 
 let failures = 0
 let checks = 0
+/** 环境不具备而跳过的项数（不是失败，但要如实报出来，免得"跳过"变成静悄悄的缺失） */
+let skipped = 0
 
 function check(condition: boolean, label: string, detail?: string): void {
   checks += 1
@@ -36,9 +43,16 @@ function check(condition: boolean, label: string, detail?: string): void {
   console.log(`  ✗ ${label}${detail ? `\n      ${detail}` : ''}`)
 }
 
+/**
+ * 清空一个目录（不存在就什么都不做）。
+ *
+ * 实现在 scripts/lib/clear-dir.ts —— 那里的注释说明了为什么不能用
+ * `rmSync(dir, { recursive: true, force: true })`（在某些受管环境里它是静默的空操作，
+ * 正是"冒烟测试写完存档、清理却从未生效"的真凶）。
+ */
+
 /** 检查同优先级的标注是否互相重叠；插入是零长度落点，允许与区间边界重合。 */
-function findOverlaps(segments: TextSegment[]): string[] {
-  const annotated = segments.filter((s) => s.errorId || s.highlightId)
+function findOverlaps(segments: TextSegment[]): string[] {  const annotated = segments.filter((s) => s.errorId || s.highlightId)
   const problems: string[] = []
   for (let i = 0; i < annotated.length; i += 1) {
     for (let j = i + 1; j < annotated.length; j += 1) {
@@ -54,7 +68,7 @@ function findOverlaps(segments: TextSegment[]): string[] {
   return problems
 }
 
-export async function runSmokeTests(): Promise<{ checks: number; failures: number }> {
+export async function runSmokeTests(): Promise<{ checks: number; failures: number; skipped: number }> {
   for (const testCase of MOCK_CASES) {
     const { exercise, sampleAnswer } = testCase
     console.log(`\n[${exercise.id}] ${exercise.direction} · ${exercise.genre} · ${exercise.topic}`)
@@ -884,7 +898,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   try {
     const { judgeAnswer, DEFAULT_JUDGE_CONFIG } = await import('../src/domain/ai')
     const { FailureCollector, archiveFailure } = await import('../src/domain/archive')
-    const { readFileSync, rmSync, existsSync, readdirSync } = await import('node:fs')
+    const { readFileSync, rmSync, existsSync, readdirSync, mkdirSync } = await import('node:fs')
     const path = await import('node:path')
 
     const originalFetch = globalThis.fetch
@@ -917,13 +931,31 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(!outcome.ok, '坏 JSON 的返回被判为失败')
     check(collector.attempts.length === 1, `收集到 ${collector.attempts.length} 次失败尝试`)
 
-    const dir = path.join(process.cwd(), '.ai-failures')
-    const before = existsSync(dir) ? new Set(readdirSync(dir).filter((n) => n.endsWith('.json'))) : new Set<string>()
-    const saved = await archiveFailure(request, 'test-model', 'bad-json', collector, answerText, '冒烟测试写入')
+    /*
+     * 写进**自己的临时目录**，绝不碰项目根目录的 .ai-failures/。
+     *
+     * 那个目录是 scripts/failures.mjs 做提示词迭代分诊的地方。原先测试也往那儿写，
+     * 结果 178 份记录里 177 份是测试产生的假数据（model=test-model、note=冒烟测试写入），
+     * 从那张表得出的任何结论都是噪声；而且原有的清理逻辑只删"它自以为是新建的那个文件"，
+     * 实测从未生效，文件堆了 177 份。
+     * 现在测试目录独立、跑完整个删掉，两者互不干扰。
+     */
+    const dir = path.join(process.cwd(), 'node_modules', '.cache', 'smoke-failures')
+    clearDir(dir)
+    mkdirSync(dir, { recursive: true })
+
+    const saved = await archiveFailure(
+      request,
+      'test-model',
+      'bad-json',
+      collector,
+      answerText,
+      '冒烟测试写入',
+      dir,
+    )
     check(saved === undefined, '失败存档写入成功', saved ? `写入失败：${saved}` : undefined)
 
-    const after = readdirSync(dir).filter((n) => n.endsWith('.json'))
-    const created = after.find((name) => !before.has(name))
+    const created = readdirSync(dir).find((name) => name.endsWith('.json'))
     check(Boolean(created), '存档目录里出现了新的记录文件')
 
     if (created) {
@@ -937,8 +969,36 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       check((record.history[0]?.problems.length ?? 0) > 0, '记录里保存了失败原因')
       check(record.request.answer === answerText, '记录里保存了当时的作答，便于复现')
       check(!JSON.stringify(record).includes('test-key'), '存档里没有写入 API 密钥')
-      rmSync(path.join(dir, created), { force: true })
     }
+
+    // 跑完就清掉，不留文件
+    clearDir(dir)
+    const leftover = existsSync(dir) ? readdirSync(dir) : []
+    check(leftover.length === 0, '测试用的存档临时目录已清理干净', `残留：${JSON.stringify(leftover)}（目录 ${dir}）`)
+
+    /*
+     * 回归护栏：项目根目录的 .ai-failures/ 里不该再有测试写下的记录。
+     * 判据是 note 字段（测试写的是"冒烟测试写入"），而不是文件名——
+     * 文件名不含这个标记，按名字找会永远通过，等于没测。
+     */
+    const realDir = path.join(process.cwd(), '.ai-failures')
+    const leftovers = existsSync(realDir)
+      ? readdirSync(realDir)
+          .filter((name) => name.endsWith('.json'))
+          .filter((name) => {
+            try {
+              const parsed = JSON.parse(readFileSync(path.join(realDir, name), 'utf8')) as { note?: string }
+              return (parsed.note ?? '').includes('冒烟测试写入')
+            } catch {
+              return false
+            }
+          })
+      : []
+    check(
+      leftovers.length === 0,
+      '项目根目录的 .ai-failures/ 里没有测试写入的记录',
+      leftovers.length > 0 ? `残留 ${leftovers.length} 份：${leftovers.slice(0, 3).join('、')}…` : undefined,
+    )
   } catch (error) {
     check(false, '失败存档流程可以执行', error instanceof Error ? error.message : String(error))
   }
@@ -957,10 +1017,48 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       { name: '03-marks', width: 1600, height: 950, action: 'submit', exerciseId: 'sentence-002', clickTab: '句子', clickMark: 0 },
       { name: '04-mobile', width: 420, height: 900, action: 'plain' },
     ])
-    check(result.ok, result.ok ? `生成了 ${result.files.length} 张截屏` : `截屏未完成：${result.note ?? ''}`)
-    for (const file of result.files) console.log(`    ${file}`)
+    /*
+     * 环境不具备时**跳过**，不算失败：
+     * 这台机器没装 Edge/Chrome（或没有 vite）不是本项目的缺陷，不该让测试变红——
+     * 否则这套测试在 Linux 与 CI 上永远绿不了。
+     * 但"浏览器在、截图流程却出 bug"仍然是真失败，照旧报红（见下方的 else 分支）。
+     */
+    if (result.skipped) {
+      skipped += 1
+      console.log(`  ⊘ 已跳过（${result.note ?? '环境不具备'}）`)
+    } else {
+      check(result.ok, result.ok ? `生成了 ${result.files.length} 张截屏` : `截屏未完成：${result.note ?? ''}`)
+      for (const file of result.files) console.log(`    ${file}`)
+    }
   } catch (error) {
     check(false, '截屏流程可以执行', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 「没有浏览器时跳过、而不是报错」这条行为本身要有断言守着。
+   *
+   * 为什么需要它：任何装了 Edge 的机器（比如开发机）上，跳过分支都**执行不到**——
+   * 于是"注释说会跳过、代码其实在报错"这个 bug 曾经长期存在却没人发现。
+   * 这里用 DSH_NO_BROWSER 把环境伪装成"没装浏览器"，真的走一遍那条分支。
+   */
+  try {
+    const { captureScreens } = await import('./visual')
+    process.env.DSH_NO_BROWSER = '1'
+    let stub: Awaited<ReturnType<typeof captureScreens>>
+    try {
+      stub = await captureScreens([{ name: 'never', width: 800, height: 600, action: 'plain' }])
+    } finally {
+      delete process.env.DSH_NO_BROWSER
+    }
+    check(stub.skipped === true, '伪装成没有浏览器时，截屏走「跳过」而不是失败')
+    check(stub.files.length === 0, '跳过时不产出任何截图文件')
+    check(
+      typeof stub.note === 'string' && stub.note.length > 0,
+      '跳过时给出了原因',
+      stub.note,
+    )
+  } catch (error) {
+    check(false, '「没有浏览器时跳过」可以验证', error instanceof Error ? error.message : String(error))
   }
 
   // 启动脚本的编码护栏。
@@ -1126,5 +1224,143 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(false, '启动脚本检查可以执行', error instanceof Error ? error.message : String(error))
   }
 
-  return { checks, failures }
+  /*
+   * 失败归档的分类。
+   *
+   * 这里曾经有一个**长期无人发现**的 bug：归档函数靠字符串匹配一句早已不存在的散文
+   * （'位置都与学生译文对不上'）来判断"位置对不上"这一类失败，
+   * 于是这条分支永远命中不了——实测 178 份存档里 anchor-mismatch 一个都没有，
+   * 真正的定位失败全被误归成"格式不合法"，把维护者送去修 JSON 格式。
+   *
+   * 断言的价值在于**把生产者的真实输出喂给消费者**：
+   * 只要 parse.ts / validate.ts 改了文案而归档判断没跟上，这里立刻变红。
+   * 用硬编码字符串自己喂自己则测不出这件事。
+   */
+  try {
+    /*
+     * 生产者：批注声称要改的文字在译文里根本不存在 → 定位失败。
+     *
+     * 注意真实文案来自 locate.ts（「译文里找不到片段…请逐字复制译文中的原文」），
+     * 由 parse.ts 加上 `errors[0]：` 前缀转发出来——
+     * **不是**那条同名常量：PROBLEM_NO_ANCHOR_MATCH 所在的分支被上一行的
+     * `if (problems.length > 0) return` 遮住了，实际走不到（见该处注释）。
+     */
+    const notFound = parseCorrection(
+      JSON.stringify({
+        errors: [
+          {
+            id: 'e1',
+            type: 'replace',
+            category: 'grammar',
+            oldText: '这段文字在译文里根本不存在',
+            targetText: 'whatever',
+            explanation: '测试用',
+          },
+        ],
+        highlights: [],
+      }),
+      'Ecological civilization is a form of human progress.',
+    )
+    check(!notFound.ok, '定位全部失败时，解析被判为失败')
+    if (!notFound.ok) {
+      check(
+        notFound.problems.some((problem) => problem.includes('找不到片段')),
+        '定位失败的原因是「找不到片段」，并回传了可操作的重试提示',
+        `实际问题：${notFound.problems.join('；')}`,
+      )
+      check(
+        classifyFailure({ kind: 'bad-output', problems: notFound.problems }, 3) === 'anchor-mismatch',
+        '「位置对不上」被归档成 anchor-mismatch（而不是 bad-json）',
+        `实际问题：${notFound.problems.join('；')}`,
+      )
+    }
+
+    // 生产者：返回里连 JSON 对象都没有（花括号都找不到）→ 应当归到 bad-json
+    const badJson = parseCorrection('this is not json at all', 'anything')
+    check(!badJson.ok, '坏 JSON 被判为失败')
+    if (!badJson.ok) {
+      check(
+        classifyFailure({ kind: 'bad-output', problems: badJson.problems }, 3) === 'bad-json',
+        '「返回里没有 JSON 对象」被归档成 bad-json',
+        `实际问题：${badJson.problems.join('；')}`,
+      )
+    }
+
+    // 生产者：有花括号、但里面是坏 JSON → 走「JSON 解析失败」那条，同样归 bad-json
+    const brokenJson = parseCorrection('{ "errors": [, }', 'anything')
+    check(!brokenJson.ok, '花括号里是坏 JSON 时被判为失败')
+    if (!brokenJson.ok) {
+      check(
+        classifyFailure({ kind: 'bad-output', problems: brokenJson.problems }, 3) === 'bad-json',
+        '「JSON 解析失败」被归档成 bad-json',
+        `实际问题：${brokenJson.problems.join('；')}`,
+      )
+    }
+
+    // 其余两类不走解析器，直接给 kind
+    check(
+      classifyFailure({ kind: 'truncated', problems: [] }, 3) === 'truncated',
+      '被截断归成 truncated',
+    )
+    check(
+      classifyFailure({ kind: 'unauthorized', problems: [] }, 3) === 'bad-json',
+      '密钥无效归成 bad-json（非模型输出问题）',
+    )
+  } catch (error) {
+    check(false, '失败归档分类可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 错误分类表的一致性。
+   *
+   * 这一份原先手工维护了五份平行列表（联合类型、CATEGORY_PRIORITY、CATEGORY_LABEL、
+   * HARD_CATEGORIES，以及 prompt.ts 里另一份），**而没有任何测试断言它们一致**。
+   * 失败模式不对称且致命：只加进提示词而漏了联合类型，parse.ts 会把该类错误全部拒掉
+   * → 解析失败 → 重试三次 → 整批批改作废。
+   *
+   * 现在四份都由 ERROR_CATEGORY_SPECS 派生，这里把"派生正确"这件事固定下来，
+   * 同时守住与提示词之间的对应关系。
+   */
+  try {
+    check(
+      CATEGORY_PRIORITY.length === ERROR_CATEGORY_SPECS.length,
+      `判定优先级涵盖全部分类（${CATEGORY_PRIORITY.length} 项）`,
+    )
+    check(
+      CATEGORY_PRIORITY.every((key, index) => key === ERROR_CATEGORY_SPECS[index]?.key),
+      'CATEGORY_PRIORITY 的顺序与 ERROR_CATEGORY_SPECS 一致',
+    )
+    check(
+      ERROR_CATEGORY_SPECS.every((spec) => CATEGORY_LABEL[spec.key] === spec.label),
+      'CATEGORY_LABEL 与 ERROR_CATEGORY_SPECS 的标签一致',
+    )
+    check(
+      ERROR_CATEGORY_SPECS.every((spec) => HARD_CATEGORIES.includes(spec.key) === spec.hard),
+      'HARD_CATEGORIES 与 ERROR_CATEGORY_SPECS 的硬性档位一致',
+    )
+    check(
+      new Set(CATEGORY_PRIORITY).size === CATEGORY_PRIORITY.length,
+      '判定优先级里没有重复项',
+    )
+
+    /*
+     * 分类表必须真的出现在提示词里：模型只能照提示词选分类，
+     * 少写一个就等于那个分类永远不会被用上。
+     */
+    const systemPrompt = buildSystemPrompt()
+    const missing = ERROR_CATEGORY_SPECS.filter((spec) => !systemPrompt.includes(spec.key))
+    check(
+      missing.length === 0,
+      '每一个分类都出现在系统提示词里',
+      missing.length > 0 ? `缺失：${missing.map((spec) => spec.key).join('、')}` : undefined,
+    )
+    check(
+      ERROR_CATEGORY_SPECS.filter((spec) => spec.hard).every((spec) => systemPrompt.includes(spec.label)),
+      '硬性分类的中文名都出现在提示词的颜色图例里',
+    )
+  } catch (error) {
+    check(false, '错误分类表的一致性可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  return { checks, failures, skipped }
 }

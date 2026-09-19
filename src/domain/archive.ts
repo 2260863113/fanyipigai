@@ -77,7 +77,19 @@ export class FailureCollector {
   }
 }
 
-/** 把收集到的信息落盘。返回实际的错误信息（成功时为空）。 */
+/** 存档目录名（相对于项目根目录）。测试会传自己的临时目录，见 outDir 参数。 */
+export const FAILURE_DIR_NAME = '.ai-failures'
+
+/**
+ * 把收集到的信息落盘。返回实际的错误信息（成功时为空）。
+ *
+ * `outDir` 存在时写进它，否则写进项目根目录下的 `.ai-failures/`。
+ *
+ * 为什么要留这个参数：冒烟测试原本也往 `.ai-failures/` 写，而那个目录正是
+ * `scripts/failures.mjs` 用来做提示词迭代分诊的地方——结果 178 份记录里 177 份是
+ * 测试产生的假数据（model 是 test-model、note 是"冒烟测试写入"），
+ * 任何从那张表得出的结论都是噪声。测试改用临时目录之后，这个目录才只装真实失败。
+ */
 export async function archiveFailure(
   request: { source: string; direction: string; genre: string; level: string },
   model: string,
@@ -85,6 +97,7 @@ export async function archiveFailure(
   collector: FailureCollector,
   fullAnswer: string,
   extraNote?: string,
+  outDir?: string,
 ): Promise<string | undefined> {
   const now = new Date()
   const record: FailureRecord = {
@@ -116,7 +129,7 @@ export async function archiveFailure(
   try {
     const fs = await import('node:fs')
     const path = await import('node:path')
-    const dir = path.resolve(process.cwd(), '.ai-failures')
+    const dir = outDir ?? path.resolve(process.cwd(), FAILURE_DIR_NAME)
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(
       path.join(dir, `${record.id}.json`),

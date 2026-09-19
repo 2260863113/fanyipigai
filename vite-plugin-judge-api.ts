@@ -14,6 +14,9 @@ import type { Connect, Plugin } from 'vite'
 import { DEFAULT_JUDGE_CONFIG, generateExercise, judgeAnswer } from './src/domain/ai'
 import { FailureCollector, archiveFailure, type FailureKind } from './src/domain/archive'
 import { rebuildFromSections, type Section } from './src/domain/sections'
+import { PROBLEM_JSON_PARSE_FAILED, PROBLEM_NO_ANCHOR_MATCH, PROBLEM_NO_JSON_OBJECT } from './src/domain/parse'
+import { PROBLEM_ANCHOR_NOT_FOUND } from './src/domain/locate'
+import { ANCHOR_MISMATCH_MARKER } from './src/domain/validate'
 import type { Direction, Genre, Mode, PolishLevel } from './src/domain/types'
 
 const VALID_DIRECTIONS: readonly Direction[] = ['zh-to-en', 'en-to-zh']
@@ -50,15 +53,29 @@ function readDevVars(root: string): Record<string, string> {
  *
  * 归类会直接影响后续怎么看这些记录，所以规则写清楚：
  * - 返回被截断：输出太长，属于提示词里要求写太细
- * - 重试次数用尽仍不合格：提示词约束不够，最需要关注
- * - 位置全部对不上：模型没按"逐字复制片段"的要求做
+ * - 位置全部对不上：模型没按"逐字复制片段"的要求做 —— 最该看见的一类
+ * - 重试次数用尽仍不合格：提示词约束不够
  * - 其余（JSON 解析不了、字段结构不合法）：格式约束问题
+ *
+ * 判据取自 **parse.ts / validate.ts 导出的常量**，不再内嵌散文。
+ * 这里曾经写死一句 `'位置都与学生译文对不上'`——那是更早版本的文案，早已被改掉，
+ * 于是这条分支**永远不可能命中**，实测 178 份存档里 `anchor-mismatch` 一个都没有，
+ * 真正的定位失败全被误归成"格式不合法"，把维护者送去修 JSON 格式。
  */
-function classifyFailure(outcome: { kind: string; problems: string[] }, maxAttempts: number): FailureKind {
+export function classifyFailure(
+  outcome: { kind: string; problems: string[] },
+  maxAttempts: number,
+): FailureKind {
   if (outcome.kind === 'truncated') return 'truncated'
   if (outcome.kind !== 'bad-output') return 'bad-json'
-  if (outcome.problems.some((problem) => problem.includes('位置都与学生译文对不上'))) return 'anchor-mismatch'
-  if (outcome.problems.some((problem) => problem.includes('JSON 解析失败'))) return 'bad-json'
+  const hit = (marker: string): boolean => outcome.problems.some((problem) => problem.includes(marker))
+  // 先判"位置对不上"：它比"格式不对"更具体，也更需要被单独看见。
+  // 真实文案有两条：parse.ts 直接转发 locate.ts 的「译文里找不到片段…」，
+  // 以及 validate.ts 的拒绝说明「…与你译文中的文字对不上」。
+  if (hit(PROBLEM_NO_ANCHOR_MATCH) || hit(ANCHOR_MISMATCH_MARKER) || hit(PROBLEM_ANCHOR_NOT_FOUND)) {
+    return 'anchor-mismatch'
+  }
+  if (hit(PROBLEM_JSON_PARSE_FAILED) || hit(PROBLEM_NO_JSON_OBJECT)) return 'bad-json'
   return maxAttempts > 1 ? 'exhausted' : 'bad-json'
 }
 

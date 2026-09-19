@@ -31,6 +31,25 @@ export interface ParseFailure {
   problems: string[]
 }
 
+/**
+ * 「所有批注都没能定位到译文里的文字」这条问题的开头。
+ *
+ * 为什么做成导出常量：开发用的接口（vite-plugin-judge-api.ts）要按**失败原因**归档，
+ * 而它原先靠 `problem.includes('…位置都与学生译文对不上…')` 这种散文匹配来判断
+ * ——那段文字早被改掉了，于是"位置对不上"这一类失败**永远归不进档**，
+ * 实测 178 份存档里一个都没有，全被误归成"格式不合法"。
+ *
+ * 现在两边引用同一份文本：谁改了文案，引用它的地方会立刻在编译期报错，
+ * 而不是安静地失配。
+ */
+export const PROBLEM_NO_ANCHOR_MATCH = '所有批注都没能定位到译文中的文字'
+
+/** 「返回的不是合法 JSON」这条问题的开头。与上面同理，供归档判断引用。 */
+export const PROBLEM_JSON_PARSE_FAILED = 'JSON 解析失败'
+
+/** 「返回里根本没有 JSON 对象」这条问题的开头（连花括号都找不到时走这条）。 */
+export const PROBLEM_NO_JSON_OBJECT = '返回内容里找不到 JSON 对象'
+
 const ERROR_TYPES: readonly ErrorType[] = ['replace', 'insert', 'delete', 'rewrite', 'reorder']
 const CATEGORIES: readonly ErrorCategory[] = CATEGORY_PRIORITY
 
@@ -49,7 +68,7 @@ export function extractJson(raw: string): { text: string } | { error: string } {
   const start = withoutFence.indexOf('{')
   const end = withoutFence.lastIndexOf('}')
   if (start < 0 || end < 0 || end <= start) {
-    return { error: `返回内容里找不到 JSON 对象。实际返回的开头是：${trimmed.slice(0, 120)}` }
+    return { error: `${PROBLEM_NO_JSON_OBJECT}。实际返回的开头是：${trimmed.slice(0, 120)}` }
   }
   return { text: withoutFence.slice(start, end + 1) }
 }
@@ -274,8 +293,10 @@ function readError(value: unknown, index: number, answer: string, problems: stri
         ...base,
         oldText: text,
         changed,
-        // anchor 指向缩窄后的区间；原始区间另存一份供校验用
-        // anchor 保留 AI 圈的原始区间；真正要划的范围在 changed 里
+        // anchor 与 originalSpan 装的是**同一个**区间：AI 圈出的那片文字由程序定位出来的位置。
+        // 真正要划的范围在 changed 里（按词求出的最小不同项），不是缩窄后的 anchor。
+        // 曾经这里的注释写成"anchor 指向缩窄后的区间"，与代码不符——
+        // 下游若照那句注释理解，会以为 originalSpan 是多余的。
         anchor: { start: span.start, end: span.end, snippet: span.snippet },
         originalSpan: span,
         targetText,
@@ -357,7 +378,7 @@ export function parseCorrection(raw: string, answer: string): ParseSuccess | Par
   } catch (error) {
     return {
       ok: false,
-      problems: [`JSON 解析失败：${error instanceof Error ? error.message : String(error)}`],
+      problems: [`${PROBLEM_JSON_PARSE_FAILED}：${error instanceof Error ? error.message : String(error)}`],
     }
   }
 
@@ -393,11 +414,21 @@ export function parseCorrection(raw: string, answer: string): ParseSuccess | Par
 
   if (problems.length > 0) return { ok: false, problems }
 
-  // 位置全部对不上时，说明这次返回毫无用处，值得重试
+  /*
+   * 位置全部对不上时，说明这次返回毫无用处，值得重试。
+   *
+   * ⚠️ 实测这一支**走不到**：定位失败（locate.ts 找不到片段）时，readError 会把原因
+   * push 进 problems，于是上面的 `if (problems.length > 0)` 已经先返回了，
+   * 带出来的文案是「errors[0]：译文里找不到片段…」而不是下面这句。
+   * 换句话说，位置对不上这一类失败的真实文案来自 locate.ts。
+   *
+   * 保留这里是为了将来真有"errors 解析出来了、但一个都没通过位置校验"的情形；
+   * 判断失败类型时请以 locate.ts / validate.ts 的常量为准，不要依赖下面这句话。
+   */
   if (errors.length > 0 && validated.errors.length === 0) {
     return {
       ok: false,
-      problems: ['所有批注都没能定位到译文中的文字，等于没有标出任何问题', ...repaired],
+      problems: [`${PROBLEM_NO_ANCHOR_MATCH}，等于没有标出任何问题`, ...repaired],
     }
   }
 

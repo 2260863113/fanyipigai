@@ -22,8 +22,9 @@ await mkdir(outDir, { recursive: true })
 await writeFile(
   path.join(outDir, 'entry.ts'),
   `import { runSmokeTests } from ${JSON.stringify(path.join(root, 'scripts', 'smoke.ts'))}\n` +
-    `const { checks, failures } = await runSmokeTests()\n` +
-    `console.log(failures === 0 ? \`\\n\${checks} 项检查全部通过。\` : \`\\n\${checks} 项检查中有 \${failures} 项未通过。\`)\n` +
+    `const { checks, failures, skipped } = await runSmokeTests()\n` +
+    `const tail = skipped > 0 ? \`（另有 \${skipped} 项因环境不具备而跳过）\` : ''\n` +
+    `console.log(failures === 0 ? \`\\n\${checks} 项检查全部通过。\${tail}\` : \`\\n\${checks} 项检查中有 \${failures} 项未通过。\${tail}\`)\n` +
     `process.exitCode = failures === 0 ? 0 : 1\n`,
   'utf8',
 )

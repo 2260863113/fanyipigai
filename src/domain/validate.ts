@@ -23,6 +23,15 @@ export interface Rejection {
   message: string
 }
 
+/**
+ * "批注指的位置与译文里的文字对不上"这条拒绝说明里固定出现的一段文字。
+ *
+ * 与 parse.ts 的 PROBLEM_NO_ANCHOR_MATCH 同理：开发接口要按失败原因归档，
+ * 而归档判断原先匹配的是一段早已不存在的散文，导致这类失败永远归错档。
+ * 提取成常量后，文案一改就会在编译期暴露，而不是安静地失配。
+ */
+export const ANCHOR_MISMATCH_MARKER = '与你译文中的文字对不上'
+
 export type ValidationOutcome<T> =
   | { ok: true; value: T }
   | { ok: false; rejection: Rejection }
@@ -73,7 +82,7 @@ function checkSpan(id: string, anchor: Anchor, answer: string, what: string): Va
     const before = answer.slice(Math.max(0, start - 6), start)
     const after = answer.slice(end, Math.min(answer.length, end + 6))
     return fail(
-      `${what}指向的位置与你译文中的文字对不上：第 ${start}–${end} 个字符实际是「${actual}」，` +
+      `${what}指向的位置${ANCHOR_MISMATCH_MARKER}：第 ${start}–${end} 个字符实际是「${actual}」，` +
         `批注却说是「${snippet}」（上文「${before}」，下文「${after}」）。${hint}`,
     )
   }
@@ -139,9 +148,13 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
   })
 
   /**
-   * 校验时要用**原始区间**核对，而不是 anchor。
-   * anchor 现在装的是最小修改之后的窄区间（如只覆盖 explore），
+   * 校验时要用**模型圈的那片文字**核对，而不是按词缩窄后的改动项。
+   *
+   * `changed` 里装的是最小修改之后的窄区间（如只覆盖 explore），
    * 拿它去核对模型圈的原文（have explore ways）必然对不上（实际踩过这个坑）。
+   *
+   * （旧注释说"anchor 现在装的是最小修改之后的窄区间"——与 parse.ts 的代码不符：
+   * 那里 anchor 与 originalSpan 是同一个区间。已改正。）
    */
   const anchorToCheck = error.originalSpan ?? error.anchor
 

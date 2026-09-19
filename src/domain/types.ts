@@ -18,11 +18,14 @@ export type ErrorType =
   | 'reorder' // 语序调换：用配对弧线表示
 
 /**
- * 错误分类：说明一处错误"错在哪里"。
- * 一条错误只归一类，判定优先级见 CATEGORY_PRIORITY。
+ * 错误分类的**类型层**表达：说明一处错误"错在哪里"。
+ *
+ * 运行时的那份唯一名单是下面的 ERROR_CATEGORY_SPECS —— 标签、颜色档位、
+ * 判定优先级、给 AI 的说明全在那里，并由它派生出 CATEGORY_PRIORITY / CATEGORY_LABEL /
+ * HARD_CATEGORIES。这个联合类型是编译期的镜像，供各处标注类型用；
+ * **两者必须同时改**（漏改这里，parse.ts 会拒掉整个新分类，见 SPECS 的注释）。
  *
  * 分类同时决定颜色：硬性错误归红，表达问题归橙。
- * 具体对应见 HARD_CATEGORIES。
  */
 export type ErrorCategory =
   | 'terminology' // 术语不准（硬性：固定译法写错）
@@ -37,35 +40,77 @@ export type ErrorCategory =
   | 'register' // 语体不符（表达问题）
 
 /**
- * 错误分类的判定优先级，从高到低。
- * 一个错误可能同时像多个分类，按此顺序取第一个匹配项，保证统计不重复。
- * 硬性错误排在前面：同样的位置既有语法问题又有表达问题，按硬性错误计。
+ * 错误分类表的**唯一定义**：说明一处错误"错在哪里"。
+ *
+ * 为什么收成一张表：这份信息原先**手工维护了五份**——ErrorCategory 联合类型、
+ * CATEGORY_PRIORITY、CATEGORY_LABEL、HARD_CATEGORIES，以及 prompt.ts 里又一份
+ * CATEGORIES。加一个分类要改五个地方，而其中**两份有序列表必须人工对齐**。
+ * 失败模式是不对称且致命的：只加进提示词而漏了联合类型，parse.ts 会把该类错误
+ * 全部拒掉 → 解析失败 → 重试三次 → 整批 bad-out，而当时没有任何测试守着这件事。
+ *
+ * 现在下面那些导出**全部由这张表派生**，顺序就是判定优先级（从高到低）：
+ * 一个错误同时像多个分类时取靠前的那个，保证统计不重复。
+ * 硬性错误（红）排在前面：同样的位置既有语法问题又有表达问题，按硬性错误计。
  */
-export const CATEGORY_PRIORITY: readonly ErrorCategory[] = [
-  'terminology',
-  'omission',
-  'addition',
-  'grammar',
-  'function-word',
-  'punctuation',
-  'word-order',
-  'collocation',
-  'word-choice',
-  'register',
+export interface ErrorCategorySpec {
+  key: ErrorCategory
+  /** 界面上显示的名字 */
+  label: string
+  /** 是否硬性错误（红）。false 表示表达问题（橙）。 */
+  hard: boolean
+  /**
+   * 给 AI 看的判定说明。
+   * 只用在提示词里，因此措辞是写给模型看的（含举例），不是给用户看的。
+   */
+  hint: string
+}
+
+export const ERROR_CATEGORY_SPECS: readonly ErrorCategorySpec[] = [
+  {
+    key: 'terminology',
+    label: '术语不准',
+    hard: true,
+    hint: '固定术语、关键表述、专有名词译错或改写（如"改革开放"漏译成 reform）',
+  },
+  {
+    key: 'omission',
+    label: '漏译',
+    hard: true,
+    hint: '原文有而译文没有的信息，含漏掉的逻辑关系（转折、因果、递进）',
+  },
+  { key: 'addition', label: '增译', hard: true, hint: '译文里多出了原文没有的信息' },
+  {
+    key: 'grammar',
+    label: '语法',
+    hard: true,
+    hint: '时态、语态、主谓一致、词形、句子结构等语法错误——只要语法不成立就归这里',
+  },
+  { key: 'function-word', label: '冠词/介词/单复数', hard: true, hint: '冠词、介词、单复数等形态细节' },
+  { key: 'punctuation', label: '标点', hard: true, hint: '标点使用不当' },
+  { key: 'word-order', label: '语序错', hard: false, hint: '词序、修饰语位置、从句位置需要调整' },
+  { key: 'collocation', label: '搭配不当', hard: false, hint: '词与词的搭配不成立，如 insist her dream' },
+  { key: 'word-choice', label: '用词不当', hard: false, hint: '词义选错、词形用错（如把名词 success 当动词用）' },
+  { key: 'register', label: '语体不符', hard: false, hint: '过于口语或过于生硬，与文体要求不匹配' },
 ]
 
-export const CATEGORY_LABEL: Record<ErrorCategory, string> = {
-  terminology: '术语不准',
-  omission: '漏译',
-  addition: '增译',
-  grammar: '语法',
-  'function-word': '冠词/介词/单复数',
-  punctuation: '标点',
-  'word-order': '语序错',
-  collocation: '搭配不当',
-  'word-choice': '用词不当',
-  register: '语体不符',
-}
+/** 错误分类的判定优先级，从高到低（由 ERROR_CATEGORY_SPECS 的顺序派生）。 */
+export const CATEGORY_PRIORITY: readonly ErrorCategory[] = ERROR_CATEGORY_SPECS.map((spec) => spec.key)
+
+/** 各分类的中文名（派生）。 */
+export const CATEGORY_LABEL = Object.fromEntries(
+  ERROR_CATEGORY_SPECS.map((spec) => [spec.key, spec.label]),
+) as Record<ErrorCategory, string>
+
+/**
+ * 哪些分类算硬性错误（红色），从高到低（派生）。
+ *
+ * 为什么由代码定而不是让 AI 选颜色：颜色是给用户看的稳定信号，
+ * 同一类错误在每一次批改里都必须是同一个颜色。让模型自由选颜色，
+ * 会出现"这次冠词用红、下次用橙"，用户就没法形成阅读习惯了。
+ */
+export const HARD_CATEGORIES: readonly ErrorCategory[] = ERROR_CATEGORY_SPECS.filter((spec) => spec.hard).map(
+  (spec) => spec.key,
+)
 
 /** 颜色分级。红＝硬性错误，橙＝表达问题，绿＝表达优秀。 */
 export type MarkColor = 'red' | 'orange' | 'green'
@@ -75,22 +120,6 @@ export const COLOR_LABEL: Record<MarkColor, string> = {
   orange: '表达问题',
   green: '表达优秀',
 }
-
-/**
- * 哪些分类算硬性错误（红色）。
- *
- * 为什么由代码定而不是让 AI 选颜色：颜色是给用户看的稳定信号，
- * 同一类错误在每一次批改里都必须是同一个颜色。让模型自由选颜色，
- * 会出现"这次冠词用红、下次用橙"，用户就没法形成阅读习惯了。
- */
-export const HARD_CATEGORIES: readonly ErrorCategory[] = [
-  'terminology',
-  'omission',
-  'addition',
-  'grammar',
-  'function-word',
-  'punctuation',
-]
 
 /** 修改风格：批改力度档位。 */
 export type PolishLevel = 'polish' | 'refine'
@@ -148,9 +177,12 @@ export interface ErrorObject {
   /** 要改的原文片段（replace / delete / rewrite 用它定位；reorder 用 segments 里的 anchor） */
   oldText?: string
   /**
-   * 解析后填入的绝对区间。
+   * 解析后填入的绝对区间（= 模型圈的那片文字被定位到的位置）。
    * AI 从来不给这个字段——它是程序按文字找出来之后自己写进来的，
    * 保留它是为了让界面、校验、排版这些下游逻辑完全不用改。
+   *
+   * 注意它**不装**按词缩窄后的改动项：那些在 `changed` 里。
+   * 插入类（insert）的落点在 `insertAfter` 上，此时 anchor 的 snippet 是空串。
    */
   anchor?: Anchor
   /** 插入时使用的原文锚点（补在这个片段之后） */
@@ -170,9 +202,14 @@ export interface ErrorObject {
    */
   changed?: Array<{ start: number; end: number; to: string }>
   /**
-   * AI 当初圈出的原始区间（未缩窄）。
-   * 校验器要用它核对 "该区间里的文字是否与 oldText 一致"——
-   * anchor 现在装的是缩窄后的区间，不能用来做这件事。
+   * AI 当初圈出的那片文字，由程序定位后得到的位置与片段。
+   *
+   * 校验器用它核对"该区间里的文字是否与 oldText 一致"。
+   * 对 replace / rewrite / delete / insert，它和 `anchor` 是**同一个**区间
+   * （见 parse.ts），保留它是为了让校验只依赖"模型圈的范围"这一个来源；
+   * 缩窄后的可渲染区间在 `changed` 里，不在 anchor 里。
+   *
+   * （旧注释说"anchor 装的是缩窄后的区间"，与代码不符，已改正。）
    */
   originalSpan?: { start: number; end: number; snippet: string }
   /** 正确的写法；只有「删除」类错误没有这一项 */

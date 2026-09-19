@@ -14,16 +14,26 @@
  * 产物在 .screenshots/（已 gitignore）。
  */
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { findBrowser, BROWSER_HINT } from './lib/find-browser'
+import { removeDir } from './lib/clear-dir'
 
 export interface ScreenshotResult {
   ok: boolean
   files: string[]
   /** 失败或跳过时的原因 */
   note?: string
+  /**
+   * 环境不具备时跳过（例如这台机器没装 Edge/Chrome）。
+   *
+   * 与"失败"必须分开：没有浏览器**不是本项目的缺陷**，不该让冒烟测试变红——
+   * 否则这套测试在 Linux/CI 上永远绿不了（vite.config.ts 说明将来要部署到 Cloudflare）。
+   * 而"浏览器在、但截图流程出 bug"仍然是真失败，必须继续报红。
+   */
+  skipped?: boolean
 }
 
 export interface ShotSpec {
@@ -93,17 +103,6 @@ class Cdp {
   }
 }
 
-function findBrowser(): string | undefined {
-  const candidates = [
-    process.env.CHROME_PATH,
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  ].filter((value): value is string => Boolean(value))
-  return candidates.find((candidate) => existsSync(candidate))
-}
-
 async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -130,7 +129,7 @@ async function connectCdp(wsUrl: string): Promise<Cdp> {
 
 export async function captureScreens(shots: readonly ShotSpec[]): Promise<ScreenshotResult> {
   const browser = findBrowser()
-  if (!browser) return { ok: false, files: [], note: '没有找到 Edge 或 Chrome' }
+  if (!browser) return { ok: false, files: [], note: BROWSER_HINT, skipped: true }
 
   const root = process.cwd()
   const outDir = path.join(root, '.screenshots')
@@ -145,12 +144,14 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
   const files: string[] = []
 
   try {
-    rmSync(outDir, { recursive: true, force: true })
+    // 用 removeDir 而不是 rmSync：后者在受管环境里是静默空操作，
+    // 曾经导致这两处（截图目录、浏览器 profile）越堆越大——profile 实测堆到 122 MB
+    removeDir(outDir)
     mkdirSync(outDir, { recursive: true })
 
     // 直接调用 vite，不经过 npm：Windows 上通过 shell 传参给 npm 不可靠，而且 npm 输出会污染测试日志
     const viteBin = path.join(root, 'node_modules', 'vite', 'bin', 'vite.js')
-    if (!existsSync(viteBin)) return { ok: false, files: [], note: '没有找到 vite 可执行文件' }
+    if (!existsSync(viteBin)) return { ok: false, files: [], note: '没有找到 vite 可执行文件', skipped: true }
     server = spawn(process.execPath, [viteBin, '--port', String(port), '--host', '127.0.0.1'], {
       cwd: root,
       stdio: 'ignore',
@@ -158,7 +159,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
     if (!(await waitForServer(probeUrl, 45_000))) return { ok: false, files: [], note: '预览服务未能就绪' }
 
     const profileDir = path.join(root, 'node_modules', '.cache', 'cdp-profile')
-    rmSync(profileDir, { recursive: true, force: true })
+    removeDir(profileDir)
     browserProcess = spawn(
       browser,
       [
