@@ -984,8 +984,8 @@ button {
  * span 没有任何默认外观，才是真正的透明、无边框。
  *
  * 位置由 fix-layout.ts 算：默认居中于被改内容、挤了左右分开、分不开就往上加层。
- * **本身不折行**：被改内容跨行时，补写的字在 FixLayer 里就被切成几段，一段对一行，
- * 每段各自居中于那一行的带子——"跟随原译文换行"就是这么实现的，而不是让方框自己乱折。
+ * **允许折行**（词与词之间随便断）：宽度由 FixLayer 限在"那一行带子减左右各 4 个空格"，
+ * 带子撑得下补写内容时就是一行；被栏宽顶住时补写内容自己往下折。
  */
 .fix-text {
   position: absolute;
@@ -1001,7 +1001,8 @@ button {
   /* 行高不再压到 1.35——那是"被压扁"的直接原因；1.6 读起来才舒展 */
   line-height: 1.6;
   text-align: left;
-  white-space: nowrap;
+  /* 允许在词与词之间折行；具体宽度由 FixLayer 写在 style 上（max-width） */
+  white-space: normal;
   cursor: pointer;
 }
 

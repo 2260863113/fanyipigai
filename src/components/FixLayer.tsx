@@ -139,10 +139,13 @@ function slotOf(element: HTMLElement): HTMLElement | null {
 }
 
 /**
- * 挑断点：把补写内容按原译文各行的宽度占比切开。
+ * 挑断点：把补写内容切成几段，一段占一行。
  *
- * 为什么按**宽度占比**而不是词数：被改内容第一行占了整段的几分之几，
- * 补写的字第一行也应当占同样的比例，断出来的两段才会各自落在对应那一行的正上方。
+ * `targets` 是**累计能装多少**（前 i 行各自"带子宽 − 左右各 4 个空格"加起来）：
+ * 第 i 条断线要落在"这一行的余量刚好用得差不多"的位置，于是每一段都排得进它那一行，
+ * 不会被挤到多余的折行上去（按比例切就会——带子现在不是按比例撑开的）。
+ * 优先选"装得下"的那个断点（前缀不超过累计余量），都装不下才退而求其次挑最小的那个。
+ *
  * 断点只落在词与词之间——词内部一旦断开，读起来就不是句子了。
  */
 function chooseCuts(prefix: readonly number[], targets: readonly number[]): number[] {
@@ -154,7 +157,9 @@ function chooseCuts(prefix: readonly number[], targets: readonly number[]): numb
     let best = from
     let bestDelta = Number.POSITIVE_INFINITY
     for (let k = from; k <= last; k += 1) {
-      const delta = Math.abs((prefix[k] ?? 0) - target)
+      const value = prefix[k] ?? 0
+      // 装得下：差多少给多少；装不下：狠狠罚一下，只在实在没得选时才用它
+      const delta = value > target ? value - target + 100000 : target - value
       if (delta < bestDelta) {
         bestDelta = delta
         best = k
@@ -377,14 +382,14 @@ export function FixLayer({
     }
     /*
      * 一个空格有多宽（按补写字号量）。撑宽与内缩都以"空格"为单位：
-     * 用户要的是"荧光带比被改内容左右各宽 2 个空格"、"补写内容再往带子里缩"。
+     * 用户要的是"荧光带比补写内容**左右各再宽 4 个空格**"。
      *
      * 不能直接量一个空格：块级盒子里行首行尾的空白会被丢掉，量出来是 0。
      * 拿 "x x" 减 "xx" 才是那个空格真正的宽度。
      */
     const spaceWidth = Math.max(1, measure('x x').width - measure('xx').width)
-    /** 左右各 2 个空格的宽度：荧光带的呼吸量 */
-    const GUTTER = spaceWidth * 2
+    /** 左右各 4 个空格的宽度：带子比补写内容多出来的呼吸量 */
+    const MARGIN = spaceWidth * 4
 
     /*
      * 3. 插入点：译文上那块荧光笔空位的宽度，与上方补写内容的宽度分毫不差。
@@ -450,16 +455,20 @@ export function FixLayer({
     }
 
     /*
-     * 6. 荧光带只比被改内容宽出**左右各 2 个空格**（padding）。
+     * 6. **荧光带跟着补写内容加宽**，并且左右各再多留 4 个空格。
      *
-     * 这一段是这一轮改掉的核心：以前是"补写内容多宽，荧光就撑多宽"，
-     * 于是补写内容一长（重写常见），带子就变成一条横贯半行的大色块，把相邻文字推得老远；
-     * 用户要的是反过来——**带子贴着被改内容**（左右各留 2 个空格当呼吸），
-     * 补写内容排不下就自己往下折（见 measure 的 cap 与第 8 步）。
+     * 规则（这一轮用户把上一轮说反了的口径纠正回来了）：
+     *   带子宽度 = 补写内容一行排完的宽度 + 左右各 4 个空格
+     * 于是带子里装得下补写内容，两边还各有一段留白；相邻的文字被这两段空档推到带子两侧去，
+     * "荧光区域里只有被改内容"仍然成立。空档是真占地方的，所以整段会跟着重新折行——
+     * 这是用户明确选过的取舍（另一种做法是原文不动、让补写内容自己折行）。
      *
-     * 空档是真占地方的：相邻的文字会被推到带子的左右两侧去，
-     * 这正是"荧光区域里只有被改内容"的做法。空档只有 6–7px，整段排版几乎不动。
-     * 插入点不加：它自己就是一块量好宽度的空位，没有"内容"可撑开。
+     * 一条边界：带子不许横着跑出译文栏。右边的空档被栏宽顶住时，多出来的那份挪到左边
+     * （左边的空档只是把被改内容自己往后推，推过头它会换行，不会溢出栏）。
+     * 带子因此撑不到位的那些，补写内容就自己折行（见第 8 步的 cap）——
+     * 这也是"任意相邻两个单词都能断开"真正起作用的地方。
+     *
+     * 插入点不加空档：它自己就是一块量好宽度的空位，没有"内容"可撑开。
      */
     const applyPad = (entry: Entry): void => {
       const style = entry.element.style
@@ -469,8 +478,20 @@ export function FixLayer({
 
     for (const entry of entries) {
       if (entry.isInsert || !entry.hasText || entry.rows.length === 0) continue
-      entry.padFirst = GUTTER
-      entry.padLast = GUTTER
+      // 撑开前量到的那一份就是"没加空档时"的真身（这轮开头刚清过空档）
+      const natural = entry.bands.reduce((sum, band) => sum + band.width, 0)
+      const lastBand = entry.bands[entry.bands.length - 1]
+      if (!lastBand) continue
+      const surplus = Math.max(0, entry.fullWidth - natural)
+      let first = surplus / 2 + MARGIN
+      let last = surplus / 2 + MARGIN
+      const roomLast = Math.max(0, containerWidth - (lastBand.left + lastBand.width))
+      if (last > roomLast) {
+        first += last - roomLast
+        last = roomLast
+      }
+      entry.padFirst = first
+      entry.padLast = last
       applyPad(entry)
     }
 
@@ -488,15 +509,16 @@ export function FixLayer({
     }
 
     /**
-     * 第 i 段能有多宽：这一行带子的宽度，再**扣掉合计 2 个空格**（左右各让出 1 个）。
+     * 第 i 段能有多宽：这一行带子的宽度，再**扣掉左右各 4 个空格**（与第 6 步加上的留白对称）。
      *
-     * 为什么不按"左右各 2 个空格"扣：那样连 `I am` 这种四个字符的短改动都会被硬拆成两行
-     * （实测 `i is → I am` 真的折成了 `I` / `am`）。合计 2 个空格既能保证补写内容不贴住带子边缘，
-     * 又不会把短改动拆散；长短两种情形都量过（见 README）。
+     * 带子按"补写内容 + 左右各 4 个空格"撑开时，这里正好等于补写内容一行排完的宽度
+     * → 不折行，方框与补写内容同宽、两侧各留 4 个空格。只有带子被栏宽顶住、撑不到位时，
+     * 方框才会小于补写内容的一行宽度，于是在词与词之间折行。
+     * 无论哪种情形，方框**都在带子里面**，不会压到带子边缘。
      */
     const capFor = (entry: Entry, index: number): number => {
       const band = entry.bands[index] ?? entry.bands[entry.bands.length - 1]
-      const cap = (band?.width ?? 0) - GUTTER
+      const cap = (band?.width ?? 0) - MARGIN * 2
       return Math.max(24, Math.min(cap, available))
     }
 
@@ -527,21 +549,24 @@ export function FixLayer({
       const bands = entry.bands
       if (bands.length !== entry.rows.length) continue
       // 一行放得下就不切：切了反而会把词硬分到两行去
-      const widest = bands.reduce((best, band) => Math.max(best, band.width - GUTTER * 2), 0)
+      const widest = bands.reduce((best, band) => Math.max(best, band.width - MARGIN * 2), 0)
       if (entry.fullWidth <= widest) continue
       const words = entry.item.text.split(/\s+/).filter(Boolean)
       if (words.length < 2) continue
       const prefix: number[] = [0]
       for (let k = 1; k <= words.length; k += 1) prefix.push(measure(words.slice(0, k).join(' ')).width)
       const totalFix = prefix[prefix.length - 1] ?? 0
-      const totalBand = bands.reduce((sum, band) => sum + band.width, 0)
-      if (!(totalFix > 0) || !(totalBand > 0)) continue
-      // 第 i 条断线应当落在"前面的带子加起来占了多少"这个比例处
+      if (!(totalFix > 0)) continue
+      /*
+       * 断线按"累计余量"落：每一行能装多少，就尽量装多少。
+       * 不再按各行的宽度占比切——带子现在是"补写内容 + 左右各 4 个空格"撑出来的，
+       * 各行之间根本不是同一个比例，按比例切出来的段会排不进那一行、白白多折一行。
+       */
       const targets: number[] = []
-      let cumulative = 0
+      let room = 0
       for (let i = 0; i < bands.length - 1; i += 1) {
-        cumulative += bands[i]?.width ?? 0
-        targets.push((cumulative / totalBand) * totalFix)
+        room += Math.max(0, (bands[i]?.width ?? 0) - MARGIN * 2)
+        targets.push(room)
       }
       const cuts = chooseCuts(prefix, targets)
       const bounds = [0, ...cuts, words.length]

@@ -487,6 +487,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       )
       // 收藏：点卡片下方那颗按钮 → 文案变「已收藏」→ 内容存进浏览器
       check(
+        /ann-bubble-order[^>]*color:\s*var\(--mark-(red|orange|green)\)[^>]*>（\d+）/.test(it.firstBubbleHtml),
+        '小卡片里的序号是彩色的（1）（2）形式（用这一处自己的颜色）',
+        (it.firstBubbleHtml.match(/<span class="ann-bubble-order"[^>]*>[^<]*</) ?? ['（没找到序号）'])[0],
+      )
+      check(
         it.firstBubbleHtml.length > 0 && !it.firstBubbleHtml.includes('ann-bubble-change'),
         '小卡片里不再抄一遍「某某 → 某某」（译文上本来就画着）',
         it.firstBubbleHtml.slice(0, 160),
@@ -999,8 +1004,13 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     // 背景透明、没有边框线条（用 span 才不会带出浏览器默认的按钮底色）
     check(/background:\s*none/.test(fixTextRule), '填补内容的背景是透明的', fixTextRule.trim())
     check(/border:\s*none/.test(fixTextRule), '填补内容没有边框线条', fixTextRule.trim())
-    // 永不换行：跨行靠把补写内容**拆成几段**（一段对一行），而不是让方框自己乱折
-    check(/white-space:\s*nowrap/.test(fixTextRule), '填补方框本身永不折行（跨行靠拆段实现）', fixTextRule.trim())
+    /*
+     * 允许折行：宽度由 FixLayer 限在"那一行带子减左右各 4 个空格"。
+     * 带子按"补写内容 + 左右各 4 个空格"撑开时，方框正好是补写内容一行排完的宽度（不折行）；
+     * 带子被栏宽顶住、撑不到位时，补写内容就在词与词之间折行——
+     * 所以 CSS 里不能锁 nowrap（锁上就成了用户抱怨的那句"总是捆绑"）。
+     */
+    check(/white-space:\s*normal/.test(fixTextRule), '填补方框允许折行（词与词之间随便断）', fixTextRule.trim())
     /*
      * 插入空位：一块 inline-block 的荧光笔空格，宽度由 FixLayer 量出补写内容的宽度后写上去。
      * CSS 里那个 0.6em 只是兜底——关掉「显示填补的正确写法」时量不到宽度，

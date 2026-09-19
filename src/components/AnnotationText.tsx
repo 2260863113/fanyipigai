@@ -498,7 +498,10 @@ export function AnnotationText({
               {bubble.summary.typeLabel}
             </span>
             <span className="ann-bubble-cat">{bubble.summary.categoryLabel}</span>
-            <span className="ann-bubble-order">第 {bubble.summary.order} 处</span>
+            {/* 序号用这一处自己的颜色，与译文上的颜色对得上 */}
+            <span className="ann-bubble-order" style={{ color: MARK_COLOR_VALUE[bubble.summary.color] }}>
+              （{bubble.summary.order}）
+            </span>
           </span>
           {/*
             这里**不写**"某某 → 某某"：改前改后本来就画在译文上（荧光带 + 上方小字），
