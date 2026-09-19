@@ -344,17 +344,23 @@ npm run dev                      # http://127.0.0.1:5180/
 
 | 命令 | 作用 |
 | --- | --- |
-| `npm run smoke` | 冒烟测试：批注位置校验、排版计算、失败存档、界面渲染，并生成三张界面截屏 |
+| `npm run smoke` | 冒烟测试：批注位置校验、排版计算、失败存档、界面渲染，并生成界面截屏（没有 Edge/Chrome 时这一项**跳过**，不算失败，摘要里会报"另有 N 项因环境不具备而跳过"） |
 | `node scripts/shots.mjs` | 只生成界面截屏（与上面同一套代码） |
-| `node scripts/probe-fix-align.mjs [题号] [题型] [第几题] [前缀] [拖动像素]` | 在真实浏览器里**量**「补写的字」与它正下方那行荧光笔带子的左右偏差、宽度差与上下余量（拖一次分隔条再量一遍），按像素数「空档里有没有别人的字」，并且点一遍勾画看气泡出不出来。对齐这件事只有量坐标才说得清。`--synthetic` 换成"被改内容跨两行"的构造题、`--insert` 换成"漏了一个词"（量插入空位），`--pad-effect` 把空档摘掉再量一遍（看撑宽把原文推到了哪儿），`--tight` 把行距拉到最紧再量一遍，`--ink-negative` 把旧的画法（负 margin）放回来给这把尺子做对照 |
+| `node scripts/probe-fix-align.mjs [题号] [题型] [第几题] [前缀] [拖动像素]` | 在真实浏览器里**量**「补写的字」与它正下方那行荧光笔带子的左右偏差、宽度差与上下余量（拖一次分隔条再量一遍），按像素数「空档里有没有别人的字」，并且点一遍勾画看气泡出不出来。对齐这件事只有量坐标才说得清。**发现越出带子或明显不居中、或一处都量不到时，退出码为 1**（可直接进 CI）。`--synthetic` 换成"被改内容跨两行"的构造题、`--insert` 换成"漏了一个词"（量插入空位），`--pad-effect` 把空档摘掉再量一遍（看撑宽把原文推到了哪儿），`--tight` 把行距拉到最紧再量一遍，`--ink-negative` 把旧的画法（负 margin）放回来给这把尺子做对照，`--records` 量练习记录页那三条分隔条 |
 | `node scripts/measure-cost.mjs [--live] [--thinking=disabled]` | 量一次批改花多少 token：先用官方 tokenizer 数提示词（免费），`--live` 再真发一次请求读 `usage`（几分钱） |
 | `node scripts/live-judge.mjs [1-3]` | 用真实 API 跑一次句子题批改并打印细节，用于核对提示词与解析器 |
 | `node scripts/live-sections.mjs` | 用真实 API 验证文章题的按段并行与序号换算 |
 | `node scripts/dump-prompt.mjs --out` | 导出送给 AI 的完整提示词到 `docs/prompt-system.txt`（批改 + AI 出题两套） |
 | `node scripts/dump-prompt.mjs --generation` | 只打印 **AI 出题**那两段提示词 |
 | `node scripts/failures.mjs` | 查看 AI 失败存档（见下） |
-| `npm run typecheck` | 类型检查 |
+| `npm run typecheck` | 类型检查（**两份配置**：`tsconfig.json` 管 src 与本地接口，`tsconfig.scripts.json` 管 scripts/） |
+| `npm run typecheck:src` / `npm run typecheck:scripts` | 只检查其中一侧 |
 | `npm run build` | 类型检查 + 生产构建 |
+
+> 关于整站唯一的探针：`probe-fix-align.mjs` 是"补写内容与荧光带对齐"这个高风险特性的**唯一证据**。
+> 它现在会在发现问题时以退出码 1 结束——在此之前它全文没有一处 `process.exitCode`，
+> 而 `report()` 里的 `?? 0` 兜底会让"一处都没量到"与"量了、全部合格"打印出**一模一样**的
+> "越出或明显不居中的有 0 处"，所以它既不能进 CI，也不能当验收依据。已改正。
 
 ### 提示词
 

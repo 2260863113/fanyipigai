@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vite/client", "node"],
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["src", "scripts", "vite.config.ts", "vite-plugin-judge-api.ts"]
+}

@@ -66,7 +66,12 @@ class Cdp {
 
   constructor(ws: import('ws').WebSocket) {
     this.ws = ws
-    ws.addEventListener('message', (event: MessageEvent) => {
+    /*
+     * 这里必须用 ws 自己的 MessageEvent 类型，不能用 DOM 的：
+     * `ws` 的 addEventListener 收的是它自己的事件对象（带 data，但没有 origin/source/ports 等）。
+     * 显式标注 DOM 的 MessageEvent 会类型不兼容——而 `event.data` 在本函数里才是唯一用到的字段。
+     */
+    ws.addEventListener('message', (event: import('ws').MessageEvent) => {
       const message = JSON.parse(String(event.data)) as {
         id?: number
         result?: unknown
@@ -185,6 +190,12 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
     }
     if (!ready) return { ok: false, files: [], note: '无头浏览器的调试端口未就绪' }
 
+    /*
+     * 这两个是 .mjs。类型由 tsconfig.scripts.json 的 allowJs 提供：
+     * TS 会直接读它们的实现来推断导出形状。若用 `declare module './x.mjs'` 是**没用的**
+     * ——TS 看到真实存在的 .mjs 会先按 JS 模块解析，环境声明根本轮不到。
+     * 加上 allowJs 之前这里是隐式 any（TS7016），因为 scripts/ 不在任何 tsconfig 的 include 里。
+     */
     const { buildStubSource } = await import('./fixture-stub.mjs')
     const { buildFixturePayload } = await import('./fixture-payload.mjs')
 
@@ -201,6 +212,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
     const answerSectionsByExercise = new Map<string, string[]>()
     for (const id of wantedIds) {
       const fixture = await buildFixturePayload(root, id)
+      if (fixture.answer === null) throw new Error(`${id}：内置示例与作答对不上，无法构造假批改`)
       stubTable.push({ answer: fixture.answer, payload: fixture.payload })
       answerSectionsByExercise.set(id, fixture.answerSections)
     }

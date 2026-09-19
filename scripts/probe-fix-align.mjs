@@ -31,6 +31,14 @@ import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { inflateSync } from 'node:zlib'
+import { pageSource } from './lib/row-merge.mjs'
+
+/**
+ * 「按顶边把矩形归并成行」的源码，注入页面用。
+ * 取自 scripts/lib/row-merge.mjs 里那个函数的**真实源码**，不是另抄一份——
+ * 原先这个算法在本文件里抄了三份（外加组件里一份），漂移了没人发现。
+ */
+const ROW_MERGE_SOURCE = pageSource()
 
 const root = process.cwd()
 const port = 5401
@@ -93,6 +101,7 @@ class Cdp {
 }
 
 const MEASURE = `(() => {
+  ${ROW_MERGE_SOURCE}
   const pane = document.querySelector('.pane-answer');
   const container = pane && pane.querySelector('.annotated');
   if (!container) return { error: '译文栏里没有 .annotated' };
@@ -108,16 +117,9 @@ const MEASURE = `(() => {
       const box = el.getBoundingClientRect();
       return { rect: box, lines: 1, total: box.width, all: [] };
     }
-    // 按顶边并成"行"（嵌套元素会把同一行报两遍）——与组件里 shapeOf 的算法一致
-    const rows = [];
-    for (const r of [...rects].sort((a, b) => a.top - b.top)) {
-      const last = rows[rows.length - 1];
-      if (last && Math.abs(r.top - last.top) < 1) {
-        if (r.width > last.width) rows[rows.length - 1] = r;
-        continue;
-      }
-      rows.push(r);
-    }
+    // 按顶边并成"行"（嵌套元素会把同一行报两遍）。规则来自 row-merge.mjs，
+    // 与组件里 shapeOf 用的是同一份实现源码，不再是手抄的副本。
+    const rows = mergeRowsOnTopEdge(range.getClientRects());
     return {
       rect: rows.reduce((b, r) => (r.width > b.width ? r : b)),
       lines: rows.length,
@@ -410,18 +412,13 @@ async function measureInk(cdp, label) {
   const image = decodePng(Buffer.from(shot.data, 'base64'))
   const regions = await cdp.evaluate(
     `(() => {
+       ${ROW_MERGE_SOURCE}
        const container = document.querySelector('.pane-answer .annotated');
        const base = container.getBoundingClientRect();
        const rowsOf = (el) => {
          const range = document.createRange();
          range.selectNodeContents(el);
-         const rows = [];
-         for (const r of [...range.getClientRects()].filter((x) => x.width > 0).sort((a, b) => a.top - b.top)) {
-           const last = rows[rows.length - 1];
-           if (last && Math.abs(r.top - last.top) < 1) { if (r.width > last.width) rows[rows.length - 1] = r; continue; }
-           rows.push(r);
-         }
-         return rows;
+         return mergeRowsOnTopEdge(range.getClientRects());
        };
        const out = [];
        for (const a of container.querySelectorAll('[data-fix-key]')) {
@@ -618,11 +615,47 @@ async function buildSynthetic(root, mode = 'rewrite') {
   return { payload: mod.payload, answerSections: mod.answerSections, answer: mod.answer }
 }
 
+/**
+ * 本次探测发现的**失败项**。
+ *
+ * 为什么需要它：这个探针是"补写内容与荧光带对齐"这个高风险特性的**唯一证据**，
+ * 而它原先**不可能失败**——全文没有一处 process.exitCode，发现问题的分支
+ * （console.log 一句 ✗）对退出码毫无影响；更糟的是 report() 里全是
+ * `?? 0` / `?? ''` 兜底，字段名一旦改动（或页面结构变了量不到东西），
+ * 所有数字会静默变成 0，小结打印出"越出或明显不居中的有 0 处"——
+ * 和真正的成功**字面上一模一样**。于是它既不能进 CI，也不能当验收依据。
+ *
+ * 现在：量不到东西、或超出容差，都会记在这里，最后据此设置退出码。
+ */
+const failures = []
+/** 量到的"超出容差"处数的最大值（跨多次 report 取最坏） */
+let worstOffByThresh = 0
+
+/** 容差（与 report 里小结用的判据一致，集中在这里方便调） */
+const TOLERANCE = {
+  /** 方框允许比带子窄多少（负数=越出带子）。0.5px 是亚像素取整的余量 */
+  inset: -0.5,
+  /** 左右留白之差的允许上限（居中误差） */
+  center: 1.5,
+}
+
 function report(label, data) {
   console.log(`\n=== ${label} ===`)
   if (!data || data.error) {
-    console.log('  量不到：' + (data?.error ?? '空'))
+    /*
+     * 量不到就是**失败**，不是"没问题"。
+     * 原先这里只打印一句"量不到"然后 return，退出码依然是 0——
+     * 页面结构一改、选择器一失效，整个探针就静悄悄地什么都验不了却显示成功。
+     */
+    const why = data?.error ?? '空'
+    console.log('  量不到：' + why)
+    failures.push(`${label}：量不到数据（${why}）`)
     return
+  }
+  if (!Array.isArray(data.pairs) || data.pairs.length === 0) {
+    // 一处都没量到：可能是这道题本来就没有可撑宽的批注，也可能是选择器失效。
+    // 两者必须分清，所以由调用方通过 opts.expectPairs 声明"这一轮应该量到东西"。
+    console.log('  没有量到任何"补写内容 ↔ 荧光带"配对')
   }
   console.log(
     `  译文栏宽 ${data.containerWidth} 行高 ${data.lineHeight} 字号 ${data.fontSize} 上留白 ${data.containerPaddingTop}`,
@@ -696,7 +729,7 @@ function report(label, data) {
     for (const part of pair.parts) {
       const left = part.insetLeft ?? 0
       const right = part.insetRight ?? 0
-      if (left >= -0.5 && right >= -0.5 && Math.abs(left - right) <= 1.5) continue
+      if (left >= TOLERANCE.inset && right >= TOLERANCE.inset && Math.abs(left - right) <= TOLERANCE.center) continue
       offByThresh += 1
       if ((part.left ?? 0) <= 0.5 || (part.left ?? 0) + (part.width ?? 0) >= data.containerWidth - 0.5) clamped += 1
     }
@@ -706,6 +739,11 @@ function report(label, data) {
       `与带子的最大宽度差 ${worstBand.toFixed(2)}px ｜ 越出或明显不居中的有 ${offByThresh} 处` +
       `（其中"被栏边顶回来"的有 ${clamped} 处）`,
   )
+  worstOffByThresh = Math.max(worstOffByThresh, offByThresh)
+  if (offByThresh > 0) {
+    failures.push(`${label}：有 ${offByThresh} 处方框越出带子或明显不居中（其中被栏边顶回来 ${clamped} 处）`)
+  }
+  return { pairs: data.pairs.length, offByThresh, splitting, worst, worstEdge, worstBand }
 }
 
 async function main() {
@@ -846,7 +884,18 @@ async function main() {
     )
     if (outcome !== 'ok') throw new Error(String(outcome))
 
-    report('初始（未拖分隔条）', await cdp.evaluate(MEASURE))
+    /*
+     * 这一轮**必须**量到东西：否则"0 处越出"可能只是选择器失效。
+     * report 会把结果返回上来，这里断言真量到了若干配对。
+     */
+    /*
+     * 这一轮**必须**量到东西：否则"0 处越出"可能只是选择器失效。
+     * report 会把结果返回上来，这里断言真量到了若干配对。
+     */
+    const before = report('初始（未拖分隔条）', await cdp.evaluate(MEASURE))
+    if (before && before.pairs === 0) {
+      failures.push('初始：一处"补写内容 ↔ 荧光带"配对都没量到（选择器失效？这道题没有可撑宽的批注？）')
+    }
     await shoot(cdp, `${shotLabel}-before`)
     await measureInk(cdp, '初始')
 
@@ -883,7 +932,10 @@ async function main() {
       buttons: 0,
     })
     await sleep(900)
-    report('拖动分隔条之后', await cdp.evaluate(MEASURE))
+    const after = report('拖动分隔条之后', await cdp.evaluate(MEASURE))
+    if (after && after.pairs === 0) {
+      failures.push('拖动之后：一处配对都没量到（选择器失效？）')
+    }
     await shoot(cdp, `${shotLabel}-after`)
     await measureInk(cdp, '拖动之后')
     if (process.argv.includes('--ink-negative')) await negativeControl(cdp)
@@ -1055,21 +1107,10 @@ async function main() {
     if (!useSynthetic || process.argv.includes('--pad-effect')) {
       const padEffect = await cdp.evaluate(
         `(() => {
+           ${ROW_MERGE_SOURCE}
            const container = document.querySelector('.pane-answer .annotated');
            const base = container.getBoundingClientRect();
-           /* 同一行的重复矩形（嵌套元素报的）按顶边并掉——与组件里 shapeOf 的算法一致 */
-           const merge = (rects, mapper) => {
-             const rows = [];
-             for (const r of [...rects].sort((a, b) => a.top - b.top)) {
-               const last = rows[rows.length - 1];
-               if (last && Math.abs(r.top - last.top) < 1) {
-                 if (r.width > last.width) rows[rows.length - 1] = r;
-                 continue;
-               }
-               rows.push(r);
-             }
-             return rows.map(mapper);
-           };
+           const merge = (rects, mapper) => mergeRowsOnTopEdge(rects).map(mapper);
            const read = () => [...container.querySelectorAll('[data-fix-key]')].map((a) => {
              const range = document.createRange();
              range.selectNodeContents(a);
@@ -1167,4 +1208,33 @@ async function main() {
   }
 }
 
-await main()
+/*
+ * 收尾：设置退出码。
+ *
+ * 这是让这个探针**真正能用**的关键一步。没有它时，无论量出什么问题，
+ * 退出码都是 0，" ✗ " 只是一行输出——它就不能进 CI，也不能当验收依据。
+ * 现在：量不到数据、或方框越出带子/明显不居中，都会让退出码变成 1。
+ */
+function summarizeAndExit() {
+  console.log(`\n${'─'.repeat(64)}`)
+  if (failures.length === 0) {
+    console.log('✓ 未发现对齐问题')
+    process.exitCode = 0
+    return
+  }
+  console.log(`✗ 发现 ${failures.length} 项问题：`)
+  for (const failure of failures) console.log(`    - ${failure}`)
+  console.log(`  （容差：越出带子 > ${-TOLERANCE.inset}px、居中误差 > ${TOLERANCE.center}px 即算问题）`)
+  process.exitCode = 1
+}
+
+try {
+  await main()
+} catch (error) {
+  // 原先这里没有 catch：随手抛一个错只会让退出码是 1、却什么都不打印
+  console.error(`\n✗ 探针未能跑完：${error instanceof Error ? error.message : String(error)}`)
+  if (error instanceof Error && error.stack) console.error(error.stack)
+  process.exitCode = 1
+} finally {
+  summarizeAndExit()
+}

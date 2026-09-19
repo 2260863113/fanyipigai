@@ -22,7 +22,10 @@ import { CATEGORY_LABEL, CATEGORY_PRIORITY, ERROR_CATEGORY_SPECS, HARD_CATEGORIE
 import { directionOf, modeOf } from '../src/domain/custom'
 import { classifyFailure } from '../vite-plugin-judge-api'
 import { clearDir } from './lib/clear-dir'
-import { existsSync, readdirSync } from 'node:fs'
+// 探针那份"按顶边归并成行"的实现（注入页面去跑的那一份）。
+// 与 src/domain/row-merge.ts 是刻意的两份实现，由下面的断言保证它们一致。
+import { mergeRowsOnTopEdge as mergePageRows } from './lib/row-merge.mjs'
+import { mergeRowsOnTopEdge } from '../src/domain/row-merge'
 import path from 'node:path'
 
 // 本文件由 scripts/run-smoke.mjs 用 esbuild 打包后交给 Node 运行，
@@ -74,6 +77,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     console.log(`\n[${exercise.id}] ${exercise.direction} · ${exercise.genre} · ${exercise.topic}`)
 
     const correction = fixtureCorrectionFor(exercise.id, sampleAnswer)
+    check(correction !== null, `${exercise.id} 的示例作答能取到内置批改结果`)
+    if (!correction) continue
     const expectedErrors = correction.errors.length
     const result = validateCorrection(correction.errors, correction.highlights, sampleAnswer)
 
@@ -655,6 +660,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const wordOrderCase = MOCK_CASES.find((item) => item.exercise.id === 'sentence-003')
     if (wordOrderCase) {
       const wordCorrection = fixtureCorrectionFor('sentence-003', wordOrderCase.sampleAnswer)
+      check(wordCorrection !== null, 'sentence-003 的示例作答能取到内置批改结果')
+      if (!wordCorrection) throw new Error('sentence-003 缺少内置批改结果')
       const wordValidated = validateCorrection(
         wordCorrection.errors,
         wordCorrection.highlights,
@@ -759,6 +766,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const reorderCase = MOCK_CASES.find((item) => item.exercise.id === 'sentence-004')
     if (reorderCase) {
       const reorderCorrection = fixtureCorrectionFor('sentence-004', reorderCase.sampleAnswer)
+      check(reorderCorrection !== null, 'sentence-004 的示例作答能取到内置批改结果')
+      if (!reorderCorrection) throw new Error('sentence-004 缺少内置批改结果')
       const reorderValidated = validateCorrection(
         reorderCorrection.errors,
         reorderCorrection.highlights,
@@ -876,9 +885,9 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       check(records.record.hasAnnotatedLines, '记录里的译文是带勾画的，不是纯文本')
       check(records.record.marks >= 3, `记录里的译文上有 ${records.record.marks} 处标注`)
       // 左右两屏的分隔条也能拖（双击恢复自动），与练习页同一套
-      check(records.record.hasSplitter, '练习记录页的两屏之间有一条可拖动的分隔条')
-      check(records.record.manualAfterDrag, '拖过之后按拖出来的比例分（split-manual）')
-      check(records.record.autoAfterDoubleClick, '双击分隔条恢复自动')
+      check(Boolean(records.record.hasSplitter), '练习记录页的两屏之间有一条可拖动的分隔条')
+      check(Boolean(records.record.manualAfterDrag), '拖过之后按拖出来的比例分（split-manual）')
+      check(Boolean(records.record.autoAfterDoubleClick), '双击分隔条恢复自动')
       check(
         (records.record.favoritesCount ?? 0) >= 1 &&
           (records.record.favoritesText ?? '').includes('改前') &&
@@ -898,8 +907,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   try {
     const { judgeAnswer, DEFAULT_JUDGE_CONFIG } = await import('../src/domain/ai')
     const { FailureCollector, archiveFailure } = await import('../src/domain/archive')
-    const { readFileSync, rmSync, existsSync, readdirSync, mkdirSync } = await import('node:fs')
-    const path = await import('node:path')
+    const { readFileSync, existsSync, readdirSync, mkdirSync } = await import('node:fs')
 
     const originalFetch = globalThis.fetch
     // 故意造一个坏 JSON：少了一个逗号，解析一定失败
@@ -1070,7 +1078,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   try {
     const { readFileSync } = await import('node:fs')
     const { execFileSync } = await import('node:child_process')
-    const path = await import('node:path')
+    // path 用顶层的那个 import（这里不再另行动态引入，避免遮蔽）
     // 注意：本文件会被 esbuild 打包到 node_modules/.cache 下执行，
     // 因此 import.meta.dirname 指向的是缓存目录。npm run smoke 的当前目录才是项目根。
     const root = process.cwd()
@@ -1360,6 +1368,65 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     )
   } catch (error) {
     check(false, '错误分类表的一致性可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 行归并的两份实现必须一致。
+   *
+   * "把矩形按顶边归并成行"这个算法要跑在两个地方：组件里（算方框摆哪）
+   * 和探针注入页面的脚本里（量像素核对）。探针那份在 CDP 的模板字符串里跑，
+   * **结构上没法 import 组件那份**，所以只能是两份实现。
+   *
+   * 原先它是四份（组件 1 + 探针 3），靠"与组件里 shapeOf 的算法一致"这种注释维持——
+   * 抄歪了没有任何机制会响，而探针是"补写内容与荧光带对齐"这个高风险特性的唯一证据，
+   * 拿一套不同的规则去量组件，量出来的 ✓ 毫无意义。
+   *
+   * 现在把两份喂同一批矩形，输出必须逐项相同。
+   */
+  try {
+    const rect = (top: number, width: number, left = 0): { top: number; width: number; left: number } => ({ top, width, left })
+    const cases: Array<{ name: string; input: Array<{ top: number; width: number; left: number }> }> = [
+      // 嵌套元素把同一行报两遍：应当并成一行，并取更宽的那个
+      { name: '同一行报两遍', input: [rect(100, 40, 0), rect(100, 90, 5)] },
+      // 零宽矩形要丢掉（range 在空片段上会给出零宽）
+      { name: '含零宽矩形', input: [rect(100, 0, 0), rect(100, 50, 0), rect(120, 30, 0)] },
+      // 顶边差 0.5px：亚像素取整的余量之内，应当并成一行
+      { name: '差 0.5px（并）', input: [rect(100, 50, 0), rect(100.5, 70, 0), rect(120, 30, 0)] },
+      /*
+       * 下面是**专门用来卡住容差取值**的用例。
+       *
+       * 起初这里只有"差 0.9px"这类间隔 ≤1px 的输入，结果把探针那份实现的容差
+       * 从 1 改成 3 之后断言**依然通过**——也就是说那些用例对容差根本不敏感，
+       * 等于没测。各组输入的最小间隔必须跨过容差本身（1px），才能真正判出差别：
+       *   差 2px：容差 1 → 两行；容差 2 或 3 → 一行
+       *   差 4px：容差 1/2/3 → 都是两行
+       */
+      { name: '差 2px（容差 1 时分开）', input: [rect(100, 50, 0), rect(102, 70, 0)] },
+      { name: '差 4px（都分开）', input: [rect(100, 50, 0), rect(104, 70, 0)] },
+      // 乱序输入也要得到同样结果（函数自己会排序）
+      { name: '乱序输入', input: [rect(120, 30, 0), rect(100, 50, 0), rect(100, 80, 0)] },
+      // 一行里混着零宽与重复矩形
+      { name: '含零宽与重复', input: [rect(100, 0, 0), rect(100, 40, 0), rect(100, 90, 0), rect(102, 20, 0)] },
+      { name: '空输入', input: [] },
+    ]
+    let mismatches = 0
+    for (const testCase of cases) {
+      const ours = mergeRowsOnTopEdge(testCase.input)
+      const theirs = mergePageRows(testCase.input)
+      const same =
+        ours.length === theirs.length &&
+        ours.every((row, index) => row.top === theirs[index]?.top && row.width === theirs[index]?.width)
+      if (!same) {
+        mismatches += 1
+        console.log(
+          `      不一致（${testCase.name}）：组件 ${JSON.stringify(ours.map((r) => [r.top, r.width]))} ` +
+            `vs 探针 ${JSON.stringify(theirs.map((r) => [r.top, r.width]))}`,
+        )
+      }
+    }
+    check(mismatches === 0, `行归并的两份实现结果一致（${cases.length} 组代表性输入）`)
+  } catch (error) {
+    check(false, '行归并的两份实现可以比对', error instanceof Error ? error.message : String(error))
   }
 
   return { checks, failures, skipped }

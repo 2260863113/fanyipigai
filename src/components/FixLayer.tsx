@@ -1,6 +1,7 @@
 import { useEffect, useState, type RefObject } from 'react'
 import type { AnnotatedLayout } from '../domain/layout'
 import { placeFixBoxes, type FixBoxInput, type FixBoxPlacement } from '../domain/fix-layout'
+import { mergeRowsOnTopEdge } from '../domain/row-merge'
 import type { Selection } from './annotation-summary'
 
 /** 一处要画成方框的填补内容。 */
@@ -36,11 +37,13 @@ interface Rect {
 }
 
 /**
- * 把 range 量出来的矩形按**顶边**归并成"行"，并排好序。
+ * 量一处被改内容：取出来按顶边归并好的行（每一行的矩形，按行序）。
  *
- * 不能直接数矩形个数：被改的文字外面还套着一层 span（挂荧光笔底色的那个），
- * 嵌套元素会让同一行报出两个一模一样的矩形，于是"只有一行"永远判不成立，
- * "两边加空档撑宽"这一步就从来没生效过（实测踩过）。
+ * 归并规则本身在 domain/row-merge.ts —— 探针也要用同一套规则，
+ * 而它在 CDP 注入的脚本里没法 import 这里，所以是一条被断言守着的两份实现。
+ * 这里只负责把"量不到"的两种情形挡掉：
+ *   - jsdom 没有实现 Range.getClientRects（冒烟测试跑在 jsdom 里）；
+ *   - 量出来全是零宽矩形。
  */
 function anchorRows(element: HTMLElement): DOMRect[] {
   // jsdom 没有实现 Range.getClientRects（冒烟测试跑在 jsdom 里），所以先探一下能力
@@ -48,21 +51,7 @@ function anchorRows(element: HTMLElement): DOMRect[] {
   const range = document.createRange()
   range.selectNodeContents(element)
   if (typeof range.getClientRects !== 'function') return []
-
-  const rows: DOMRect[] = []
-  const rects = Array.from(range.getClientRects())
-    .filter((rect) => rect.width > 0)
-    .sort((a, b) => a.top - b.top)
-  for (const rect of rects) {
-    const last = rows[rows.length - 1]
-    if (last && Math.abs(rect.top - last.top) < 1) {
-      // 同一行的重复矩形（嵌套元素报的），取宽的那个
-      if (rect.width > last.width) rows[rows.length - 1] = rect
-      continue
-    }
-    rows.push(rect)
-  }
-  return rows
+  return mergeRowsOnTopEdge(Array.from(range.getClientRects()))
 }
 
 function rectOf(rect: { left: number; width: number; top: number; height: number }, base: DOMRect): Rect {
