@@ -2,12 +2,16 @@ import { useMemo } from 'react'
 import type { Correction, Direction, Mode, PolishLevel } from '../domain/types'
 import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
 import { EXERCISE_SOURCES } from '../domain/mock'
+import { customSources } from '../domain/custom'
 import type { ValidatedCorrection } from '../domain/validate'
 import { scoreCorrection } from '../domain/scoring'
 import { AnnotationList } from './AnnotationList'
+import { AnnotationText, type Selection } from './AnnotationText'
+import { buildLayout } from '../domain/layout'
 import { ScoreSummary } from './ScoreSummary'
-import { DetailPanel, type SelectionData } from './DetailPanel'
-import type { Selection } from './AnnotationText'
+import { DetailPanel } from './DetailPanel'
+import { RawResponseButton } from './RawResponseButton'
+import type { ViewSettings } from './settings'
 
 /** 一次作答的存档视图。第一版只存在内存里，接入 D1 后改为从服务端读取。 */
 export interface RecordView {
@@ -22,6 +26,8 @@ export interface RecordView {
   correction: Correction
   validated: ValidatedCorrection
   source: 'live' | 'fixture'
+  /** AI 原样返回的完整文本（与练习页共用同一个弹窗） */
+  raw: string
   createdAt: Date
 }
 
@@ -30,6 +36,8 @@ interface Props {
   openRecord: RecordView | null
   onOpen: (record: RecordView | null) => void
   selection: Selection | null
+  /** 界面偏好（行距、是否显示修改框）*/
+  settings: ViewSettings
   /** 选中一处批注；传 null 表示关闭详情 */
   onSelect: (selection: Selection | null) => void
 }
@@ -40,16 +48,25 @@ interface Props {
  * 顶部导航栏里的一栏，因此占据整个主体区域：左边是全部记录的列表，
  * 右边沿用练习页的四栏结构——上排是题干原文与当时写的译文，下排是计分与逐处批注。
  */
-export function RecordsView({ records, openRecord, onOpen, selection, onSelect }: Props) {
-  const selectionData: SelectionData = useMemo(() => {
-    const errors = new Map(openRecord?.validated.errors.map((entry) => [entry.error.id, entry]) ?? [])
-    const highlights = new Map(
-      openRecord?.validated.highlights.map((entry) => [entry.highlight.id, entry.highlight]) ?? [],
-    )
-    return { errors, highlights }
-  }, [openRecord])
+export function RecordsView({ records, openRecord, onOpen, selection, settings, onSelect }: Props) {
+  /*
+   * 题干原文：内置题的原文在 EXERCISE_SOURCES 里，**自己贴的题**在浏览器本地按题号留了档
+   * （见 domain/custom.ts）——不然翻回旧记录时那一栏会是空的。
+   */
+  const source = openRecord ? (EXERCISE_SOURCES[openRecord.exerciseId] ?? customSources()[openRecord.exerciseId] ?? '') : ''
 
-  const source = openRecord ? (EXERCISE_SOURCES[openRecord.exerciseId] ?? '') : ''
+  /*
+   * 存档里的译文同样要带勾画：练习记录的意义就是"回头看清当时哪里错了"，
+   * 只给一份纯文本，用户得自己在脑子里重做一遍定位。
+   * 区间早就存在 validated 里了，这里只是把它排成片段序列。
+   */
+  const answerLayout = useMemo(
+    () =>
+      openRecord
+        ? buildLayout(openRecord.validated, openRecord.answer)
+        : { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 },
+    [openRecord],
+  )
 
   return (
     <main className="split split-records">
@@ -125,6 +142,7 @@ export function RecordsView({ records, openRecord, onOpen, selection, onSelect }
           </div>
         ) : (
           <div className="split split-nested">
+            <div className="split-row split-row-top">
             <section className="pane pane-source">
               <header className="pane-head">
                 <h2>原文</h2>
@@ -139,10 +157,21 @@ export function RecordsView({ records, openRecord, onOpen, selection, onSelect }
                 <h2>当时的译文</h2>
               </header>
               <div className="pane-body">
-                <p className="answer-static">{openRecord.answer}</p>
+                <AnnotationText
+                  layout={answerLayout}
+                  answer={openRecord.answer}
+                  validated={openRecord.validated}
+                  selection={selection}
+                  lineHeightBase={settings.lineHeight}
+                  showFixBoxes={settings.showFixBoxes}
+                  onSelect={onSelect}
+                />
               </div>
             </section>
 
+            </div>
+
+            <div className="split-row split-row-bottom">
             <section className="pane pane-score">
               <header className="pane-head">
                 <h2>总体评分</h2>
@@ -167,6 +196,7 @@ export function RecordsView({ records, openRecord, onOpen, selection, onSelect }
                     {openRecord.validated.highlights.length > 0 &&
                       ` · ${openRecord.validated.highlights.length} 处优秀`}
                   </span>
+                  <RawResponseButton raw={openRecord.raw} />
                 </div>
               </header>
               <div className="pane-body">
@@ -178,8 +208,14 @@ export function RecordsView({ records, openRecord, onOpen, selection, onSelect }
                   selectedId={selection?.id}
                 />
               </div>
-              <DetailPanel selection={selection} data={selectionData} onClose={() => onSelect(null)} />
+              <DetailPanel
+                selection={selection}
+                validated={openRecord.validated}
+                answer={openRecord.answer}
+                onClose={() => onSelect(null)}
+              />
             </section>
+            </div>
           </div>
         )}
       </section>

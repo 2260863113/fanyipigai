@@ -1,9 +1,8 @@
 import { useMemo } from 'react'
-import type { Correction, ErrorObject, ErrorType, Highlight } from '../domain/types'
-import { CATEGORY_LABEL } from '../domain/types'
-import { colorForCategory, type ValidatedCorrection, type ValidatedError } from '../domain/validate'
+import type { Correction } from '../domain/types'
+import type { ValidatedCorrection } from '../domain/validate'
 import { MARK_COLOR_VALUE } from '../domain/color'
-import type { Selection } from './AnnotationText'
+import { summarizeAll, type Selection } from './annotation-summary'
 
 interface Props {
   correction: Correction
@@ -13,24 +12,15 @@ interface Props {
   selectedId?: string
 }
 
-/** 改法类型的中文说法，用于批注列表上的小标签。 */
-const TYPE_LABEL: Record<ErrorType, string> = {
-  replace: '替换',
-  insert: '插入',
-  delete: '删除',
-  rewrite: '整句重写',
-  reorder: '语序调换',
-}
-
 /**
- * 右下角的逐处批注列表。
+ * 全量批注清单。
  *
- * 刻意**不显示用户的译文全文**：全文已经在右上角，而且逐处批注里
- * 只要给出"哪一段文字、错在哪、改成什么"就够用了。
- * 把整篇译文再排一遍，反而让人要在两处之间来回对照。
+ * 现在只用在**练习记录页**：那一页的译文是存档快照，页面上没有长批注，
+ * 清单是唯一的索引，因此必须一次列全。
+ * 练习页的右下栏不走这里——那里只显示当前点中的那一处（见 DetailPanel）。
  */
 export function AnnotationList({ validated, answer, onSelect, selectedId }: Props) {
-  const rows = useMemo(() => buildRows(validated, answer), [validated, answer])
+  const rows = useMemo(() => summarizeAll(validated, answer), [validated, answer])
 
   if (rows.length === 0) {
     return <p className="hint">本次没有标出任何问题。</p>
@@ -46,11 +36,14 @@ export function AnnotationList({ validated, answer, onSelect, selectedId }: Prop
             onClick={() => onSelect(row.selection)}
           >
             <span className="note-top">
-              <span className="note-badge" style={{ color: MARK_COLOR_VALUE[row.color], borderColor: MARK_COLOR_VALUE[row.color] }}>
-                {TYPE_LABEL[row.type]}
+              <span
+                className="note-badge"
+                style={{ color: MARK_COLOR_VALUE[row.color], borderColor: MARK_COLOR_VALUE[row.color] }}
+              >
+                {row.typeLabel}
               </span>
               <span className="note-category" style={{ color: MARK_COLOR_VALUE[row.color] }}>
-                {CATEGORY_LABEL[row.category]}
+                {row.categoryLabel}
               </span>
               <span className="note-index">第 {row.order} 处</span>
             </span>
@@ -58,7 +51,11 @@ export function AnnotationList({ validated, answer, onSelect, selectedId }: Prop
             <span className="note-change">
               {row.from && <span className="note-from">{row.from}</span>}
               {row.from && row.to && <span className="note-arrow">→</span>}
-              {row.to && <span className="note-to" style={{ color: MARK_COLOR_VALUE[row.color] }}>{row.to}</span>}
+              {row.to && (
+                <span className="note-to" style={{ color: MARK_COLOR_VALUE[row.color] }}>
+                  {row.to}
+                </span>
+              )}
               {!row.to && !row.from && <span className="note-from">（见下方说明）</span>}
             </span>
 
@@ -68,81 +65,4 @@ export function AnnotationList({ validated, answer, onSelect, selectedId }: Prop
       ))}
     </ol>
   )
-}
-
-interface Row {
-  key: string
-  order: number
-  type: ErrorType
-  category: ErrorObject['category']
-  color: ReturnType<typeof colorForCategory>
-  from: string
-  to: string
-  why: string
-  selection: Selection
-}
-
-function buildRows(validated: ValidatedCorrection, answer: string): Row[] {
-  const rows: Row[] = []
-  let order = 0
-
-  for (const entry of validated.errors) {
-    order += 1
-    rows.push(errorRow(entry, order, answer))
-  }
-
-  // 亮点排在最后集中展示，用绿色区分
-  validated.highlights.forEach((entry: { highlight: Highlight }, index) => {
-    rows.push({
-      key: entry.highlight.id,
-      order: validated.errors.length + index + 1,
-      type: 'replace',
-      category: 'word-choice',
-      color: 'green',
-      from: answer.slice(entry.highlight.anchor.start, entry.highlight.anchor.end),
-      to: '',
-      why: entry.highlight.comment,
-      selection: { kind: 'highlight', id: entry.highlight.id },
-    })
-  })
-
-  return rows
-}
-
-function errorRow(entry: ValidatedError, order: number, answer: string): Row {
-  const { error, reordered } = entry
-  const color = colorForCategory(error.category)
-  const base = {
-    key: error.id,
-    order,
-    type: error.type,
-    category: error.category,
-    color,
-    why: error.explanation,
-    selection: { kind: 'error' as const, id: error.id },
-  }
-
-  // 清单里显示的是**最小修改**（真正变化的那几个字），与译文上的标注保持一致。
-  // 若这里显示 AI 圈的整段，而译文上只划了一个词，两边就对不上了。
-  const changed = error.changed
-
-  switch (error.type) {
-    case 'replace':
-      return { ...base, from: answer.slice(entry.span.start, entry.span.end), to: changed?.to ?? error.targetText ?? '' }
-    case 'delete':
-      return { ...base, from: answer.slice(entry.span.start, entry.span.end), to: '' }
-    case 'rewrite':
-      // 整句重写要给出完整的改后句子，因此这里用 targetText 而不是最小差异
-      return { ...base, from: answer.slice(entry.span.start, entry.span.end), to: error.targetText ?? '' }
-    case 'insert':
-      return { ...base, from: error.insertAfter?.snippet ?? '', to: changed?.to ?? error.targetText ?? '' }
-    case 'reorder':
-      return {
-        ...base,
-        from: error.segments?.map((segment) => segment.anchor.snippet).join(' / ') ?? '',
-        to: reordered ?? '',
-      }
-    default:
-      return { ...base, from: '', to: '' }
-  }
 }

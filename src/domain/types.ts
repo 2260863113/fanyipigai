@@ -11,10 +11,10 @@ export type Genre = 'political' | 'news' | 'literature' | 'expository'
 
 /** 改法类型：说明一处错误"该怎么改"，决定页面上如何呈现。 */
 export type ErrorType =
-  | 'replace' // 替换：原词划掉，上方小字写正确写法
+  | 'replace' // 替换：原词勾上荧光笔底色，上方小字写正确写法
   | 'insert' // 插入：漏掉的内容，在正确位置补入
-  | 'delete' // 删除：多余的内容直接划掉
-  | 'rewrite' // 整句重写：整句划掉，下方给出正确整句
+  | 'delete' // 删除：多余的内容直接勾上底色
+  | 'rewrite' // 整句重写：整句勾上底色，上方给出正确整句
   | 'reorder' // 语序调换：用配对弧线表示
 
 /**
@@ -28,7 +28,8 @@ export type ErrorCategory =
   | 'terminology' // 术语不准（硬性：固定译法写错）
   | 'omission' // 漏译（硬性：信息缺失）
   | 'addition' // 增译（硬性：多出原文没有的信息）
-  | 'function-word' // 冠词、介词、单复数（硬性：语法形态）
+  | 'grammar' // 语法（硬性：时态、语态、主谓一致、词形、句子结构）
+  | 'function-word' // 冠词、介词、单复数（硬性：形态细节）
   | 'punctuation' // 标点（硬性）
   | 'word-order' // 语序错（表达问题）
   | 'collocation' // 搭配不当（表达问题）
@@ -44,6 +45,7 @@ export const CATEGORY_PRIORITY: readonly ErrorCategory[] = [
   'terminology',
   'omission',
   'addition',
+  'grammar',
   'function-word',
   'punctuation',
   'word-order',
@@ -56,6 +58,7 @@ export const CATEGORY_LABEL: Record<ErrorCategory, string> = {
   terminology: '术语不准',
   omission: '漏译',
   addition: '增译',
+  grammar: '语法',
   'function-word': '冠词/介词/单复数',
   punctuation: '标点',
   'word-order': '语序错',
@@ -84,6 +87,7 @@ export const HARD_CATEGORIES: readonly ErrorCategory[] = [
   'terminology',
   'omission',
   'addition',
+  'grammar',
   'function-word',
   'punctuation',
 ]
@@ -156,14 +160,15 @@ export interface ErrorObject {
   /** 消歧用：片段右边紧邻的若干字 */
   contextAfter?: string
   /**
-   * 最小修改后的区间：只覆盖真正变化的那几个字，划线与补入都按它来。
+   * 最小修改后的若干区间：只覆盖真正变化的那些**词**。
    *
-   * 为什么要有它：AI 圈的 oldText 常比实际改动大得多。
-   * 例如它把 "have explore ways" 报成一处替换，而真正变的只有 explore 一个词。
-   * 这里由程序拿 AI 给的改后文字反算出最小差异（见 minimal.ts），
-   * 于是页面上只划掉 explore、只把 explored 写在上方，而不是划掉三个词。
+   * 为什么是数组：一"处"错误在 AI 眼里是一件事，落在文字上却可能横跨好几个互不相邻的词。
+   * 例如 farmers and herders 被写成 farmer and herder：
+   *   farmer → farmers、herder → herders —— 两处改动，逻辑上是同一处错误
+   * （and 没错，不该被划掉）。渲染时按区间各画各的，但共用同一个 id：
+   * 点哪一部分，选中的都是这一处错误。
    */
-  changed?: { start: number; end: number; to: string }
+  changed?: Array<{ start: number; end: number; to: string }>
   /**
    * AI 当初圈出的原始区间（未缩窄）。
    * 校验器要用它核对 "该区间里的文字是否与 oldText 一致"——
@@ -269,12 +274,14 @@ export const DIRECTION_LABEL: Record<Direction, string> = {
 /**
  * 顶部导航栏的顺序与文案。
  * 「练习记录」不是题型，而是所有题型的记录汇总页，因此单独放在最后。
+ * 「自定义」也不是题型：它是用户自己贴一篇原文进来练的入口（见 domain/custom.ts）。
  */
-export const MODE_TABS: ReadonlyArray<{ mode: Mode | 'records'; label: string; hint: string }> = [
+export const MODE_TABS: ReadonlyArray<{ mode: Mode | 'records' | 'custom'; label: string; hint: string }> = [
   { mode: 'article', label: '文章', hint: '整篇语篇翻译，英译汉 250–350 词，汉译英 200–300 字' },
   { mode: 'paragraph', label: '段落', hint: '段落翻译，考查句间衔接与语篇连贯' },
   { mode: 'sentence', label: '句子', hint: '单句翻译，改错最直观，适合打磨细节' },
   { mode: 'term', label: '术语', hint: '关键术语与中华思想文化术语，按官方标准译法判定' },
+  { mode: 'custom', label: '自定义', hint: '自己贴一篇原文来练，不用等我们出题（只贴原文即可）' },
   { mode: 'records', label: '练习记录', hint: '查看全部练习记录与当时的完整批改' },
 ]
 

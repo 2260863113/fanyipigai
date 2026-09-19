@@ -1,21 +1,21 @@
 /**
- * 最小修改：算出一处批注真正改动的最小片段。
+ * 最小修改：算出一处批注真正改动的**最小不同项**（单位是词，不是字母）。
  *
  * 为什么需要它：模型给的 oldText 是它自己圈的，常圈得过宽。
  * 例如它把 "have explore ways" → "have explored ways"，其实只有 explore 一个词变化，
  * 但按它圈的范围会把 have / ways 一起划掉，看着像大改，实际是小修。
- * 更极端的一次实测：它把 ", " → "到达地，吸引了"，而真正变的只有那一个逗号。
  *
- * 做法：对新旧文字做**字符级差异**（先剥公共前缀后缀，再在中间做经典 LCS 回溯），
- * 得到若干"替换块"，然后合并挨得很近的块（中间只隔一两个字符）。
- * 不用启发式收缩——那种写法在"改动中间夹着空格"时会停错地方，
- * 把两侧没变的词一起划进去（实际踩过）。
+ * 做法：对新旧文字做字符级差异，拿到若干"替换块"，合并挨得很近的块，
+ * 再把**贴在词内部/词尾**的那些块对齐到词边界（见下方注释）。
+ *
+ * 一处批注可能同时含**多个**最小不同项：farmers and herders 写成 farmer and herder，
+ * 该划的是 farmer 和 herder 两个词（and 没错），但它们逻辑上是同一处错误。
+ * 因此返回值是数组，交给渲染层各画各的、共用同一个 id。
  *
  * 本函数**不判断改法类型**：类型由 AI 的分类决定，颜色与计分都跟着分类走。
- * 它只负责把"圈得太宽"的范围收窄到真正变化的文字。
  */
 
-export interface MinimalResult {
+export interface MinimalChange {
   /** 相对模型给出的原片段，真正发生变化的起止位置 */
   startOffset: number
   endOffset: number
@@ -26,6 +26,17 @@ export interface MinimalResult {
 
 /** 合并两个块之间允许的最大间隔：间隔小于等于这个值就把它们连起来一起标。 */
 const MAX_GAP = 2
+
+/**
+ * 一处批注里最多容纳几个最小不同项。
+ *
+ * 一到两项是常态（一个词写错、两个词各自写错）；再多就说明新旧文字之间牵连太多，
+ * 逐项标出来是一堆互相牵制的碎片，不如整段替换来得清楚。
+ * 实测例子：In wake of reform → Since the beginning of reform and opening up
+ * 会被切出三项（In wake → Since the、插入 beginning、插入 and opening up），
+ * 那就该按整句重写标。
+ */
+const MAX_CHANGES = 2
 
 interface Block {
   oldStart: number
@@ -88,83 +99,45 @@ function diffBlocks(a: string, b: string): Block[] {
   return blocks.filter((block) => block.oldStart !== block.oldEnd || block.newStart !== block.newEnd)
 }
 
-/** 一个字符是否属于"词"（字母、数字、汉字都算）。 */
-function isWordChar(char: string | undefined): boolean {
-  return char !== undefined && /[\p{L}\p{N}]/u.test(char)
-}
 
 /**
- * 消除同类项：去掉"划掉的原文"与"写在上方的正确写法"之间重复的部分。
- *
- * 同一处改动有两份描述，若直接显示就会出现重复：
- *   prominent  → a prominent     划掉 prominent，上方又写一遍 prominent，看着像整个词被换掉
- *   关键一环    → 关键一环。        划掉整个词，上方又写一遍整个词加句号
- *
- * 判据只有两步，刻意做得很窄（试过四种更"聪明"的写法都会在别的用例上翻车）：
- *
- *   1. **整段原文被完整保留在正确写法里**吗？没有 → 说明原文确实被改掉了，
- *      照最小块显示整段改动，这样"哪个词变了"看得清：
- *        explore → explored    显示为划掉 explore、上方写 explored
- *        i is → I am           显示为划掉 i is、上方写 I am
- *
- *   2. 保留了，那就算出多出来的那部分（只多不少）。**多出来的全是标点或空格**吗？
- *      是 → 纯插入，不划任何字，只显示补进去的东西：
- *        关键一环 → 关键一环。   只显示新增的 。
- *      不是（含字母数字）→ 那是真的换了字，照最小块显示整段改动：
- *        year → years          显示为划掉 year、上方写 years
- *
- * 已知折中：`prominent` → `a prominent` 多出来的 "a " 含字母，因此走第 2 步的"不是"分支，
- * 显示成划掉 prominent、上方写 a prominent。为它单独加判据试过四种写法，都会在别处翻车，
- * 所以接受这个折中：**稳定可读优先**。
- *
- * 改这里之前请先看 minimal-cases.ts 的用例，它们覆盖了上面每一条分支。
- */export function stripRepeats(original: string, oldChunk: string, newChunk: string): { from: string; to: string } {
-  if (oldChunk.length === 0) return { from: '', to: newChunk }
-  if (newChunk.length === 0) return { from: oldChunk, to: '' }
-
-  const isWordChar = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}]/u.test(char)
-
-  // 整段原文是否被完整保留在正确写法里（含"在一端多出一截"的情形）
-  const preserved = newChunk.includes(original)
-  if (!preserved) {
-    // 原文被改掉了 → 照最小块显示整段改动，这样"哪个词变了"看得清（explore → explored）
-    return { from: oldChunk, to: newChunk }
-  }
-
-  // 原文被保留：算出多出来的那部分
-  const at = newChunk.indexOf(original)
-  const extra = newChunk.slice(0, at) + newChunk.slice(at + original.length)
-
-  // 多出来的全是标点或空格 → 纯插入，不划任何字，只显示补进去的东西（关键一环 → 关键一环。）
-  const extraHasWord = [...extra].some(isWordChar)
-  if (extra.length > 0 && !extraHasWord) {
-    return { from: '', to: extra }
-  }
-
-  // 多出来的含字母数字 → 那是真的换了字（year → years），照最小块显示整段改动
-  return { from: oldChunk, to: newChunk }
-}
-
-/**
- * 算出一处修改的最小差异。返回 null 表示新旧文字完全相同（无需标注）。
+ * 算出一处修改的最小不同项（可能有多项）。返回 null 表示新旧文字完全相同（无需标注）。
  */
-export function minimizeChange(oldText: string, newText: string): MinimalResult | null {
+export function minimizeChange(oldText: string, newText: string): MinimalChange[] | null {
   if (oldText === newText) return null
-  if (oldText.length === 0) return { startOffset: 0, endOffset: 0, from: '', to: newText }
-  if (newText.length === 0) return { startOffset: 0, endOffset: oldText.length, from: oldText, to: '' }
+  if (oldText.length === 0) return [{ startOffset: 0, endOffset: 0, from: '', to: newText }]
+  if (newText.length === 0) return [{ startOffset: 0, endOffset: oldText.length, from: oldText, to: '' }]
 
   const blocks = diffBlocks(oldText, newText)
   if (blocks.length === 0) return null
 
-  // 把挨得很近的块合起来，避免出现一堆零碎的单字标记
+  /*
+   * 把挨得很近的块合起来，避免出现一堆零碎的单字标记。
+   *
+   * 判据是"两块之间隔着的是不是词与词之间的东西"：
+   *   plant → afforested   字符级差异会把 a、t 这类字母对上号，切出好几块；
+   *                        但它们都在**同一个词内部**（两侧都没有空白/标点）→ 必须合起来，
+   *                        否则重建不回去，最后只能整句划掉（实测就踩了这个坑）
+   *   farmer and herder    两块之间隔着 " and "（有空格）→ 绝不能合，那是两个词
+   */
+  const hasWord = (gap: string): boolean => /[\p{L}\p{N}]/u.test(gap)
+  const hasSeparator = (gap: string): boolean => /[\s\p{P}\p{S}]/u.test(gap)
   const merged: Block[] = []
   for (const block of blocks) {
     const last = merged[merged.length - 1]
+    const gapOld = last ? oldText.slice(last.oldEnd, block.oldStart) : ''
+    const gapNew = last ? newText.slice(last.newEnd, block.newStart) : ''
+    // 两种"该合"的情形：
+    //   只隔了空格/标点（i is → I am、In wake of reform → Since…）——合起来当一处看
+    //   隔的是词内字符，两侧都没空白标点（plant → afforested 被切出来的 a、t）——本来就是同一个词
+    // 反之（farmer| and |herder）隔着一整个词，绝不能合：那是两个词各自改。
+    const onlySeparators = !hasWord(gapOld) && !hasWord(gapNew)
+    const insideWord = !hasSeparator(gapOld) && !hasSeparator(gapNew)
     if (
       last &&
       block.oldStart - last.oldEnd <= MAX_GAP &&
       block.newStart - last.newEnd <= MAX_GAP &&
-      !isWordChar(oldText.slice(last.oldEnd, block.oldStart))
+      (onlySeparators || insideWord)
     ) {
       last.oldEnd = block.oldEnd
       last.newEnd = block.newEnd
@@ -173,81 +146,118 @@ export function minimizeChange(oldText: string, newText: string): MinimalResult 
     merged.push({ ...block })
   }
 
-  const first = merged[0]
-  if (!first) return null
-
-  let oldStart = first.oldStart
-  let oldEnd = first.oldEnd
-  let newStart = first.newStart
-  let newEnd = first.newEnd
-
-  // 收尾：把标记扩到**词边界**，让范围读起来是一个完整的词，而不是半个词或几个孤立的字符。
-  //
-  // 为什么要扩：字符级差异会把"词形变化"缩到只剩一个字母
-  // （explore → explored 只标出 d，recent year → recent years 只标出 s 并丢掉前面的空格），
-  // 那种标法没人看得懂。实测里还出现过 In → Sin 这种把插入块与后面那个词切开的标法。
-  //
-  // 怎么扩：朝前与朝后**逐步**比对两侧的字符，相等才让出一步，一直走到词边界。
-  // 逐步比对是关键——只按"还差几个字符"做算术会走错位（In → Sin 就是这么来的）；
-  // 而中途一旦两侧不再相等就立刻停，所以不会把没变的部分卷进来。
+  /**
+   * 把一块对齐到**词**，而不是字母。判据是这处改动"贴不贴在词上"。
+   *
+   *   替换（两边都有内容）：**一定**按词对齐。
+   *       At meanwhile → Meanwhile  字符级差异会给出 "At m" → "M"（只差一个大小写字母），
+   *                                 按词对齐之后是 "At meanwhile" → "Meanwhile"。
+   *   纯插入：只在"补进某个词的内部或词尾"时对齐（词形变化）
+   *       explore → explored、recent year → recent years   划掉整个词
+   *       past → the past                                   词与词之间，一个字都不划
+   *   纯删除：只在"从某个词里挖掉一截"时对齐
+   *       years → year       划掉整个词
+   *       the past → past    词与词之间，只划掉多出来的 the
+   *
+   * 这一支最容易写错。早期版本不看形状，一律"朝两侧逐步比对、相等就让出一步"，
+   * 于是 past → the past 被扩成"划掉 past、上方写 the past"——
+   * 明明只是漏了一个词，看着却像整个词被换掉。
+   */
   const wordChar = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}]/u.test(char)
 
-  const stepBack = (): boolean => {
-    if (oldStart === 0 || newStart === 0) return false
-    const oldChar = oldText[oldStart - 1]
-    if (oldChar !== newText[newStart - 1] || !wordChar(oldChar)) return false
-    oldStart -= 1
-    newStart -= 1
-    return true
-  }
-  const stepForward = (): boolean => {
-    if (oldEnd >= oldText.length || newEnd >= newText.length) return false
-    const oldChar = oldText[oldEnd]
-    if (oldChar !== newText[newEnd] || !wordChar(oldChar)) return false
-    oldEnd += 1
-    newEnd += 1
-    return true
-  }
+  const alignToWord = (block: Block): Block => {
+    let { oldStart, oldEnd, newStart, newEnd } = block
 
-  while (stepBack()) {
-    /* 一直走到词首，或两侧不再相等 */
-  }
-  while (stepForward()) {
-    /* 一直走到词尾，或两侧不再相等 */
-  }
+    const pureInsert = oldStart === oldEnd
+    const pureDelete = newStart === newEnd
+    const isReplace = !pureInsert && !pureDelete
+    const touchesWord = isReplace
+      ? true
+      : oldStart > 0 &&
+        wordChar(oldText[oldStart - 1]) &&
+        (pureInsert ? wordChar(newText[newStart]) : wordChar(oldText[oldStart]))
 
-  // 扩到片段两端：整段本身就是改动范围（整句重写就是这种），按整段标
-  // 扩到片段两端：整段本身就是改动范围（整句重写就是这种）
-  let useWholeSpan = oldStart === 0 && oldEnd === oldText.length
+    if (touchesWord) {
+      const stepBack = (): boolean => {
+        if (oldStart === 0 || newStart === 0) return false
+        const oldChar = oldText[oldStart - 1]
+        if (oldChar !== newText[newStart - 1] || !wordChar(oldChar)) return false
+        oldStart -= 1
+        newStart -= 1
+        return true
+      }
+      const stepForward = (): boolean => {
+        if (oldEnd >= oldText.length || newEnd >= newText.length) return false
+        const oldChar = oldText[oldEnd]
+        if (oldChar !== newText[newEnd] || !wordChar(oldChar)) return false
+        oldEnd += 1
+        newEnd += 1
+        return true
+      }
 
-  // 最后一道判据，也是最重要的一道：**把这处最小修改应用回去，能不能还原成模型给的新文字**。
-  //
-  // 能还原，说明这是一处干净的最小改动（explore → explored 之类），只标那几个字就够了。
-  // 还原不了，说明模型给的新旧文字之间存在**多处**互不相邻的变化——那正是整句重写的情形
-  // （"In wake of reform" → "Since the beginning…" 就是这样，diff 会有好几个块）。
-  // 此时按整段替换标，而不是挑出其中一小块来标：那样既标不全，重建出来的结果也是错的。
-  if (!useWholeSpan) {
-    const rebuilt = oldText.slice(0, oldStart) + newText.slice(newStart, newEnd) + oldText.slice(oldEnd)
-    if (rebuilt !== newText) useWholeSpan = true
-  }
+      while (stepBack()) {
+        /* 一直走到词首，或两侧不再相等 */
+      }
+      while (stepForward()) {
+        /* 一直走到词尾，或两侧不再相等 */
+      }
+    }
 
-  if (useWholeSpan) {
-    oldStart = 0
-    oldEnd = oldText.length
-    newStart = 0
-    newEnd = newText.length
+    return { oldStart, oldEnd, newStart, newEnd }
   }
 
-  const from = oldText.slice(oldStart, oldEnd)
-  const to = newText.slice(newStart, newEnd)
-  if (from === to) return null
+  const aligned = merged
+    .map(alignToWord)
+    .filter((block) => oldText.slice(block.oldStart, block.oldEnd) !== newText.slice(block.newStart, block.newEnd))
 
-  return { startOffset: oldStart, endOffset: oldEnd, from, to }
+  /** 各块必须互不重叠、且顺序一致，否则"多个最小不同项"根本讲不通。 */
+  const disjoint = aligned.every((block, index) => {
+    const next = aligned[index + 1]
+    if (!next) return true
+    return block.oldEnd <= next.oldStart && block.newEnd <= next.newStart
+  })
+
+  /*
+   * 最后一道判据，也是最重要的一道：**把这些最小不同项按顺序应用回去，能不能还原成新文字**。
+   *
+   * 能还原，说明每一块都对齐得干净（explore → explored、farmer/herder 各改各的）。
+   * 还原不了，或者各块互相压着，说明新旧文字之间存在多处互相牵连的变化（整句重写就是这样），
+   * 那就整段替换——宁可标得大一点，也不要标错、更不要标出一份重建不出来的结果。
+   *
+   * 实测踩过：In wake of reform → Since the beginning… 会切出三个互相压着的块，
+   * 靠"逆序应用"居然还能凑巧还原成新文字，但画在页面上就是三条互相压着的删除线。
+   * 所以"能不能还原"必须与"各块互不重叠"一起判。
+   */
+  const rebuilt = disjoint
+    ? applyChangesToText(
+        oldText,
+        aligned.map((block) => ({
+          start: block.oldStart,
+          end: block.oldEnd,
+          replacement: newText.slice(block.newStart, block.newEnd),
+        })),
+      )
+    : null
+  if (rebuilt !== newText) {
+    return [{ startOffset: 0, endOffset: oldText.length, from: oldText, to: newText }]
+  }
+
+  // 改动项太多 → 整段替换（见 MAX_CHANGES 的说明）
+  if (aligned.length > MAX_CHANGES) {
+    return [{ startOffset: 0, endOffset: oldText.length, from: oldText, to: newText }]
+  }
+
+  return aligned.map((block) => ({
+    startOffset: block.oldStart,
+    endOffset: block.oldEnd,
+    from: oldText.slice(block.oldStart, block.oldEnd),
+    to: newText.slice(block.newStart, block.newEnd),
+  }))
 }
 
 /** 把一处最小修改应用到片段上，得到修改后的片段。 */
-export function applyMinimal(oldText: string, result: MinimalResult): string {
-  return oldText.slice(0, result.startOffset) + result.to + oldText.slice(result.endOffset)
+export function applyMinimal(oldText: string, change: MinimalChange): string {
+  return oldText.slice(0, change.startOffset) + change.to + oldText.slice(change.endOffset)
 }
 
 /**

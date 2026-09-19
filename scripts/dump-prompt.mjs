@@ -5,8 +5,9 @@
  * 只在源码里读会漏掉拼接后的最终形态。这里输出的是**模型真正收到的那份文本**。
  *
  * 用法：
- *   node scripts/dump-prompt.mjs             打印到屏幕
- *   node scripts/dump-prompt.mjs --out        同时写入 docs/prompt-system.txt
+ *   node scripts/dump-prompt.mjs                打印到屏幕（批改 + 出题两套提示词）
+ *   node scripts/dump-prompt.mjs --out           同时写入 docs/prompt-system.txt
+ *   node scripts/dump-prompt.mjs --generation    只打印 AI 出题的那两段
  */
 
 import { build } from 'esbuild'
@@ -24,7 +25,7 @@ const outfile = path.join(cacheDir, 'out.mjs')
 writeFileSync(
   entry,
   [
-    `export { buildSystemPrompt, buildUserPrompt, buildSectionNote, buildRetryPrompt } from ${JSON.stringify(
+    `export { buildSystemPrompt, buildUserPrompt, buildSectionNote, buildRetryPrompt, buildGenerationSystemPrompt, buildGenerationUserPrompt } from ${JSON.stringify(
       path.join(root, 'src', 'domain', 'prompt.ts'),
     )}`,
   ].join('\n'),
@@ -54,13 +55,22 @@ const exampleRequest = {
   direction: 'en-to-zh',
   genre: 'news',
   level: 'polish',
-  referenceTranslation: '生态文明是人与自然和谐共生的一种人类进步形态，已成为中国发展战略中至关重要的组成部分。',
 }
 
 const userFirst = mod.buildUserPrompt(exampleRequest)
 const userSection = mod.buildUserPrompt(exampleRequest, mod.buildSectionNote(2, 4))
 
 const banner = (title) => `\n${'='.repeat(72)}\n${title}\n${'='.repeat(72)}\n`
+
+// AI 出题走的是另一套提示词（命题而不是改卷），一并导出，免得只在源码里找
+const exampleGeneration = {
+  direction: 'zh-to-en',
+  genre: 'news',
+  topic: '生态文明建设',
+  mode: 'article',
+}
+const generationSystem = mod.buildGenerationSystemPrompt()
+const generationUser = mod.buildGenerationUserPrompt(exampleGeneration)
 
 const output = [
   banner('系统提示（system）—— 每次批改都会原样发送'),
@@ -71,7 +81,17 @@ const output = [
   userSection,
   banner('重试消息（user）—— 上一次返回未通过校验时追加'),
   mod.buildRetryPrompt(['errors[4] 的 category 缺了这个字段。每一个 error 都必须有 category，取值只能是：…']),
+  banner('AI 出题 · 系统提示（system）'),
+  generationSystem,
+  banner('AI 出题 · 用户消息（user）—— 例：中译英 · 新闻 · 生态文明建设 · 文章题'),
+  generationUser,
 ].join('\n')
+
+// --generation：只想看 AI 出题那两段时用（读起来短，改提示词时不用在一大篇里翻）
+if (process.argv.includes('--generation')) {
+  console.log([banner('AI 出题 · 系统提示（system）'), generationSystem, banner('AI 出题 · 用户消息（user）'), generationUser].join('\n'))
+  process.exit(0)
+}
 
 const asFile = process.argv.includes('--out')
 if (asFile) {

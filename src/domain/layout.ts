@@ -40,6 +40,13 @@ export interface TextSegment {
   deletedText?: string
   /** 语序调换片段上的序号标记 */
   reorderLabel?: string
+  /**
+   * 语序调换片段在 AI 给的 segments 里的序号（sourceIndex）。
+   *
+   * 弧线要做的是"把这一段连到那一段"，配对用的就是这个序号，而不是片段在文本里的字符位置。
+   * 两者必须分开存：曾经把字符位置当成序号写进 data 属性，弧线于是一条都配不出来。
+   */
+  reorderSourceIndex?: number
   /** 语序调换时，所在组的调序结果预览 */
   reordered?: string
 }
@@ -63,6 +70,54 @@ export interface AnnotatedLayout {
   droppedCount: number
 }
 
+/** 最终**画在译文上**的形态。注意它不一定等于 AI 给的 type。 */
+export type RenderedKind = 'replace' | 'insert' | 'delete' | 'rewrite' | 'reorder'
+
+/** 一个最小不同项最终画成什么。 */
+export function renderedKindOf(change: { start: number; end: number; to: string }): RenderedKind {
+  // 零宽落点 → 只补不划（漏了一个 the 就只显示 <the>）
+  if (change.start === change.end) return 'insert'
+  // 有划掉的范围却没有改后文字 → 就是删除（多了一个 the 只划掉即可）
+  return change.to.length > 0 ? 'replace' : 'delete'
+}
+
+/**
+ * 这一处批注整体算哪一种改法。
+ *
+ * 为什么要单独判一次：AI 说"替换"，按单词求最小不同项之后可能根本不是替换——
+ *   past → the past      其实只是漏了一个 the    → 画成**插入**（一个字都不划）
+ *   the past → past      其实只是多了一个 the    → 画成**删除**（不写任何东西）
+ * 界面上的徽标、气泡、右下角说明都用这个结果，保证"画的是什么，卡片就写什么"。
+ */
+export function entryRenderedKind(entry: ValidatedError): RenderedKind {
+  const { error } = entry
+  if (error.type === 'reorder') return 'reorder'
+  const first = entry.changes[0]
+  if (error.type === 'rewrite') {
+    // 只有"整段都换了"才算整句重写。按词求最小不同项之后如果只剩一小处，
+    // 那就是普通的替换——曾经这里直接判成 rewrite，于是"只改了一个词"被整句划掉（实测踩过）。
+    return isWholeSpanChange(entry, first) ? 'rewrite' : first ? renderedKindOf(first) : 'rewrite'
+  }
+  return first ? renderedKindOf(first) : 'delete'
+}
+
+/**
+ * 这一处的最小不同项是不是正好覆盖**模型圈的那一整段**（= 真的是整句重写）。
+ *
+ * 注意要跟 `originalSpan`（模型圈的原始范围）比，不能跟 `entry.span` 比——
+ * 后者是"改动项的外框"，只有一处改动时它正好等于改动项本身，一比就恒为真，
+ * 于是"只改了一个词"也会被当成整句重写（实际踩过）。
+ */
+export function isWholeSpanChange(
+  entry: ValidatedError,
+  change: { start: number; end: number } | undefined,
+): boolean {
+  if (!change || entry.changes.length !== 1) return false
+  const original = entry.error.originalSpan
+  if (!original) return true
+  return change.start === original.start && change.end === original.end
+}
+
 const AROUND = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩']
 
 function labelFor(index: number): string {
@@ -71,35 +126,73 @@ function labelFor(index: number): string {
 
 export function buildLayout(correction: ValidatedCorrection, answer: string): AnnotatedLayout {
   const segments: TextSegment[] = []
-  const highlightSpans = correction.highlights.map((h) => h.span)
 
   const pushPlain = (start: number, end: number): void => {
     if (end <= start) return
     segments.push({ kind: 'plain', text: answer.slice(start, end), start, end })
   }
 
-  /** 处理单个错误对象覆盖的区间；语序调换的片段不走这里。 */
-  const pushError = (entry: ValidatedError, span: ValidatedSpan): void => {
+  /**
+   * 处理一个错误对象。语序调换的片段不走这里。
+   *
+   * 画成什么由 `renderedKindOf` 决定，**不是**照抄 AI 的 type。
+   * 一处错误可能落在好几个互不相邻的区间上（farmer and herder 要各改各的），
+   * 因此按最小不同项**逐个画**；它们共用同一个 errorId，
+   * 点哪一处选中的都是这一处错误。
+   */
+  const pushError = (entry: ValidatedError): void => {
     const { error } = entry
     const color = colorForCategory(error.category)
-    const text = answer.slice(span.start, span.end)
-    const base = { start: span.start, end: span.end, errorId: error.id, color, category: error.category }
 
-    switch (error.type) {
-      case 'replace':
-        segments.push({ kind: 'replace', text, deletedText: text, targetText: error.targetText, ...base })
-        break
-      case 'delete':
-        segments.push({ kind: 'delete', text, deletedText: text, ...base })
-        break
-      case 'rewrite':
-        segments.push({ kind: 'rewrite', text, deletedText: text, targetText: error.targetText, ...base })
-        break
-      case 'insert':
-        segments.push({ kind: 'insert', text: '', targetText: error.targetText, ...base, start: span.start, end: span.start })
-        break
-      default:
-        break
+    // 整句重写整段画一次：上面划掉原句，下面的方框给出完整新句。
+    // 但只有"整段都换了"才是重写；只剩一处词级改动时按普通替换画（否则一个词写错会被整句划掉）。
+    if (error.type === 'rewrite' && isWholeSpanChange(entry, entry.changes[0])) {
+      const { span } = entry
+      const text = answer.slice(span.start, span.end)
+      segments.push({
+        kind: 'rewrite',
+        text,
+        deletedText: text,
+        targetText: error.targetText,
+        start: span.start,
+        end: span.end,
+        errorId: error.id,
+        color,
+        category: error.category,
+      })
+      return
+    }
+
+    // 兜底：万一拿到的是没有 changes 的旧数据，至少按整段画出来
+    const changes =
+      entry.changes.length > 0
+        ? entry.changes
+        : [{ start: entry.span.start, end: entry.span.end, to: error.targetText ?? '' }]
+
+    for (const change of changes) {
+      const text = answer.slice(change.start, change.end)
+      const base = {
+        start: change.start,
+        end: change.end,
+        errorId: error.id,
+        color,
+        category: error.category,
+      }
+
+      switch (renderedKindOf(change)) {
+        case 'insert':
+          segments.push({ kind: 'insert', text: '', targetText: change.to, ...base, end: change.start })
+          break
+        case 'replace':
+          segments.push({ kind: 'replace', text, deletedText: text, targetText: change.to, ...base })
+          break
+        case 'delete':
+          // 只划掉，不写任何东西
+          segments.push({ kind: 'delete', text, deletedText: text, ...base })
+          break
+        default:
+          break
+      }
     }
   }
 
@@ -153,50 +246,40 @@ export function buildLayout(correction: ValidatedCorrection, answer: string): An
     pushPlain(cursor, Math.max(cursor, span.start))
 
     if (mark.type === 'error') {
-      pushError(mark.entry, mark.span)
+      pushError(mark.entry)
       cursor = Math.max(cursor, span.end)
       continue
     }
 
     const { part } = mark
     const text = answer.slice(part.span.start, part.span.end)
-    const overlapsHighlight = highlightSpans.some((h) => spansOverlap(h, part.span))
     const errorId = part.errorId
     const group = reorderGroups.find((g) => g.errorId === errorId)
     const color = group?.color ?? 'orange'
-    if (overlapsHighlight) {
-      segments.push({ kind: 'highlight', text, start: part.span.start, end: part.span.end, highlightId: undefined, color: 'green' })
-      segments.push({
-        kind: 'plain',
-        text: part.label,
-        start: part.span.end,
-        end: part.span.end,
-        errorId,
-        color,
-        category: group?.category,
-        reorderLabel: part.label,
-        reordered: group?.reordered,
-      })
-    } else {
-      segments.push({
-        kind: 'plain',
-        text,
-        start: part.span.start,
-        end: part.span.end,
-        errorId,
-        color,
-        category: group?.category,
-        reorderLabel: part.label,
-        reordered: group?.reordered,
-      })
-    }
+    // 调序片段始终是**一个**片段：文字 + 跟在后面的圈号。
+    // 不再为"与亮点重叠"另开一个 highlight 片段——那样弧线就没有地方量坐标了，
+    // 而且实际上 resolveOverlaps 本来就会把这种重叠的亮点丢掉。
+    segments.push({
+      kind: 'plain',
+      text,
+      start: part.span.start,
+      end: part.span.end,
+      errorId,
+      color,
+      category: group?.category,
+      reorderLabel: part.label,
+      reorderSourceIndex: part.sourceIndex,
+      reordered: group?.reordered,
+    })
     cursor = Math.max(cursor, part.span.end)
   }
 
   // 亮点：不参与错误统计，渲染为绿色着重
   for (const entry of correction.highlights) {
     const { span } = entry
-    const overlapping = segments.some((s) => spansOverlap({ start: s.start, end: s.end }, span) && s.kind !== 'plain')
+    const overlapping = segments.some(
+      (s) => spansOverlap({ start: s.start, end: s.end }, span) && (s.kind !== 'plain' || Boolean(s.errorId)),
+    )
     if (overlapping) continue
     // 打断可能跨越此区间的普通片段
     const rebuilt: TextSegment[] = []
@@ -248,19 +331,8 @@ export function buildLayout(correction: ValidatedCorrection, answer: string): An
  * 划线上再划线、正确写法互相压字的情况，比不标还难读。
  *
  * 规则：跨度长的批注优先（整句重写压过词级修正），同级则位置靠前者优先；
- * 被覆盖的低优先级片段直接丢弃，页面下方会汇总提示丢弃了多少处。
- * 宁可少标，不可标错——漏标的批注用户仍能在下方列表里读到。
- */
-/**
- * 重叠消解。
- *
- * 为什么需要它：批注来自 AI，同一段文字完全可能同时被两处批注覆盖——
- * 一处整句重写，加上句中若干个词级修正。若两处都画，页面上会出现
- * 划线上再划线、正确写法互相压字的情况，比不标还难读。
- *
- * 规则：跨度长的批注优先（整句重写压过词级修正），同级则位置靠前者优先；
- * 被覆盖的低优先级批注直接丢弃，界面会汇总提示丢弃了多少处。
- * 宁可少标，不可标错。
+ * 被覆盖的低优先级片段直接丢弃，界面会汇总提示丢弃了多少处。
+ * 宁可少标，不可标错——漏标的批注用户仍能在右侧详情里读到。
  *
  * 保留的批注之间的空隙，一律用原文补齐——批注只覆盖作答的一部分，
  * 剩下的文字（包括作答尾部）同样必须显示出来。

@@ -37,6 +37,15 @@ export const EXERCISE_VARIANTS: Record<string, Variant[]> = {
     },
   ],
 
+  // 段落 · 中译英 · 新闻编译（原文约 120 字）
+  'paragraph-001': [
+    {
+      source:
+        '近年来，长江沿线省份累计拆除非法码头一千余处，腾退岸线超过一百五十公里，干流水质连续多年稳定达到Ⅱ类。沿江城市新建的滨江公园让居民重新走近江水，江豚等珍稀物种的出现频率也明显上升。',
+      referenceTranslation:
+        "In recent years, provinces along the Yangtze have demolished more than 1,000 illegal wharves and vacated over 150 kilometres of shoreline, and water quality in the river's main course has held at Grade II for several years running. New riverside parks in cities along the bank have brought residents back to the water, and rare species such as the Yangtze finless porpoise are being sighted far more often.",
+    },
+  ],
   // 段落 · 英译中 · 科技
   'paragraph-002': [
     {

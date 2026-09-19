@@ -113,130 +113,78 @@ function resolveSpan(
  *   insert   start === end（零宽落点），只显示补入的 to
  */
 function resolveChanged(
-  answer: string,
   span: { start: number; end: number; snippet: string },
   errorType: ErrorType,
   targetText: string | undefined,
-): { start: number; end: number; to: string } {
-  void answer
+): Array<{ start: number; end: number; to: string }> {
   const original = span.snippet
 
   // 删除：整块划掉就是最小改法
   if (errorType === 'delete') {
-    return { start: span.start, end: span.end, to: '' }
+    return [{ start: span.start, end: span.end, to: '' }]
   }
 
   // 插入：没有可删的内容，落点即区间（零长度）
   if (errorType === 'insert' || typeof targetText !== 'string') {
-    return { start: span.end, end: span.end, to: targetText ?? '' }
+    return [{ start: span.end, end: span.end, to: targetText ?? '' }]
   }
 
-  const isWordChar = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}]/u.test(char)
+  /*
+   * 剩下的全交给 minimizeChange。
+   *
+   * 它按**词**（不是字母）算出最小不同项，并且已经判好了"该不该划掉东西"：
+   *   词形变化（explore → explored、recent year → recent years）→ 划掉整个词、上方写新词
+   *   漏／多一个词（past ↔ the past）                        → 一个字都不划，或只划掉多出来的词
+   *   一处错误落在好几个词上（farmer and herder → farmers and herders）→ 返回多项，各画各的
+   *
+   * 所以这一层**只做坐标换算**：把片段内的偏移搬到作答全文的绝对位置上。
+   * 这里曾经还要"按词再扩一次"，那一步会把纯插入又扩成整词替换，
+   * 覆盖掉 minimizeChange 的判断——不要再加回来。
+   */
+  const minimal = minimizeChange(original, targetText)
+  if (!minimal) return [{ start: span.start, end: span.end, to: targetText }]
 
-  // 先把 targetText 两端**原样重复的原文**剥掉。
-  // 模型常这么写：原文 "China "、却把正确写法写成 "China insists on"（China 是原样保留的）。
-  // 不剥的话页面上会先划掉 China、上方又写一遍 China——这正是实测看到的重复。
-  // 现在坐标已统一到作答全文，所以这里只做字符串层面的去除，不牵涉任何位置换算。
-  const stripEdgeRepeat = (text: string): string => {
-    const core = original.trim()
-    if (!core) return text
-    for (const edge of [original, core]) {
-      if (text.length > edge.length && text.startsWith(edge)) return text.slice(edge.length).trimStart()
-      if (text.length > edge.length && text.endsWith(edge)) return text.slice(0, text.length - edge.length).trimEnd()
-    }
-    return text
-  }
-  const cleaned = stripEdgeRepeat(targetText)
-  const replacement = cleaned.length > 0 ? cleaned : targetText
-
-  // 情况一：正确写法里**包含**原文（含"在一端多出一截"）——只多不少。
-  if (replacement.includes(original)) {
-    const at = replacement.indexOf(original)
-    const extra = replacement.slice(0, at) + replacement.slice(at + original.length)
-
-    // 多出来的全是标点或空格 → 纯插入：不划任何字，只显示补进去的东西
-    // （关键一环 → 关键一环。 只显示新增的 ）
-    if (extra.length > 0 && ![...extra].some(isWordChar)) {
-      const insertAt = at === 0 ? span.start : span.end
-      return { start: insertAt, end: insertAt, to: extra }
-    }
-
-    // 多出来的含字母数字 → 真的换了字，照原区间显示（year → years 划掉 year）
-    return { start: span.start, end: span.end, to: replacement }
-  }
-
-  // 情况二：正确写法里**不包含**原文——这才用最小差异缩窄，让"哪个词变了"看得清。
-  //
-  // 注意这里刻意不去"清理"模型抄重复的原文：实测它常给出含糊或重叠的 targetText
-  // （如原文 "China "、targetText "China insists on"），任何自动换算都会算错位置，
-  // 于是宁可照它给的范围显示，也不要自作聪明。真正治本的办法是提示词要求它只写改成的那部分。
-  const minimal = minimizeChange(original, replacement)
-  if (!minimal) return { start: span.start, end: span.end, to: replacement }
-
-  let start = span.start + minimal.startOffset
-  let end = span.start + minimal.endOffset
-
-  // 求同存异要按**词**，不能按字母。
-  //   have explore ways → have explored ways   最小差异只落在词尾的 d 上，
-  //                                            但"整词"才是有意义的单位，应当划掉整个 explore
-  //   live condition    → live conditions      同理，划的应是 condition，而不是那个 s
-  // 做法：若最小差异落在词内（左右至少一侧紧邻的仍是词字符），
-  // 就把范围扩到该词在原文里的完整边界。
-  const isWord = (char: string | undefined): boolean => char !== undefined && /[\p{L}\p{N}]/u.test(char)
-  const insideWord = (start > 0 && isWord(answer[start - 1])) || (end < answer.length && isWord(answer[end]))
-  if (insideWord) {
-    // 向左扩到词首
-    while (start > 0 && isWord(answer[start - 1])) start -= 1
-    // 向右扩到词尾（已经相同的那部分也算进来，因为整词才是改动单位）
-    while (end < answer.length && isWord(answer[end])) end += 1
-    return { start, end, to: wordAfterFix(answer, start, end, span, minimal, replacement) }
-  }
-
-  return { start, end, to: minimal.to }
+  return minimal.map((change) => ({
+    start: span.start + change.startOffset,
+    end: span.start + change.endOffset,
+    to: change.to,
+  }))
 }
 
 /**
- * 整词扩展后，算出上方该写什么。
+ * 把解析后的批注还原成"AI 原本写的样子"。
  *
- * 扩展把"原本相同的那部分词"也纳入了划掉范围，因此上方不能只写最小差异，
- * 而要写出这个词改成后的完整形态。
- *   original 片段是 'have explore ways'，扩出来的词是 'explore'，
- *   最小差异是 explore → explored，于是上方写 'explored'。
+ * 解析器往每个错误对象上补了 anchor / originalSpan / changed / insertAfter 这些
+ * 程序自己算出来的字段。要回答"AI 到底返回了什么"，就得把它们去掉——
+ * 界面上的「查看 AI 完整返回内容」用的就是这个。
  */
-function wordAfterFix(
-  answer: string,
-  start: number,
-  end: number,
-  span: { start: number; end: number; snippet: string },
-  minimal: { startOffset: number; endOffset: number; to: string },
-  replacement: string,
-): string {
-  const oldWord = answer.slice(start, end)
-  const headKeep = span.start - start // 左侧多纳入的相同字符数
-  if (headKeep < 0) return replacement
-
-  // 这个词 = 左侧相同部分 + 原片段 + 右侧相同部分
-  const localStart = headKeep + minimal.startOffset
-  const localEnd = headKeep + minimal.endOffset
-  if (localStart < 0 || localEnd > oldWord.length) return replacement
-
-  // 先算出这个词改成后的完整形态
-  const correctedWord = oldWord.slice(0, localStart) + minimal.to + oldWord.slice(localEnd)
-
-  // 再剥掉它**与原文相同的前后部分**：那些字没有被改动，写在上方只会造成重复。
-  // 中间"确实变了的那一段"整段留下，这正是"按词不按字母"的含义：
-  //   condition → conditions            左侧的 condition 在改后文字里不是原样前缀 → 上方写 conditions
-  //   live condition → live conditions  左侧的 live 原样保留 → 上方只写 conditions
-  //
-  // 注意：这里**只剥左侧**，不剥右侧。因为右侧相同的部分正是"改成后的词尾"，
-  // 例如 condition → conditions：左侧 condition 是新词的前缀（剥掉），
-  // 右侧那个 s 是变化本身（必须留下）。若连右侧一起剥，就只剩一个空串了。
-  let from = 0
-  while (from < oldWord.length && from < correctedWord.length && oldWord[from] === correctedWord[from]) {
-    from += 1
+export function toAiShape(correction: Correction): { errors: unknown[]; highlights: unknown[] } {
+  return {
+    errors: correction.errors.map((error) => ({
+      id: error.id,
+      type: error.type,
+      category: error.category,
+      ...(error.oldText !== undefined ? { oldText: error.oldText } : {}),
+      ...(error.targetText !== undefined ? { targetText: error.targetText } : {}),
+      ...(error.contextBefore !== undefined ? { contextBefore: error.contextBefore } : {}),
+      ...(error.contextAfter !== undefined ? { contextAfter: error.contextAfter } : {}),
+      ...(error.segments
+        ? {
+            segments: error.segments.map((segment) => ({
+              oldText: segment.oldText,
+              sourceIndex: segment.sourceIndex,
+              targetIndex: segment.targetIndex,
+            })),
+          }
+        : {}),
+      explanation: error.explanation,
+    })),
+    highlights: correction.highlights.map((highlight) => ({
+      id: highlight.id,
+      oldText: highlight.oldText,
+      comment: highlight.comment,
+    })),
   }
-  const visible = correctedWord.slice(from)
-  return visible.length > 0 ? visible : correctedWord
 }
 
 function readSegments(
@@ -321,7 +269,7 @@ function readError(value: unknown, index: number, answer: string, problems: stri
       if (!targetText) problems.push(`${label} 是 ${errorType}，但没有给出 targetText`)
       const span = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
       if (!span || !targetText) return undefined
-      const changed = resolveChanged(answer, span, errorType, targetText)
+      const changed = resolveChanged(span, errorType, targetText)
       return {
         ...base,
         oldText: text,
@@ -337,7 +285,7 @@ function readError(value: unknown, index: number, answer: string, problems: stri
       const text = readText(value.oldText, `${label} 的 oldText`, problems)
       const span = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
       if (!span) return undefined
-      const changed = resolveChanged(answer, span, errorType, undefined)
+      const changed = resolveChanged(span, errorType, undefined)
       return {
         ...base,
         oldText: text,
@@ -354,7 +302,7 @@ function readError(value: unknown, index: number, answer: string, problems: stri
       if (!targetText) problems.push(`${label} 是 insert，但没有给出要补入的 targetText`)
       const span = text ? resolveSpan(answer, text, before, after, occurrence, label, problems) : undefined
       if (!span || !targetText) return undefined
-      const changed = resolveChanged(answer, span, errorType, targetText)
+      const changed = resolveChanged(span, errorType, targetText)
       return {
         ...base,
         oldText: text,

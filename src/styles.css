@@ -203,26 +203,135 @@ button {
  * 左右均分（两列 1fr），上下 2:1（两行 2fr 1fr）。
  * 四块区域各自独立滚动，互不干扰：原文与译文常常很长，计分与批注则需要固定视野。
  */
+/*
+ * 上下两排的高度规则：
+ *   - **默认各占一半**：下方两栏（总体评分 + 批注详情）的顶边落在二分之一处；
+ *   - 某一排的内容很长时，它自然多占，另一排让位；
+ *   - 让位有底线，也有上限：
+ *       下方两栏最多占到一半（再多就自己内部滚动）——"顶到一半处就不动了"；
+ *       下方两栏最少留 180px（再挤就挤不动了）——"顶到头了就不动了"。
+ *
+ * 为什么用 flex 而不是 grid 的固定比例：grid 的 fr 与内容无关，
+ * 无论原文/译文多长都死死平分，那正是用户抱怨的"下面两栏太窄/不会动"。
+ */
 .split {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 2fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 0;
+}
+
+.split-row {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  /* flex-basis: auto → 以内容高度为基准，再把剩余空间平分 */
+  flex: 1 1 auto;
+}
+
+/*
+ * 拖动边界用的分隔条。默认是一块"看不见的抓手 + 一条细线"，
+ * 悬停/拖动时才显色，因此没有拖动需求时不影响观感。
+ */
+.splitter {
+  flex: none;
+  position: relative;
+  background: transparent;
+  touch-action: none;
+}
+
+.splitter-v {
+  width: 8px;
+  cursor: col-resize;
+}
+
+.splitter-h {
+  height: 8px;
+  cursor: row-resize;
+}
+
+.splitter-v::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--line);
+}
+
+.splitter-h::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--line);
+}
+
+.splitter:hover::after,
+.splitter:active::after {
+  background: var(--accent);
+  width: 2px;
+}
+
+.splitter-h:hover::after,
+.splitter-h:active::after {
+  width: auto;
+  height: 2px;
+}
+
+/*
+ * 手动模式：用户拖过之后，按他定的比例分（--col-left/-right、--row-top/-bottom）。
+ * 这时候不再按内容让位，最小/最大高度限制也一并放开——手动调过就以手动为准。
+ */
+.split-manual {
+  display: grid;
+  grid-template-rows: minmax(0, var(--row-top)) 8px minmax(0, var(--row-bottom));
+}
+
+.split-manual .split-row {
+  display: grid;
+  grid-template-columns: minmax(0, var(--col-left)) 8px minmax(0, var(--col-right));
+  flex: none;
+  max-height: none;
+  min-height: 0;
+}
+
+.split-manual .split-row > .pane {
+  min-height: 0;
+}
+
+.split-row-top {
+  min-height: 200px;
+  max-height: 88%;
+}
+
+.split-row-bottom {
+  min-height: 180px;
+  max-height: 50%;
+}
+
+.split-row > .pane {
+  flex: 1 1 0;
 }
 
 /* 练习记录页：左边记录列表，右边沿用四栏结构 */
 .split-records {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr;
 }
 
 .split-nested {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 2fr 1fr;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 记录列表那一屏占满整高 */
@@ -405,6 +514,19 @@ button {
   box-shadow: 0 0 0 3px rgba(44, 107, 237, 0.12);
 }
 
+/* 贴题弹窗里的原文框：够高够宽，能整段贴进来 */
+.gen-textarea {
+  min-height: 180px;
+  resize: vertical;
+}
+
+/* 弹窗里的一行错误提示（贴了空内容之类） */
+.error-text {
+  margin: 8px 0 0;
+  color: var(--mark-red);
+  font-size: 13px;
+}
+
 /* 右上栏里的带批注译文：留出上方小字与弧线的空间，并且不要贴着栏底 */
 .pane-answer .annotated {
   margin-top: 4px;
@@ -414,13 +536,10 @@ button {
   padding-bottom: 6px;
 }
 
-.answer-static {
-  font-family: var(--serif);
-  font-size: 17px;
-  line-height: 1.9;
-  margin: 0;
-  white-space: pre-wrap;
-}
+/*
+ * 练习记录页的"当时的译文"用的是与练习页完全相同的批注渲染器（.annotated-lines），
+ * 因为它同样是 .pane-answer，样式自动一致——所以这里不再需要一份静态译文样式。
+ */
 
 /* 分段导航：放在原文下方、批改结果上方 */
 .section-nav {
@@ -684,7 +803,8 @@ button {
 }
 
 .note-to {
-  font-weight: 700;
+  /* 不加粗：这是改成什么，属于修改内容 */
+  font-weight: inherit;
 }
 
 .note-why {
@@ -751,9 +871,19 @@ button {
   cursor: default;
 }
 
+/*
+ * 荧光笔：被改动的内容**不划掉**，改成用相应颜色的底色勾画（红＝硬性错误、橙＝表达问题）。
+ *
+ * 底色挂在**最外层**那个带 data-fix-key 的 span 上：补写的字更长时，
+ * FixLayer 会给它两边各加一段**真的空档**把总宽撑到与上面那行齐平（见 components/FixLayer.tsx），
+ * 底色跟着一起撑开，就是一条与补写内容等宽的带子；相邻的文字被这段空档推到带子两侧去，
+ * 所以带子里始终只有被改内容自己。
+ *
+ * 被改内容**允许在词与词之间断开换行**（放不下时才断）：不能再锁 nowrap——
+ * 那样一整块会被行尾顶到下一行去，这正是"捆绑着一起换行"的来源。
+ * 词内部永远不拆：靠的是正常的西文断行规则，不额外加 break-all 之类的东西。
+ */
 .mk-delete {
-  text-decoration: line-through;
-  text-decoration-thickness: 2px;
   cursor: pointer;
 }
 
@@ -761,65 +891,124 @@ button {
   display: inline;
   position: relative;
   cursor: pointer;
-  white-space: nowrap;
 }
 
+/* 摘掉删除线之后这里不再有样式，class 保留：它是"被替换掉的旧文字"的记号 */
 .mk-deleted {
-  text-decoration: line-through;
-  text-decoration-thickness: 2px;
+  text-decoration: none;
 }
 
-/* 正确写法以小字浮在被划掉的原文上方，字体与正文同一套 */
-.mk-fix {
-  position: absolute;
-  left: 0;
-  bottom: 100%;
-  font-family: var(--serif);
-  font-size: 0.76em;
-  font-weight: 700;
-  line-height: 1.3;
-  white-space: nowrap;
-}
-
+/*
+ * 插入点：一块**荧光笔颜色的空位**（以前是那根零宽的小竖线，已废弃）。
+ *
+ * 宽度由 FixLayer 按"要补进去的内容"量出来写上去，因此与上方那个方框一样宽——
+ * 看到多宽的空位，上面就写着多长的内容。CSS 里那个 0.6em 只是兜底：
+ * 关掉「显示填补的正确写法」时 FixLayer 不跑，插入点也不该整个消失。
+ * inline-block 保证它不会被折行切开；高度取 1.15em，看着就是行里少了一块。
+ */
 .mk-insert {
+  position: relative;
+}
+
+.mk-slot {
+  display: inline-block;
+  width: 0.6em;
+  height: 1.15em;
+  vertical-align: -0.2em;
+  border-radius: 2px;
+}
+
+/* 调序圈号也绝对定位：它是标记，不该把整行挤得比别人长 */
+.mk-reorder {
+  position: relative;
+}
+
+.mk-reorder-label {
+  position: absolute;
+  left: 100%;
+  top: -0.55em;
+}
+
+/*
+ * ── 填补内容层 ────────────────────────────────────────────
+ *
+ * 正确写法（补入的词、替换后的词、重写后的整句）一律画在这里的方框里，
+ * **不占行内宽度**——所以批注永远不会改变译文本身的换行位置。
+ * 位置由 domain/fix-layout.ts 算：默认居中于被修改内容，
+ * 挤在一起就左右分开，分不开就往上叠一层。
+ */
+.fix-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  pointer-events: none;
+  /*
+   * 字号与正文完全一致（.annotated-lines 是 17.5px）。
+   * 行高取 1.8 而不是正文那个 2.5：正文的 2.5 里有一大半是给标记留的空白，
+   * 照搬到方框里只会把方框撑得虚高；1.8 才是"读起来和正文一样大"的高度。
+   */
+  font-family: var(--serif);
+  font-size: 17.5px;
+  line-height: 1.8;
+}
+
+/* 量尺寸用的临时副本：不可见、也不接受点击 */
+.fix-layer-probe {
+  visibility: hidden;
+}
+
+/*
+ * 填补的正确写法：**只有文字，没有框，也没有任何底色**。
+ *
+ * 用 span 而不是 button —— button 自带浏览器默认的灰底与边框，
+ * CSS 里不写 border/background 也挡不住它（上一版就是这么"看起来还有框"的）。
+ * span 没有任何默认外观，才是真正的透明、无边框。
+ *
+ * 位置由 fix-layout.ts 算：默认居中于被改内容、挤了左右分开、分不开就往上加层。
+ * **本身不折行**：被改内容跨行时，补写的字在 FixLayer 里就被切成几段，一段对一行，
+ * 每段各自居中于那一行的带子——"跟随原译文换行"就是这么实现的，而不是让方框自己乱折。
+ */
+.fix-text {
+  position: absolute;
+  pointer-events: auto;
+  display: block;
+  background: none;
+  border: none;
+  /* 字号取之前那档小字（相对 .fix-layer 的 17.5px = 约 13.6px） */
+  font-family: inherit;
+  font-size: 0.78em;
+  /* 不加粗：修改内容一律与正文同粗（需求） */
+  font-weight: inherit;
+  /* 行高不再压到 1.35——那是"被压扁"的直接原因；1.6 读起来才舒展 */
+  line-height: 1.6;
+  text-align: left;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.mk-fix-inline {
-  font-family: var(--serif);
-  font-weight: 700;
-  border-bottom: 2px solid currentColor;
-  padding: 0 1px;
+.fix-text:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .mk-rewrite {
-  display: inline-flex;
-  flex-direction: column;
-  vertical-align: baseline;
   cursor: pointer;
-  white-space: nowrap;
 }
 
-.mk-rewrite-block {
-  display: inline-block;
-}
-
+/* 同 .mk-deleted：底色挂在外层，这里只留 class 作记号 */
 .mk-rewrite-old {
-  text-decoration: line-through;
-  text-decoration-thickness: 2px;
+  text-decoration: none;
 }
 
-.mk-rewrite-new {
-  font-family: var(--serif);
-  font-size: 0.84em;
-  font-weight: 700;
-  line-height: 1.4;
-}
-
+/*
+ * 亮点是"做得好"，不是"改了"——与红橙一样是荧光笔底色，只是颜色是绿的。
+ * 不再加波浪线：三种颜色统一用底色说话，读起来才整齐。
+ */
 .mk-highlight {
   color: var(--mark-green);
   background: var(--mark-green-bg);
-  border-bottom: 2px solid var(--mark-green);
   cursor: pointer;
 }
 
@@ -841,6 +1030,82 @@ button {
   border-radius: 3px;
 }
 
+/* 点击勾画后，在**那一行下面**浮出的小气泡。只做简要说明，完整说明在右下栏。 */
+.ann-bubble {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px 8px;
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.55;
+  /*
+   * 不接管鼠标事件：气泡可能盖住下一行的字，
+   * 但用户仍然应该能直接点到那行字上的勾画。
+   */
+  pointer-events: none;
+}
+
+.ann-bubble-arrow {
+  position: absolute;
+  top: -5px;
+  width: 8px;
+  height: 8px;
+  background: var(--paper);
+  border-left: 1px solid var(--line-strong);
+  border-top: 1px solid var(--line-strong);
+  transform: rotate(45deg);
+}
+
+.ann-bubble-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ann-bubble-kind {
+  font-weight: 700;
+}
+
+.ann-bubble-cat {
+  color: var(--ink-soft);
+}
+
+.ann-bubble-change {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.ann-bubble-from {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+.ann-bubble-arrow-text {
+  color: var(--ink-faint);
+}
+
+.ann-bubble-to {
+  font-family: var(--serif);
+}
+
+.ann-bubble-why {
+  color: var(--ink-soft);
+}
+
+.ann-bubble-more {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
 /* ── 详情（贴在右屏底部）───────────────────────── */
 
 .detail {
@@ -852,6 +1117,17 @@ button {
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow);
+}
+
+/* 直接铺在右下栏里时：去掉"贴在栏底"留下的外边距 */
+.detail-embedded {
+  margin: 0;
+}
+
+.detail-order {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--ink-faint);
 }
 
 .detail-idle {
@@ -915,6 +1191,89 @@ button {
   line-height: 1.8;
   color: var(--ink-soft);
   margin: 0;
+}
+
+/* 「点击查看 AI 完整返回内容」：挂在右下角标题栏的右侧，小字、次要的样式 */
+.raw-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.raw-link:hover {
+  color: var(--ink);
+}
+
+/* ── AI 完整返回内容（屏幕中央的弹窗）─────────────── */
+
+.raw-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(20, 24, 32, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.raw-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(640px, 100%);
+  background: var(--paper);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(16, 24, 40, 0.28);
+  overflow: hidden;
+}
+
+.raw-modal-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.raw-modal-note {
+  flex: 1;
+  font-weight: 400;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+.raw-modal-close {
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--ink-soft);
+}
+
+.raw-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 14px 16px 18px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink);
 }
 
 /* ── 练习记录页 ─────────────────────────────────── */
@@ -1025,8 +1384,36 @@ button {
     margin-left: 0;
   }
 
-  .split {
+  /* 窄屏：所有排都改成上下叠放（分隔条跟着消失），高度限制一并放开（靠页面整体滚动） */
+  .split-row,
+  .split-nested {
+    flex-direction: column;
+    max-height: none;
+  }
+
+  .splitter {
+    display: none;
+  }
+
+  .split-manual {
+    display: flex;
+  }
+
+  .split-manual .split-row {
+    display: flex;
+  }
+
+  .split-row {
+    min-height: 0;
+  }
+
+  .split-row > .pane {
+    min-height: 260px;
+  }
+
+  .split-records {
     grid-template-columns: 1fr;
+    grid-template-rows: none;
   }
 
   .screen-left {
@@ -1052,4 +1439,186 @@ button {
   .answer-input-fill {
     min-height: 200px;
   }
+}
+
+/* ── AI 出题（弹窗，复用 raw-modal 的外壳）────────────── */
+
+.gen-modal {
+  width: min(560px, 100%);
+}
+
+.gen-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 4px;
+}
+
+.gen-label {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.gen-label:first-child {
+  margin-top: 0;
+}
+
+.gen-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gen-chip {
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  font-family: var(--sans);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.gen-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.gen-chip-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.gen-chip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.gen-input {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.gen-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(44, 107, 237, 0.12);
+}
+
+.gen-error {
+  color: var(--mark-red);
+}
+
+.gen-foot {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* ── 译文视图切换（批改视图 / 对照视图）────────────── */
+
+.view-switch {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.view-btn {
+  border: none;
+  background: var(--paper);
+  padding: 4px 10px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.view-btn + .view-btn {
+  border-left: 1px solid var(--line);
+}
+
+.view-btn-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ── 对照视图 ─────────────────────────────────────── */
+
+.compare-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.compare-line {
+  border-left: 3px solid var(--line-strong);
+  padding-left: 10px;
+}
+
+/* 没被改动的句子淡化：重点是被改过的那几句 */
+.compare-line-same {
+  border-left-color: var(--line);
+  opacity: 0.72;
+}
+
+.compare-original {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--ink-faint);
+}
+
+.compare-corrected {
+  margin: 2px 0 0;
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.7;
+  color: var(--ink);
+}
+
+/*
+ * 改动过的字：只染色，**不加粗**。
+ * 用 span 而不是 button —— button 是"原子行内块"，长内容会整体换行，
+ * 而不是像普通文字那样在内部自动折行（需求）。
+ */
+.compare-mark {
+  cursor: pointer;
+}
+
+.compare-mark[data-selected='true'] {
+  background: var(--paper-soft);
+  border-radius: 3px;
+}
+
+/* ── 设置里的滑杆与勾选 ───────────────────────────── */
+
+.gen-range {
+  width: 100%;
+  margin: 4px 0 2px;
+}
+
+.gen-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  cursor: pointer;
 }

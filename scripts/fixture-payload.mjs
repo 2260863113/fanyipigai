@@ -24,6 +24,7 @@ export async function buildFixturePayload(root, exerciseId) {
     `import { MOCK_CASES, fixtureCorrectionFor } from ${JSON.stringify(path.join(root, 'src', 'domain', 'mock.ts'))}`,
     `import { splitSections } from ${JSON.stringify(path.join(root, 'src', 'domain', 'sections.ts'))}`,
     `import { validateCorrection } from ${JSON.stringify(path.join(root, 'src', 'domain', 'validate.ts'))}`,
+    `import { toAiShape } from ${JSON.stringify(path.join(root, 'src', 'domain', 'parse.ts'))}`,
     `const wanted = ${JSON.stringify(exerciseId ?? null)}`,
     `const testCase = wanted ? MOCK_CASES.find((c) => c.exercise.id === wanted) : MOCK_CASES[0]`,
     `if (!testCase) throw new Error('找不到题目：' + wanted)`,
@@ -37,10 +38,11 @@ export async function buildFixturePayload(root, exerciseId) {
     `  ok: true, attempts: 1, repaired: [], sectionCount: answerSections.length,`,
     `  correction: { errors: correction.errors, highlights: correction.highlights },`,
     `  validated: {`,
-    `    errors: checked.errors.map((e) => ({ error: e.error, span: e.span, insertPoint: e.insertPoint, reorderSpans: e.reorderSpans, reordered: e.reordered })),`,
+    `    errors: checked.errors.map((e) => ({ error: e.error, changes: e.changes, span: e.span, insertPoint: e.insertPoint, reorderSpans: e.reorderSpans, reordered: e.reordered })),`,
     `    highlights: checked.highlights.map((h) => ({ highlight: h.highlight, span: h.span })),`,
     `    rejections: checked.rejections,`,
     `  },`,
+    `  raw: JSON.stringify(toAiShape(correction), null, 2),`,
     `}`,
   ]
   writeFileSync(entry, `${lines.join('\n')}\n`, 'utf8')

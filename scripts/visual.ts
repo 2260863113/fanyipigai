@@ -38,6 +38,11 @@ export interface ShotSpec {
   clickTab?: string
   /** 截图前先点一下题目切换条里的某道题 */
   clickCase?: string
+  /**
+   * 批改结果出来后，再点第几处勾画（从 0 开始）。
+   * 用来截"点了某一处之后"的样子：那一行下面的气泡 + 右下角的单处说明。
+   */
+  clickMark?: number
 }
 
 /** 不指定题目时用哪一道（与题库第一道一致）。 */
@@ -284,7 +289,8 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                if (btn.disabled) return '提交按钮是禁用的（共 ' + sections.length + ' 段）';
                btn.click();
                for (let i = 0; i < 80; i++) {
-                 if (document.querySelector('.note-list')) {
+                 // 批改结果出来的标志：输入框被带批注的译文替换掉了
+                 if (!document.querySelector('.answer-input') && document.querySelector('.pane-answer .annotated-lines')) {
                    await sleep(600);
                    return 'ok';
                  }
@@ -296,6 +302,22 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
              })()`,
           )
           if (outcome !== 'ok') return { ok: false, files, note: `${shot.name}：${String(outcome)}` }
+
+          // 再点一处勾画：截到气泡与右下角单处说明
+          if (typeof shot.clickMark === 'number') {
+            const clicked = await cdp.evaluate(
+              `(async () => {
+                 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+                 const marks = [...document.querySelectorAll('.pane-answer [data-mark-id]')];
+                 const target = marks[${shot.clickMark}];
+                 if (!target) return '译文里没有第 ${shot.clickMark + 1} 处可点的勾画（共 ' + marks.length + ' 处）';
+                 target.click();
+                 await sleep(300);
+                 return 'ok';
+               })()`,
+            )
+            if (clicked !== 'ok') return { ok: false, files, note: `${shot.name}：${String(clicked)}` }
+          }
         }
 
         const captured = await cdp.send<{ data: string }>('Page.captureScreenshot', {

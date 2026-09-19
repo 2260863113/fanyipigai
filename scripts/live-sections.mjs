@@ -81,7 +81,6 @@ const outcome = await judgeAnswer(
       direction: articleCase.exercise.direction,
       genre: articleCase.exercise.genre,
       level: 'polish',
-      referenceTranslation: articleCase.exercise.referenceTranslation,
     },
     sections,
   },

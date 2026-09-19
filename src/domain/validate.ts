@@ -101,7 +101,15 @@ function nearMissHint(answer: string, start: number, end: number, snippet: strin
 /** 校验通过的错误对象，附带各位置解算后的绝对区间。 */
 export interface ValidatedError {
   error: ErrorObject
-  /** 需要划掉或加焦点的区间 */
+  /**
+   * 这处批注真正要画的若干区间（按**词**求出的最小不同项，至少一项）。
+   *
+   * 为什么是数组：一处错误可能横跨好几个互不相邻的词——
+   * farmers and herders 写成 farmer and herder，该划的是 farmer 和 herder 两个词
+   * （and 没错），但它们逻辑上是同一处错误，因此共用同一个 id。
+   */
+  changes: Array<{ start: number; end: number; to: string }>
+  /** 覆盖以上全部区间的外框，用于排序与重叠消解 */
   span: ValidatedSpan
   /** 插入类错误的落点（零长度区间） */
   insertPoint?: number
@@ -109,6 +117,19 @@ export interface ValidatedError {
   reorderSpans?: ValidatedSpan[]
   /** 语序调换后，这些片段拼起来应该是什么样（用于展示调序结果） */
   reordered?: string
+}
+
+/** 取若干区间的外框。 */
+function envelopeOf(changes: ReadonlyArray<{ start: number; end: number }>): ValidatedSpan {
+  const first = changes[0]
+  if (!first) return { start: 0, end: 0 }
+  let start = first.start
+  let end = first.end
+  for (const change of changes) {
+    start = Math.min(start, change.start)
+    end = Math.max(end, change.end)
+  }
+  return { start, end }
 }
 
 export function validateError(error: ErrorObject, answer: string): ValidationOutcome<ValidatedError> {
@@ -124,6 +145,13 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
    */
   const anchorToCheck = error.originalSpan ?? error.anchor
 
+  /**
+   * 渲染用的是缩窄后的区间（按单词求出的最小不同项）；没算出来就退回原始区间。
+   * 一份 `to` 全部落空时给一项覆盖整段的替换，至少保证内容画得出来。
+   */
+  const renderChanges = (fallback: ValidatedSpan, to: string): ValidatedError['changes'] =>
+    error.changed && error.changed.length > 0 ? error.changed : [{ start: fallback.start, end: fallback.end, to }]
+
   switch (error.type) {
     case 'replace':
     case 'rewrite': {
@@ -133,11 +161,8 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
       }
       const span = checkSpan(error.id, anchorToCheck, answer, '该处批注')
       if (!span.ok) return span
-      // 渲染用的是缩窄后的区间（若已算出来）；没有就退回原始区间
-      const renderSpan = error.changed
-        ? { start: error.changed.start, end: error.changed.end }
-        : span.value
-      return { ok: true, value: { error, span: renderSpan } }
+      const changes = renderChanges(span.value, error.targetText)
+      return { ok: true, value: { error, changes, span: envelopeOf(changes) } }
     }
 
     case 'delete': {
@@ -145,10 +170,8 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
       if (!anchorToCheck) return fail('缺少原文位置，无法标注')
       const span = checkSpan(error.id, anchorToCheck, answer, '该处批注')
       if (!span.ok) return span
-      const renderSpan = error.changed
-        ? { start: error.changed.start, end: error.changed.end }
-        : span.value
-      return { ok: true, value: { error, span: renderSpan } }
+      const changes = renderChanges(span.value, '')
+      return { ok: true, value: { error, changes, span: envelopeOf(changes) } }
     }
 
     case 'insert': {
@@ -156,7 +179,11 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
       if (!error.targetText) return fail('插入类批注没有给出要补入的内容')
       const anchor = checkSpan(error.id, error.insertAfter, answer, '该处插入')
       if (!anchor.ok) return anchor
-      return { ok: true, value: { error, span: { start: anchor.value.end, end: anchor.value.end }, insertPoint: anchor.value.end } }
+      const point = anchor.value.end
+      return {
+        ok: true,
+        value: { error, changes: [{ start: point, end: point, to: error.targetText }], span: { start: point, end: point }, insertPoint: point },
+      }
     }
 
     case 'reorder': {
@@ -195,7 +222,7 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
         })
         .join('')
 
-      return { ok: true, value: { error, span: { start, end }, reorderSpans: spans, reordered } }
+      return { ok: true, value: { error, changes: [], span: { start, end }, reorderSpans: spans, reordered } }
     }
 
     default:

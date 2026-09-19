@@ -1,14 +1,19 @@
 /**
- * 把批注渲染成纯文本，用来直观检查"划掉的内容"与"上方写的内容"有没有重复。
+ * 把批注渲染成纯文本，用来直观检查"被勾出的内容"与"上方写的内容"有没有重复。
  *
  * 为什么需要它：DOM 结构再正确，读起来是否重复只有把文本摊平才看得清。
- * 每个片段按渲染后的样子打印：
- *   [[划掉的旧文字]]⟦上方写的正确写法⟧   或   ｛补入的内容｝   或   ＋亮点＋
+ * 每个片段按渲染后的样子打印（[[ ]] ＝ 界面上勾了荧光笔底色的旧文字，
+ * ⟦ ⟧ ＝ 上方补写的正确写法）：
+ *   [[被勾出的旧文字]]⟦上方写的正确写法⟧   或   ｛<补入的内容>｝   或   ＋亮点＋
  *
  * 走的是与界面完全相同的路径（示例经 fixtureCorrectionFor → 校验 → 排版），
  * 因此这里看到的重复，就是界面上会看到的重复。
  *
- * 用法：node scripts/inspect-marks.mjs
+ * 重点看两件事：
+ *   1. 被勾出的文字里不该出现"上方要写的内容"（那就是重复）
+ *   2. 漏了一个词的批注应当是 ｛<…>｝（一个字都不勾），而不是 [[…]]⟦…⟧
+ *
+ * 用法：node scripts/check-marks.mjs
  */
 
 import { build } from 'esbuild'
@@ -69,7 +74,7 @@ function flatten(segments) {
         case 'rewrite':
           return `[[${segment.deletedText ?? segment.text}]]⟦${segment.targetText ?? ''}⟧`
         case 'insert':
-          return `｛${segment.targetText ?? ''}｝`
+          return `｛<${(segment.targetText ?? '').trim()}>｝`
         case 'highlight':
           return `＋${segment.text}＋`
         default:
@@ -95,13 +100,19 @@ for (const item of prepare()) {
   console.log(`\n=== ${id} ===`)
   console.log(flat)
 
-  for (const error of correction.errors) {
-    const from = error.changed?.from ?? ''
-    const to = error.changed?.to ?? ''
-    // 划掉的文字里若含"上方要写的内容"，就是重复
-    if (from && to && to.length >= 2 && from.includes(to)) {
+  /*
+   * 逐段检查"划掉的文字里是不是又含了上方要写的内容"——那就是重复。
+   *
+   * 判据必须落在**真正画出来的片段**上（layout.segments），
+   * 而不是 AI 给的字段：`changed` 里只有 to，没有 from，
+   * 早先这里读 `error.changed?.from` 恒为 undefined，这条检查其实一直是死的。
+   */
+  for (const segment of layout.segments) {
+    const struck = segment.deletedText ?? ''
+    const fix = segment.targetText ?? ''
+    if (struck && fix && fix.length >= 2 && struck.includes(fix)) {
       problems += 1
-      console.log(`  ⚠ ${error.id}：划掉「${from}」，上方「${to}」——划掉的里含上方要写的内容`)
+      console.log(`  ⚠ ${segment.errorId ?? '?'}：划掉「${struck}」，上方「${fix}」——划掉的里含上方要写的内容`)
     }
   }
 

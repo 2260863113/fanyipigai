@@ -12,11 +12,21 @@
  * 这一段代码同时被两种运行环境使用：本地开发时的 Node 测试脚本，以及部署后的 Worker。
  */
 
-import { buildRetryPrompt, buildSectionNote, buildSystemPrompt, buildUserPrompt, type CorrectionRequest } from './prompt'
+import {
+  buildGenerationSystemPrompt,
+  buildGenerationUserPrompt,
+  buildRetryPrompt,
+  buildSectionNote,
+  buildSystemPrompt,
+  buildUserPrompt,
+  type CorrectionRequest,
+  type GenerationRequest,
+} from './prompt'
 import { parseCorrection, type ParseSuccess } from './parse'
 import { validateCorrection } from './validate'
 import { FailureCollector } from './archive'
 import { mergeSectionCorrections, rebuildFromSections, type Section } from './sections'
+import { parseGenerated, toGeneratedExercise, type GeneratedExercise } from './generate'
 
 export interface JudgeConfig {
   apiKey: string
@@ -69,6 +79,11 @@ export interface JudgeSuccess extends ParseSuccess {
   attempts: number
   /** 本次一共发了几段 */
   sectionCount: number
+  /**
+   * AI 原样返回的完整文本（未经解析、未经收窄）。
+   * 多段批改时按段落拼在一起，便于用户核对"模型到底说了什么"。
+   */
+  raw: string
 }
 
 export type JudgeOutcome = JudgeSuccess | JudgeFailure
@@ -175,6 +190,11 @@ interface SectionOutcome {
   ok: true
   parsed: ParseSuccess
   attempts: number
+  /**
+   * 这一段 AI 原样返回的文本（没有经过任何解析与收窄）。
+   * 界面上的「查看 AI 完整返回内容」看到的就是它。
+   */
+  raw: string
 }
 
 /**
@@ -237,7 +257,7 @@ async function judgeOneSection(
     }
 
     const parsed = parseCorrection(result.content, request.answer)
-    if (parsed.ok) return { ok: true, parsed, attempts: attempt }
+    if (parsed.ok) return { ok: true, parsed, attempts: attempt, raw: lastRaw }
 
     allProblems.push(...parsed.problems)
     collector.record(attempt, lastRaw, result.finishReason, parsed.problems, sectionIndex)
@@ -313,6 +333,7 @@ export async function judgeAnswer(
       repaired: [],
       attempts: 0,
       sectionCount: 0,
+      raw: '',
     }
   }
 
@@ -362,6 +383,10 @@ export async function judgeAnswer(
   }
 
   const repaired = successes.flatMap((outcome) => outcome.parsed.repaired)
+  // 多段时把每段的原始返回拼起来并标出段号，用户才能把"模型说的话"与"哪一段"对上
+  const raw = successes
+    .map((outcome, index) => (total > 1 ? `── 第 ${index + 1}/${total} 段的返回 ──\n${outcome.raw}` : outcome.raw))
+    .join('\n\n')
   return {
     ok: true,
     correction: merged,
@@ -369,5 +394,86 @@ export async function judgeAnswer(
     repaired,
     attempts: Math.max(...successes.map((outcome) => outcome.attempts)),
     sectionCount: total,
+    raw,
   }
+}
+
+/* ── AI 出题 ──────────────────────────────────────────────── */
+
+export interface GenerationSuccess {
+  ok: true
+  exercise: GeneratedExercise
+  attempts: number
+  /** AI 原样返回的文本，与批改一样留给「查看完整返回」 */
+  raw: string
+}
+
+export type GenerationOutcome = GenerationSuccess | JudgeFailure
+
+/**
+ * 生成一道新题。
+ *
+ * 与批改共用同一套模型调用、超时与失败分类（这样"密钥无效/余额不足/被截断"
+ * 在两条链路上的提示完全一致），差别只在提示词与校验：
+ * 批改校验的是批注位置，出题校验的是**篇长**——不达标就拿原因重试。
+ */
+export async function generateExercise(
+  request: GenerationRequest,
+  config: JudgeConfig,
+): Promise<GenerationOutcome> {
+  if (!config.apiKey) return fail('missing-key', [])
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: buildGenerationSystemPrompt() },
+    { role: 'user', content: buildGenerationUserPrompt(request) },
+  ]
+  const allProblems: string[] = []
+  let lastRaw = ''
+
+  for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs)
+
+    let result: Awaited<ReturnType<typeof callDeepSeek>>
+    try {
+      result = await callDeepSeek(config, messages, controller.signal)
+    } finally {
+      clearTimeout(timer)
+    }
+
+    if (!result.ok) {
+      const { kind } = result.failure
+      if (kind === 'unauthorized' || kind === 'insufficient-balance' || kind === 'missing-key') return result.failure
+      allProblems.push(...result.failure.problems)
+      if (attempt === config.maxAttempts) return result.failure
+      continue
+    }
+
+    lastRaw = result.content
+
+    if (result.finishReason === 'length') {
+      const problems = ['上一次的返回因为太长被截断了，请把段落写得紧凑一些，确保 JSON 完整闭合']
+      allProblems.push(...problems)
+      if (attempt === config.maxAttempts) {
+        return fail('truncated', problems, { rawExcerpt: lastRaw.slice(-400) })
+      }
+      messages.push({ role: 'assistant', content: lastRaw })
+      messages.push({ role: 'user', content: buildRetryPrompt(problems) })
+      continue
+    }
+
+    const parsed = parseGenerated(result.content, request)
+    if (parsed.ok) {
+      return { ok: true, exercise: toGeneratedExercise(parsed.article, request.mode), attempts: attempt, raw: lastRaw }
+    }
+
+    allProblems.push(...parsed.problems)
+    if (attempt === config.maxAttempts) {
+      return fail('bad-output', allProblems, { rawExcerpt: lastRaw.slice(0, 400) })
+    }
+    messages.push({ role: 'assistant', content: lastRaw })
+    messages.push({ role: 'user', content: buildRetryPrompt(parsed.problems) })
+  }
+
+  return fail('bad-output', allProblems, { rawExcerpt: lastRaw.slice(0, 400) })
 }

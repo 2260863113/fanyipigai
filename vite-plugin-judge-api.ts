@@ -11,14 +11,15 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Connect, Plugin } from 'vite'
-import { DEFAULT_JUDGE_CONFIG, judgeAnswer } from './src/domain/ai'
+import { DEFAULT_JUDGE_CONFIG, generateExercise, judgeAnswer } from './src/domain/ai'
 import { FailureCollector, archiveFailure, type FailureKind } from './src/domain/archive'
 import { rebuildFromSections, type Section } from './src/domain/sections'
-import type { Direction, Genre, PolishLevel } from './src/domain/types'
+import type { Direction, Genre, Mode, PolishLevel } from './src/domain/types'
 
 const VALID_DIRECTIONS: readonly Direction[] = ['zh-to-en', 'en-to-zh']
 const VALID_GENRES: readonly Genre[] = ['political', 'news', 'literature', 'expository']
 const VALID_LEVELS: readonly PolishLevel[] = ['polish', 'refine']
+const VALID_MODES: readonly Mode[] = ['article', 'paragraph', 'sentence', 'term']
 
 /** 解析 .dev.vars（形如 KEY=value 的纯文本）。文件不存在时返回空表。 */
 function readDevVars(root: string): Record<string, string> {
@@ -76,9 +77,25 @@ function isPlainSection(value: unknown): value is { start: number; text: string 
   return typeof section.start === 'number' && typeof section.text === 'string' && section.text.trim().length > 0
 }
 
+function isGenerationRequest(value: unknown): value is {
+  direction: Direction
+  genre: Genre
+  topic: string
+  mode: Mode
+} {
+  if (typeof value !== 'object' || value === null) return false
+  const body = value as Record<string, unknown>
+  return (
+    VALID_DIRECTIONS.includes(body.direction as Direction) &&
+    VALID_GENRES.includes(body.genre as Genre) &&
+    VALID_MODES.includes(body.mode as Mode) &&
+    typeof body.topic === 'string' &&
+    body.topic.trim().length > 0 &&
+    body.topic.length <= 40
+  )
+}
 function isCorrectionRequest(value: unknown): value is {
   source: string
-  referenceTranslation: string
   direction: Direction
   genre: Genre
   level: PolishLevel
@@ -89,7 +106,6 @@ function isCorrectionRequest(value: unknown): value is {
   const body = value as Record<string, unknown>
   return (
     typeof body.source === 'string' &&
-    typeof body.referenceTranslation === 'string' &&
     VALID_DIRECTIONS.includes(body.direction as Direction) &&
     VALID_GENRES.includes(body.genre as Genre) &&
     VALID_LEVELS.includes(body.level as PolishLevel) &&
@@ -131,6 +147,58 @@ export function judgeApiPlugin(): Plugin {
         server.config.logger.info(`[judge-api] 已就绪，模型 ${model}`)
       }
 
+      /*
+       * AI 出题：同一条路径、同一把密钥，只是提示词与校验不同。
+       * 校验失败（篇长不达标、JSON 坏掉）会带着原因重试，与批改一致。
+       */
+      server.middlewares.use('/api/generate', (req, res, next) => {
+        if (req.method !== 'POST') {
+          next()
+          return
+        }
+
+        void (async () => {
+          let body: unknown
+          try {
+            body = JSON.parse(await readBody(req))
+          } catch {
+            json(res, 400, { ok: false, kind: 'bad-request', message: '请求体不是合法的 JSON' })
+            return
+          }
+
+          if (!isGenerationRequest(body)) {
+            json(res, 400, { ok: false, kind: 'bad-request', message: '出题请求缺少必要字段或字段取值不合法' })
+            return
+          }
+
+          if (!apiKey) {
+            json(res, 503, {
+              ok: false,
+              kind: 'missing-key',
+              message: '没有配置 DeepSeek API 密钥，无法出题。请在 .dev.vars 里填入 DEEPSEEK_API_KEY。',
+            })
+            return
+          }
+
+          const started = Date.now()
+          const outcome = await generateExercise(body, { ...DEFAULT_JUDGE_CONFIG, apiKey, model })
+          const elapsed = ((Date.now() - started) / 1000).toFixed(1)
+          server.config.logger.info(
+            `[judge-api] 出题${outcome.ok ? '完成' : '失败'}，用时 ${elapsed}s` +
+              (outcome.ok ? `，${body.mode} · ${body.topic} · 原文已留存` : `：${outcome.message}`),
+          )
+          json(res, 200, outcome)
+        })().catch((error: unknown) => {
+          server.config.logger.error(`[judge-api] 出题时未预期的错误：${error instanceof Error ? error.stack : String(error)}`)
+          if (!res.writableEnded) {
+            json(res, 500, {
+              ok: false,
+              kind: 'server-error',
+              message: `本地接口出错：${error instanceof Error ? error.message : String(error)}`,
+            })
+          }
+        })
+      })
       server.middlewares.use('/api/judge', (req, res, next) => {
         if (req.method !== 'POST') {
           next()
@@ -171,7 +239,6 @@ export function judgeApiPlugin(): Plugin {
               direction: body.direction,
               genre: body.genre,
               level: body.level,
-              referenceTranslation: body.referenceTranslation,
             },
             sections: answerSections,
           }

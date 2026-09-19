@@ -5,11 +5,11 @@
  * 例如它会把 "have explore ways" 整块报成一处修改，而真正变的只有 explore 一个词。
  * 因此这里逐条固定住"应当划出什么"，防止以后改动把它弄坏。
  *
- * 这些用例由 scripts/smoke.ts 调用，也可以单独运行：
- *   node scripts/run-minimal.mjs
+ * 这些用例由 scripts/smoke.ts 调用（`npm run smoke`），不单独提供运行器。
  */
 
 import { parseCorrection } from './parse'
+import { applyChangesToText } from './minimal'
 
 interface Case {
   name: string
@@ -45,21 +45,21 @@ const CASES: Case[] = [
     expectFrom: 'explore',
     expectTo: 'explored',
   },
-  // 只差一个标点：消同类项后只剩新增的那个句号（不再把整个词划掉又写一遍）
+  // 只差一个标点：原文被完整保留、多出来的全是标点，因此不划任何字，只显示补进去的句号
   {
     name: '补一个句号：原文整体保留，不划任何字，只显示补进去的句号',
     oldText: '关键一环',
     newText: '关键一环。',
-    expectFrom: '关键一环',
+    expectFrom: '',
     expectTo: '。',
   },
-  // 名词单复数：同理，只显示新增的 s，既不划空格，也不重复写 year
+  // 名词单复数：改动落在词尾，但求同存异要按词不按字母，因此划掉整个 year、上方写 years
   {
     name: '单复数变化：划掉整个词，上方写新词',
     oldText: 'recent year',
     newText: 'recent years',
-    expectFrom: 'recent year',
-    expectTo: 's',
+    expectFrom: 'year',
+    expectTo: 'years',
   },
   // 冠词：这里 a 没有原样保留（变成了 an），因此照最小块显示
   {
@@ -69,13 +69,54 @@ const CASES: Case[] = [
     expectFrom: 'a',
     expectTo: 'an',
   },
-  // 在词前面加冠词：整段原文被完整保留，因此只显示新增的 "a "，不重复写原词
+  // 在词前面加冠词：改动发生在词与词之间，因此一个字都不划，只在 prominent 前面补 a
   {
-    name: '在词前加冠词：显示整段改动（已知折中）',
+    name: '在词前加冠词：一个字都不划，只补入 a',
     oldText: 'prominent',
     newText: 'a prominent',
-    expectFrom: 'prominent',
-    expectTo: 'a',
+    expectFrom: '',
+    expectTo: 'a ',
+  },
+  // 本轮实测要求：漏了一个词时只补不划
+  {
+    name: '漏了一个词：past 前面补 the（不划任何字）',
+    oldText: 'past',
+    newText: 'the past',
+    expectFrom: '',
+    expectTo: 'the ',
+  },
+  {
+    name: '漏了一个词（原句）：over the past years → over past years',
+    oldText: 'over the past years',
+    newText: 'over past years',
+    expectFrom: 'the ',
+    expectTo: '',
+  },
+  // 实测：整句话里只有一个词写错，绝不能整句划掉。
+  // 字符级差异会把 plant → afforested 切碎（a、t 恰好对得上号），必须靠"词内相邻块合并"收回来。
+  {
+    name: '只改一个词（实测）：plant → afforested，不许整句划掉',
+    oldText: 'China has plant trees more than 70 million hectares.',
+    newText: 'China has afforested trees more than 70 million hectares.',
+    expectFrom: 'plant',
+    expectTo: 'afforested',
+  },
+  // 首字母大小写 + 少了一个词：字符级差异会给出 "At m" → "M"，
+  // 按单词求最小不同项应当是整段替换 At meanwhile → Meanwhile
+  {
+    name: '按词替换：At meanwhile → Meanwhile（不拆成 At m → M）',
+    oldText: 'At meanwhile',
+    newText: 'Meanwhile',
+    expectFrom: 'At meanwhile',
+    expectTo: 'Meanwhile',
+  },
+  // 一处错误跨两个词：两个词各改各的，中间没错的 and 不该被划掉
+  {
+    name: '一处错误跨两个词：farmer / herder 各改各的，and 不动',
+    oldText: 'farmer and herder',
+    newText: 'farmers and herders',
+    expectFrom: 'farmer + herder',
+    expectTo: 'farmers + herders',
   },
   // 首字母大小写：i → I 与 is → am，两处都变了，因此整块标出
   {
@@ -85,13 +126,13 @@ const CASES: Case[] = [
     expectFrom: 'i is',
     expectTo: 'I am',
   },
-  // 中间插词：只标真正插进去的部分，不把相邻的词一起圈
+  // 中间插词：改动同样发生在词与词之间，只补不划
   {
     name: '插入一个词',
     oldText: 'in prominent position',
     newText: 'in a prominent position',
-    expectFrom: 'prominent',
-    expectTo: 'a prominent',
+    expectFrom: '',
+    expectTo: 'a ',
   },
   // 整句替换
   {
@@ -120,13 +161,13 @@ const CASES: Case[] = [
     expectFrom: ', ',
     expectTo: '到达地，吸引了',
   },
-  // 末尾追加一个字母：整段原文被完整保留，因此只显示新增的 n
+  // 末尾追加一个字母：改动落在词内（a → an），按词不按字母，划掉整个 a、上方写 an
   {
     name: '末尾追加字母',
     oldText: 'became a',
     newText: 'became an',
-    expectFrom: 'became a',
-    expectTo: 'n',
+    expectFrom: 'a',
+    expectTo: 'an',
   },
   // 一整块删除
   {
@@ -157,21 +198,30 @@ export interface MinimalCheck {
  *
  * 不用自己拼 changed 字段——那样验证的只是中间产物，而不是用户实际看到的结果。
  * 这里把用例包成一份最小的 AI 返回答，交给 parseCorrection 处理，
- * 于是"定位 → 最小修改 → 消同类项 → 校验"整条链路都被覆盖到了。
+ * 于是"定位 → 最小不同项 → 校验"整条链路都被覆盖到了。
+ *
+ * 一处批注可能含**多个**最小不同项（farmer and herder 各改各的），
+ * 因此 from / to 用「 + 」把各项连起来，并额外做一次**重建验证**：
+ * 把产出的改动应用回构造的作答，必须正好得到模型说的新文字。
  */
-function runPipeline(testCase: Case): { from: string; to: string } | null {
+function runPipeline(testCase: Case): { from: string; to: string; rebuiltOk: boolean } | null {
   const isInsert = testCase.oldText === ''
   const isDelete = testCase.newText === ''
 
-  // 把用例包成模型会返回的那种 JSON
+  // 把用例包成模型会返回的那种 JSON。
+  //
+  // 插入类必须给一个**在构造的作答里真实存在**的锚点：插入的落点是「补在这个片段之后」，
+  // 锚点不存在时定位器会（正确地）拒绝，用例也就测不到任何东西。
+  // 这里统一用构造作答末尾那个句点当锚点，于是插入落在整段作答的最后。
+  const ANCHOR = '.'
   const error = isInsert
-    ? { id: 'e1', type: 'insert', category: 'function-word', insertAfterText: 'X', targetText: testCase.newText, explanation: 'x' }
+    ? { id: 'e1', type: 'insert', category: 'function-word', insertAfterText: ANCHOR, targetText: testCase.newText, explanation: 'x' }
     : isDelete
       ? { id: 'e1', type: 'delete', category: 'addition', oldText: testCase.oldText, explanation: 'x' }
       : { id: 'e1', type: 'replace', category: 'function-word', oldText: testCase.oldText, targetText: testCase.newText, explanation: 'x' }
 
   // 造一份"作答"：把 oldText 原样放进去，让定位与偏移换算都走真实路径。
-  // 两侧刻意用**空格与句点**而不是词字符——词字符会被"按词扩展"卷进来，
+  // 两侧刻意用**空格与句点**而不是词字符——词字符会被"按词对齐"卷进来，
   // 而重复的标点又会让定位器要求消歧，两者都是脚手架自身的干扰。
   const answer = ` ${testCase.oldText}.`
   const payload = isInsert
@@ -181,8 +231,19 @@ function runPipeline(testCase: Case): { from: string; to: string } | null {
   const parsed = parseCorrection(JSON.stringify({ errors: [payload], highlights: [] }), answer)
   if (!parsed.ok) return null
   const changed = parsed.correction.errors[0]?.changed
-  if (!changed) return null
-  return { from: answer.slice(changed.start, changed.end), to: changed.to }
+  if (!changed || changed.length === 0) return null
+
+  const rebuilt = applyChangesToText(
+    answer,
+    changed.map((change) => ({ start: change.start, end: change.end, replacement: change.to })),
+  )
+  const expected = isInsert ? answer + testCase.newText : ` ${testCase.newText}.`
+
+  return {
+    from: changed.map((change) => answer.slice(change.start, change.end)).join(' + '),
+    to: changed.map((change) => change.to).join(' + '),
+    rebuiltOk: rebuilt === expected,
+  }
 }
 
 export function checkMinimal(): MinimalCheck[] {
@@ -205,17 +266,13 @@ export function checkMinimal(): MinimalCheck[] {
     const fromOk = result.from === testCase.expectFrom
     const toOk = testCase.expectTo === undefined || result.to === testCase.expectTo
 
-    // 还原验证：把显示的 from 换成 to，必须能得到模型给的新文字
-    const rebuilt = testCase.oldText.split(testCase.expectFrom ?? '').join(result.from)
-    const rebuildOk = rebuilt === testCase.oldText
-
     return {
       name: testCase.name,
-      ok: fromOk && toOk,
+      ok: fromOk && toOk && result.rebuiltOk,
       detail:
         `划出「${result.from}」上方写「${result.to}」` +
         (fromOk && toOk ? '' : `（期望「${testCase.expectFrom}」→「${testCase.expectTo ?? ''}」）`) +
-        (rebuildOk ? '' : `（锚点核验失败：${JSON.stringify(rebuilt)}）`),
+        (result.rebuiltOk ? '' : '（重建验证失败：把这些改动应用回作答得不到模型说的新文字）'),
     }
   })
 }

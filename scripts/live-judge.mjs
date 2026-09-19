@@ -66,8 +66,6 @@ const CASES = [
       level: 'polish',
       source:
         'A decade of ecological restoration has turned a once barren coastline into a popular destination for migratory birds, drawing visitors from across the country.',
-      referenceTranslation:
-        '十年的生态修复让曾经荒芜的海岸线变成候鸟青睐的栖息地，吸引了全国各地的观鸟者。',
       answer: '十年生态修复把一个曾经贫瘠的海岸变成候鸟喜欢的到达地, 吸引了来自全国各地的游客。',
     },
   },
@@ -78,8 +76,6 @@ const CASES = [
       genre: 'political',
       level: 'polish',
       source: '中国坚持绿水青山就是金山银山的理念，把生态文明建设放在突出地位。',
-      referenceTranslation:
-        'China upholds the vision that clear waters and lush mountains are invaluable assets, and gives ecological conservation a prominent place.',
       answer:
         'China insist on idea that green water and green mountains are gold and silver mountains, and put ecological civilization construction in prominent position.',
     },
@@ -91,8 +87,6 @@ const CASES = [
       genre: 'political',
       level: 'refine',
       source: '改革开放以来，她坚持自己的梦想，最终实现了它，尽管很多人曾怀疑她能否成功。',
-      referenceTranslation:
-        'Since the beginning of reform and opening up, she held fast to her dream and eventually made it come true, even though many people had doubted whether she could succeed.',
       answer:
         'In wake of reform, she insist her dream and finally make it come true, even though many people doubt that she can success.',
     },

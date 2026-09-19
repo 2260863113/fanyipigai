@@ -11,7 +11,14 @@ import { MOCK_CASES, fixtureCorrectionFor } from '../src/domain/mock'
 import { validateCorrection } from '../src/domain/validate'
 import { buildLayout } from '../src/domain/layout'
 import type { TextSegment } from '../src/domain/layout'
+import { parseCorrection } from '../src/domain/parse'
+import { GENERATION_TOPICS, LENGTH_RULE, measureLength, parseGenerated, sliceForMode } from '../src/domain/generate'
+import { buildGenerationSystemPrompt, buildSystemPrompt, buildUserPrompt } from '../src/domain/prompt'
+import { placeFixBoxes, type FixBoxInput } from '../src/domain/fix-layout'
+import { buildCompareLines, splitSentences } from '../src/domain/compare'
 import { renderApp } from './render-probe'
+import { DIRECTION_LABEL, KIND_LABEL, type Direction, type Mode } from '../src/domain/types'
+import { directionOf, modeOf } from '../src/domain/custom'
 
 // 本文件由 scripts/run-smoke.mjs 用 esbuild 打包后交给 Node 运行，
 // 因此这里沿用与前端一致的无后缀导入写法。
@@ -98,6 +105,219 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(false, '最小修改用例可以执行', error instanceof Error ? error.message : String(error))
   }
 
+  // 批改提示词：不含参考译文
+  console.log('\n[提示词] 参考译文不发给模型')
+  try {
+    const userMessage = buildUserPrompt({
+      source: 'Ecological civilization is a form of human progress.',
+      answer: '生态文明是人类进步的一种形态。',
+      direction: 'en-to-zh',
+      genre: 'news',
+      level: 'polish',
+    })
+    check(!userMessage.includes('参考译文'), '批改的用户消息里没有"参考译文"这一节')
+    const systemMessage = buildSystemPrompt()
+    check(systemMessage.includes('不会给你参考译文'), '系统提示里明确告诉模型：不会给参考译文')
+  } catch (error) {
+    check(false, '批改提示词可以生成', error instanceof Error ? error.message : String(error))
+  }
+
+  // AI 出题：提示词 → 解析 → 篇长硬校验 → 按题型截取，全是不碰网络的纯函数
+  console.log('\n[AI 出题] 检查篇幅口径、篇长校验与按题型截取')
+  try {
+    const paragraph = (text: string): string => text
+    const article = {
+      topic: '生态文明建设',
+      genre: 'news' as const,
+      paragraphs: [
+        { source: paragraph('第一段。'), translation: 'First paragraph.' },
+        { source: paragraph('第二段。'), translation: 'Second paragraph.' },
+      ],
+      terms: [{ source: '湿地修复', translation: 'wetland restoration' }],
+    }
+    const full = sliceForMode('article', article)
+    check(full.source.includes('第一段') && full.source.includes('第二段'), '文章题拿到的是全文')
+    check(sliceForMode('paragraph', article).source === '第一段。', '段落题截取第一个自然段')
+    check(sliceForMode('sentence', article).source === '第一段。', '句子题截取第一个句子')
+    check(sliceForMode('term', article).source === '湿地修复', '术语题取文章里的关键术语')
+
+    /*
+     * 命题依据必须写进提示词里：模型不联网，不知道"外研社·国才杯"是什么比赛。
+     * 规格一旦从提示词里掉了，出题就会飘（题材偏、文体不对、埋不进术语）。
+     * 这里逐条盯住，并核对篇幅数字与程序硬校验用的是同一份 LENGTH_RULE。
+     */
+    const genSystem = buildGenerationSystemPrompt()
+    const specChecks: Array<[string, string]> = [
+      ['赛制规格', '赛制规格整块附在提示词里'],
+      ['中国时政／国情话语外译', '一句话点明命题底色（中国时政/国情话语外译）'],
+      ['优美的文学翻译', '点明"不是优美的文学翻译"'],
+      ['译后编辑', '提到高阶会出现的国际传播型任务'],
+      ['五位一体', '点明主题域是"五位一体"'],
+      ['习近平新时代中国特色社会主义思想的核心概念', '点明主题域含习思想核心概念'],
+      ['不要越界', '主题域明确写"不要越界"'],
+      ['核心术语学习手册', '素材来源含《核心术语学习手册》'],
+      ['教育强国纲要', '素材来源含教育强国纲要'],
+      ['政治含义不跑偏', '评分看重点明"政治含义不跑偏"'],
+      ['不要出这四类之外的体裁', '明确只考四种文体'],
+      ['政治文献', '列出文体：政治文献'],
+      ['新闻编译', '列出文体：新闻编译'],
+      ['文学作品选篇', '列出文体：文学作品选篇'],
+      ['一般说明文', '列出文体：一般说明文'],
+      ['术语是主要考点', '点明术语是主要考点'],
+      ['理解当代中国', '点明素材来源（《理解当代中国》系列教材）'],
+      ['习近平谈治国理政', '点明素材来源（《习近平谈治国理政》）'],
+      ['术语与固定表述必须一字不差', '附上判分尺子第 1 条'],
+      ['不得漏译', '附上判分尺子第 3 条'],
+      ['不要偏题怪题', '明确要求不出偏题怪题'],
+      ['不能联网', '提醒模型不联网、不要编造出处'],
+    ]
+    for (const [needle, label] of specChecks) {
+      check(genSystem.includes(needle), label, `提示词里找不到「${needle}」`)
+    }
+    // 领域预设要覆盖"五位一体"，别把学生往偏题上引
+    for (const domain of ['经济建设', '政治建设', '文化建设', '社会建设', '生态文明建设']) {
+      check(GENERATION_TOPICS.includes(domain), `出题领域预设覆盖五位一体：${domain}`)
+    }
+
+    for (const direction of ['en-to-zh', 'zh-to-en'] as const) {
+      const rule = LENGTH_RULE[direction]
+      check(
+        genSystem.includes(`${rule.min}-${rule.max}`),
+        `提示词里的篇幅与硬校验一致（${direction}：${rule.min}-${rule.max} ${rule.unit}）`,
+      )
+    }
+
+    check(
+      measureLength('en-to-zh', 'one two three') === 3,
+      `英译中按词数：'one two three' 数出 ${measureLength('en-to-zh', 'one two three')} 词`,
+    )
+    check(measureLength('zh-to-en', '生态文明 建设') === 6, '中译英按字符数（不含空白）')
+
+    const tooShort = parseGenerated(
+      JSON.stringify({ topic: 'x', genre: 'news', paragraphs: [{ source: 'Two words.', translation: '两个词。' }] }),
+      { direction: 'en-to-zh', genre: 'news', topic: 'x' },
+    )
+    check(!tooShort.ok, '篇幅不达标的出题结果会被拒绝')
+    if (!tooShort.ok) {
+      check(tooShort.problems[0]?.includes('250') === true, `拒绝原因说清了要求：${tooShort.problems[0] ?? ''}`)
+    }
+
+    // 造一篇刚好达标的英文原文：按口径数出来，而不是写死一份文本
+    const unit = 'Wetland restoration is slow and costly, and the benefits are shared far more widely than the costs. '
+    let body = ''
+    while (measureLength('en-to-zh', body) < 300) body += unit
+    const ok = parseGenerated(
+      JSON.stringify({
+        topic: '生态文明建设',
+        genre: 'news',
+        paragraphs: [{ source: body.trim(), translation: '湿地修复见效慢、花钱多。' }],
+        terms: [{ source: 'wetland restoration', translation: '湿地修复' }],
+      }),
+      { direction: 'en-to-zh', genre: 'news', topic: '生态文明建设' },
+    )
+    check(ok.ok, `刚好达标的出题结果能通过（${measureLength('en-to-zh', body)} 词）`)
+  } catch (error) {
+    check(false, 'AI 出题的纯函数可以执行', error instanceof Error ? error.message : String(error))
+  }
+
+  // 填补方框的摆放：默认居中、挤了左右分开、分不开就往上加一层
+  console.log('\n[填补方框] 检查不互相覆盖的摆放规则')
+  try {
+    const mkBox = (id: string, anchorLeft: number, width = 80): FixBoxInput => ({
+      id,
+      anchorLeft,
+      anchorWidth: 40,
+      anchorTop: 100,
+      width,
+      height: 18,
+    })
+
+    const single = placeFixBoxes([mkBox('a', 200)], 600)
+    check(single[0]?.left === 180, `单个方框居中于被修改内容（left=${single[0]?.left}，期望 180）`)
+    check(single[0]?.row === 0, '单个方框就在第 0 层（紧贴文字上方）')
+    // 上下间隔：第 0 层的底边直接落在锚定行内容区的顶边上，中间不再多留一道缝
+    // （留了就会"飘"在被改文字上方半空里——实测过 6px 的版本）
+    check(
+      single[0]?.top === 82,
+      `第 0 层紧贴锚定行上方（top=${single[0]?.top}，期望 82＝锚定行顶 100 − 框高 18）`,
+    )
+
+    const pair = placeFixBoxes([mkBox('left', 100), mkBox('right', 130)], 600)
+    const leftBox = pair.find((item) => item.id === 'left')
+    const rightBox = pair.find((item) => item.id === 'right')
+    const overlap =
+      Math.min((leftBox?.left ?? 0) + 80, (rightBox?.left ?? 0) + 80) - Math.max(leftBox?.left ?? 0, rightBox?.left ?? 0)
+    check(overlap + 6 <= 0, `挨得近的两个方框不重叠（实际间隙 ${-overlap}px）`)
+    check((leftBox?.left ?? 0) < 80, `左边那个向左让了（left=${leftBox?.left}）`)
+    check((rightBox?.left ?? 0) > 110, `右边那个向右让了（left=${rightBox?.left}）`)
+    check(leftBox?.row === 0 && rightBox?.row === 0, '能让开的就留在同一层')
+    check(
+      pair.every((item) => item.top === 82),
+      '同一层的两个方框被摆在同一高度上',
+    )
+
+    const crowd = placeFixBoxes([mkBox('c1', 0, 120), mkBox('c2', 5, 120), mkBox('c3', 10, 120)], 200)
+    check(crowd.some((item) => item.row > 0), `挤不下时会往上加一层（层级：${crowd.map((item) => item.row).join('/')}）`)
+    check(
+      crowd.every((item) => item.left >= 0 && item.left + 120 <= 200.01),
+      '方框不会跑出容器左右边界',
+    )
+    const rowZero = crowd.filter((item) => item.row === 0)
+    check(
+      rowZero.every((a, index) =>
+        rowZero.slice(index + 1).every((b) => Math.min(a.left + 120, b.left + 120) - Math.max(a.left, b.left) <= 0),
+      ),
+      '同一层里的方框之间没有重叠',
+    )
+  } catch (error) {
+    check(false, '填补方框的摆放算法可以执行', error instanceof Error ? error.message : String(error))
+  }
+
+  // 对照视图：切句 + 把改动拼成"修改后的完整那句"
+  console.log('\n[对照视图] 切句与逐句改写')
+  try {
+    const sentences = splitSentences('I am a student. He is a teacher! 你呢？')
+    check(sentences.length === 3, `按句末标点切成 3 句（实际 ${sentences.length}）`)
+    check(
+      splitSentences('China has afforested 70 million hectares.').length === 1,
+      '小数点/数字里的点不会被当成句末（70 million 不切）',
+    )
+
+    const answer = 'i is a form of human progress. it became a important part.'
+    const parsed = parseCorrection(
+      JSON.stringify({
+        errors: [
+          { id: 'c1', type: 'replace', category: 'grammar', oldText: 'i is', targetText: 'I am', explanation: 'x' },
+          {
+            id: 'c2',
+            type: 'replace',
+            category: 'grammar',
+            oldText: 'became a important',
+            targetText: 'become an important',
+            explanation: 'y',
+          },
+        ],
+        highlights: [],
+      }),
+      answer,
+    )
+    if (parsed.ok) {
+      const lines = buildCompareLines(
+        validateCorrection(parsed.correction.errors, parsed.correction.highlights, answer),
+        answer,
+      )
+      check(lines.length === 2, `两句各出一行对照（实际 ${lines.length}）`)
+      const first = lines[0]?.corrected.map((part) => part.text).join('') ?? ''
+      check(first === 'I am a form of human progress.', `第一句改成「${first}」`)
+      check(lines[0]?.corrected.some((part) => part.color === 'red') === true, '改动过的字带颜色（红）')
+      check(lines[0]?.original === 'i is a form of human progress.', '原文那一句原样保留')
+    } else {
+      check(false, '对照视图用例可以被解析', parsed.problems.join('；'))
+    }
+  } catch (error) {
+    check(false, '对照视图的纯函数可以执行', error instanceof Error ? error.message : String(error))
+  }
+
   // 反向验证：故意给出译文里没有的文字，定位器必须拒绝并说清原因
   console.log('\n[反向验证] 让定位器面对它找不到、或分不清的文字')
   try {
@@ -140,12 +360,28 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const rendered = await renderApp()
     check(rendered.html.length > 0, '界面渲染出了内容')
     check(rendered.judgeCalls === 1, `提交后调用了批改接口 ${rendered.judgeCalls} 次`)
+
+    /*
+     * 参考译文**不发给模型**：请求体里既不能有那个字段，也不能出现参考译文的原文。
+     * 发过去会让模型退化成"逐字对照标准答案"，与"允许合理意译"直接打架。
+     */
+    check(
+      !rendered.judgeRequestBody.includes('referenceTranslation'),
+      '发给批改接口的请求里没有参考译文这个字段',
+    )
+    // 取参考译文的**中段**比对：开头可能正好与某篇原文撞车
+    // （built-in 示例里 paragraph-001 的译文与 article-001 的原文都以 Over the past decade, China has 开头）
+    const referenceLeak = MOCK_CASES.map((item) => item.exercise.referenceTranslation)
+      .filter((reference) => reference.length > 40)
+      .map((reference) => reference.slice(Math.floor(reference.length / 2), Math.floor(reference.length / 2) + 30))
+      .filter((middle) => rendered.judgeRequestBody.includes(middle))
+    check(referenceLeak.length === 0, '请求体里也没有任何一段参考译文的正文', referenceLeak[0])
     check(rendered.composeStageHadInput, '提交前右屏是作答输入框')
 
     // 布局要求：左边整页原文，右边整页作答；提交后结果在右边同一个位置替换掉输入框
     check(
-      rendered.modeTabLabels.join(',') === '文章,段落,句子,术语,练习记录',
-      `顶部导航有四个题型与练习记录：${rendered.modeTabLabels.join(' / ')}`,
+      rendered.modeTabLabels.join(',') === '文章,段落,句子,术语,自定义,练习记录',
+      `顶部导航有四个题型、自定义与练习记录：${rendered.modeTabLabels.join(' / ')}`,
     )
     check(rendered.sampleIds.length >= 4, `题库覆盖 ${rendered.sampleIds.length} 道示例，四类题型都有题`)
 
@@ -159,9 +395,15 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     ] as const) {
       check(rendered.html.includes(className), `四栏布局里有${label}`)
     }
+    check(
+      rendered.html.includes('split-row-top') && rendered.html.includes('split-row-bottom'),
+      '上下两排各自成行（高度可以按内容互相让位，而不是钉死的比例）',
+    )
 
+    // 右下角不再一次性列出全部批注：没点之前只有一句提示
     const noteCount = (rendered.html.match(/class="note-item/g) ?? []).length
-    check(noteCount > 0, `右下角列出了 ${noteCount} 条批注`)
+    check(noteCount === 0, `没点勾画时右下角不列出批注（当前 ${noteCount} 条）`)
+    check(rendered.notesPaneHtml.includes('点右上角'), '没点勾画时右下角给出了怎么用的提示')
 
     // 右上角「我的译文」在提交后必须显示**带批注的**作答。
     // 这一栏出过两个问题：整栏空白（渲染时漏了内容）、只显示纯文本而没有标注。
@@ -186,32 +428,264 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(typeof globalThis.fetch === 'function', '渲染探针已还原全局 fetch')
 
     // 再用一道有批注的句子题单独验批注交互：
-    // 默认题是文章，示例里只有一处亮点，没有 errors 条目可点，验不了"点批注看解释"。
+    // 默认题是文章，示例里只有一处亮点，没有 errors 条目可点。
     console.log('\n[界面渲染 · 批注交互] 换成句子题重跑一遍')
     const sentence = await renderApp({ exerciseId: 'sentence-001' })
     check(sentence.judgeCalls === 1, '句子题也走通了提交 → 批改')
     check(sentence.answerPaneText.includes('i is'), '句子题提交后右上角显示了作答')
-    const sentenceNotes = (sentence.html.match(/class="note-item/g) ?? []).length
-    check(sentenceNotes >= 3, `句子题的右下角列出了 ${sentenceNotes} 条批注`)
-    check(sentence.html.includes('说明'), '点击批注后详情面板给出了说明')
-    check(!sentence.notesPaneHtml.includes('annotated-lines'), '句子题的右下清单里也没有重排译文')
+    check(!sentence.notesPaneHtml.includes('annotated-lines'), '句子题的右下栏里没有重排译文')
     check(sentence.answerPaneHtml.includes('annotated-lines'), '句子题的右上译文上有批注')
 
-    // 五种改法都要能画在译文上：替换（划掉 + 上方小字）、插入、删除（划掉）、
+    const it = sentence.interaction
+    check(Boolean(it), '在译文里找到了可点的勾画')
+    if (it) {
+      check(it.markCount >= 3, `译文上有 ${it.markCount} 处可点的勾画`)
+      check(
+        it.idleNotes.includes('点右上角') && !it.idleNotes.includes('第 1 处'),
+        '没点勾画时右下角只是一句提示，不显示任何一处',
+      )
+      check(it.firstBubble.length > 0, `点第一处勾画后，那一行下面浮出气泡：${JSON.stringify(it.firstBubble.slice(0, 28))}…`)
+      check(it.firstBubble.includes('完整说明见右下角'), '气泡尾部指向右下角的完整说明')
+      check(!it.firstBubble.includes('…'), '气泡显示的是完整内容，没有截断')
+      check(
+        it.firstNotes.includes('说明') && !it.firstNotes.includes('点右上角'),
+        '点第一处勾画后，右下角换成了这一处的说明',
+      )
+      check(it.selectedDetailCount === 1, `右下角只有 ${it.selectedDetailCount} 张卡片（只显示选中的那一处）`)
+      check(
+        it.secondNotes !== it.firstNotes,
+        '再点另一处，右下角内容跟着换成那一处（不是全量清单）',
+      )
+      check(it.secondBubble !== it.firstBubble, '再点另一处，气泡内容也跟着换')
+      check(
+        it.bubbleAfterOutsideClick === '' && !it.notesAfterOutsideClick.includes('第 1 处'),
+        '点勾画之外的地方，气泡消失、右下角回到提示',
+      )
+      check(it.hasRawLink, '右下角有「点击查看 AI 完整返回内容」')
+      check(
+        it.rawModalText.includes('"errors"') && it.rawModalText.includes('explanation'),
+        '点开后弹窗里是 AI 的完整返回（未解析、未收窄）',
+      )
+    }
+
+    // 五种改法都要能画在译文上：替换（旧文字勾底色 + 上方小字）、插入、删除、
     // 整句重写、语序调换（配对弧线）。这道句子题的示例正好同时含替换、插入、删除。
+    // 记号语言只有一种：**相应颜色的荧光笔底色**，一律不划删除线。
     const sentenceMarks = sentence.answerPaneHtml.match(/class="mk /g) ?? []
     check(sentenceMarks.length >= 3, `右上译文上有 ${sentenceMarks.length} 处标注标记`)
-    check(sentence.answerPaneHtml.includes('mk-delete'), '删除类在译文上有划线')
+    check(sentence.answerPaneHtml.includes('mk-delete'), '删除类在译文上有标记')
     check(
-      sentence.answerPaneHtml.includes('mk-replace') && sentence.answerPaneHtml.includes('mk-fix'),
-      '替换类划掉了原文并在上方给出正确写法',
+      /background:\s*var\(--mark-(red|orange)-bg\)/.test(sentence.answerPaneHtml),
+      '被改动的内容用相应颜色的底色勾画（荧光笔）',
+    )
+    check(
+      !/line-through/.test(sentence.answerPaneHtml),
+      '译文上不再出现删除线（改动的记号一律是底色）',
+    )
+    check(
+      sentence.answerPaneHtml.includes('mk-replace') && sentence.answerPaneHtml.includes('mk-deleted'),
+      '替换类把原文标了出来（class 仍是 mk-replace/mk-deleted）',
+    )
+    check(
+      /class="fix-text"[^>]*>[^<]*I am/.test(sentence.answerPaneHtml),
+      '替换的正确写法写在填补层里（i is → I am）',
+    )
+    check(
+      /class="fix-text"[^>]*data-fix-for="fix-\d+"/.test(sentence.answerPaneHtml),
+      '方框带着"属于哪一处填补、是第几段"的标记（量坐标的脚本靠它对号入座）',
     )
 
     // 插入类单独用那道插入题验证（sentence-002 的示例是漏介词与冠词）
     const insert = await renderApp({ exerciseId: 'sentence-002' })
     check(insert.answerPaneHtml.includes('mk-insert'), '插入类在译文上标出了补入位置')
-    check(insert.answerPaneHtml.includes('mk-fix-inline'), '插入类给出了要补入的内容')
+    check(
+      insert.answerPaneHtml.includes('mk-slot') && !insert.answerPaneHtml.includes('mk-caret'),
+      '插入点画成一块空位，那根零宽的小竖线已经不用了',
+    )
+    check(
+      /class="mk-slot"[^>]*background:\s*var\(--mark-(red|orange)-bg\)/.test(insert.answerPaneHtml),
+      '插入空位用相应颜色的荧光笔底色',
+      (insert.answerPaneHtml.match(/<span class="mk-slot"[^>]*>/) ?? ['（没找到空位）'])[0],
+    )
+    check(insert.answerPaneHtml.includes('fix-text'), '补入的内容写在填补层里')
+    check(insert.answerPaneHtml.includes('fix-layer'), '填补内容画在独立的层上')
+    check(
+      /<span[^>]*class="fix-text"/.test(insert.answerPaneHtml) &&
+        !/<button[^>]*class="fix-text"/.test(insert.answerPaneHtml),
+      '填补内容用的是 span 而不是 button（button 会带出浏览器默认的底色与边框）',
+    )
     insert.restore()
+
+    /*
+     * 「自定义」那一栏：用户自己贴一篇原文就能练，不用等我们出题。
+     * 只贴原文——方向和题型由程序判断（有汉字就是中译英；段落数/句数决定按哪种题型批改）。
+     */
+    const customGuesses: Array<[string, Mode, Direction]> = [
+      ['生态文明建设', 'term', 'zh-to-en'],
+      ['高质量发展', 'term', 'zh-to-en'],
+      ['The quick brown fox jumps over the lazy dog.', 'sentence', 'en-to-zh'],
+      ['She held fast to her dream. Later she made it come true.', 'paragraph', 'en-to-zh'],
+      ['First paragraph of my own text.\n\nSecond paragraph of my own text.', 'article', 'en-to-zh'],
+    ]
+    for (const [source, expectMode, expectDirection] of customGuesses) {
+      const short = source.replace(/\s+/g, ' ').slice(0, 20)
+      check(
+        directionOf(source) === expectDirection,
+        `自定义题按文字判方向：${JSON.stringify(short)} → ${DIRECTION_LABEL[expectDirection]}`,
+      )
+      check(
+        modeOf(source) === expectMode,
+        `自定义题按长短判题型：${JSON.stringify(short)} → ${KIND_LABEL[expectMode]}`,
+      )
+    }
+    const customProbe = await renderApp({
+      seedCustom: 'She held out her hand and waited there for a while.',
+      checkCustom: '碳达峰与碳中和是中国向世界作出的庄严承诺。',
+    })
+    const custom = customProbe.custom
+    check(Boolean(custom), '「自定义」那一栏能渲染出来')
+    if (custom) {
+      check(custom.navHasCustom, `导航栏里有「自定义」：${custom.tabs.join(' / ')}`)
+      check(
+        custom.shownSource.includes('She held out her hand'),
+        '点「自定义」能切到上次贴过的那一篇',
+        custom.shownSource.slice(0, 60),
+      )
+      check(!custom.hasReference, '自己贴的题没有参考译文那一栏（批改并不需要它）')
+      check(!custom.hasAiButton && !custom.hasRotateButton, '自己贴的题不给「AI 出题」「换一换」（贴哪篇就练哪篇）')
+      check(custom.hasRepasteButton, '自己贴的题给的是「重新贴一篇」')
+      check(custom.prefill.includes('She held out her hand'), '贴题弹窗里预填着当前这一篇，方便改一改再练')
+      check(
+        custom.afterPaste.includes('碳达峰与碳中和'),
+        '贴一篇新的之后，「原文」栏换成新贴的那一篇',
+        custom.afterPaste.slice(0, 60),
+      )
+      check(
+        custom.afterPaste.includes('自动判定'),
+        '左上角如实标出"这是按哪种题型批改的"（自己贴的题没有官方建议用时）',
+        custom.afterPaste.slice(0, 80),
+      )
+      check(
+        customProbe.html.includes('中译英'),
+        '顶栏的方向标签跟着这篇原文变（有汉字就是中译英）',
+      )
+      check(custom.storedSource.includes('碳达峰与碳中和'), '贴进来的原文存进了浏览器（刷新后还在）')
+      check(custom.historyCount >= 1, '按题号留了档，练习记录翻旧题时显示得出原文')
+    }
+    customProbe.restore()
+
+    // 「批注不改变换行位置」：文字流必须与提交的作答逐字相同
+    const flow = sentence.flow
+    check(Boolean(flow), '拿到了译文文字流')
+    if (flow) {
+      check(
+        flow.matches,
+        `批注没有改动译文本身的文字（文字流 ${flow.text.length} 字 vs 作答 ${flow.answer.length} 字）`,
+        flow.matches ? undefined : `文字流：${JSON.stringify(flow.text.slice(0, 60))}\n作答：${JSON.stringify(flow.answer.slice(0, 60))}`,
+      )
+    }
+
+    /*
+     * 「漏了一个词」是最容易画错的一类：模型常把它报成"替换"（made → has made），
+     * 于是画面上变成"划掉 made、上方写 has made"，看着像整个词被换掉。
+     * 按单词求最小不同项之后应当是**纯插入**：一个字都不划，只补 has。
+     */
+    const wordOrderCase = MOCK_CASES.find((item) => item.exercise.id === 'sentence-003')
+    if (wordOrderCase) {
+      const wordCorrection = fixtureCorrectionFor('sentence-003', wordOrderCase.sampleAnswer)
+      const wordValidated = validateCorrection(
+        wordCorrection.errors,
+        wordCorrection.highlights,
+        wordOrderCase.sampleAnswer,
+      )
+      const wordLayout = buildLayout(wordValidated, wordOrderCase.sampleAnswer)
+      const missed = wordLayout.segments.find((segment) => segment.errorId === 's3-e2')
+      check(missed?.kind === 'insert', `漏了一个词时画成插入、不划任何字（实际 ${missed?.kind ?? '没画出来'}）`)
+      check(missed?.targetText === 'has ', `补入的内容是「has 」（实际 ${JSON.stringify(missed?.targetText)}）`)
+    }
+
+    /*
+     * 模型把它报成「整句重写」时也不能整句划掉：只有"整段都换了"才算重写，
+     * 按词求最小不同项之后只剩一处词级改动，就该按普通替换画。
+     */
+    const rewriteAnswer = ' China has plant trees more than 70 million hectares.'
+    const coercedRewrite = parseCorrection(
+      JSON.stringify({
+        errors: [
+          {
+            id: 'rw-1',
+            type: 'rewrite',
+            category: 'word-choice',
+            oldText: 'China has plant trees more than 70 million hectares.',
+            targetText: 'China has afforested trees more than 70 million hectares.',
+            explanation: 'plant 用作动词不准确，afforest 才是"植树造林"。',
+          },
+        ],
+        highlights: [],
+      }),
+      rewriteAnswer,
+    )
+    if (coercedRewrite.ok) {
+      const rewriteLayout = buildLayout(
+        validateCorrection(coercedRewrite.correction.errors, coercedRewrite.correction.highlights, rewriteAnswer),
+        rewriteAnswer,
+      )
+      const marks = rewriteLayout.segments.filter((segment) => segment.errorId === 'rw-1')
+      check(
+        marks.every((segment) => segment.kind !== 'rewrite'),
+        `只改一个词时不会被整句划掉（实际画成 ${marks.map((s) => s.kind).join('/') || '没画出来'}）`,
+      )
+      check(
+        marks.map((segment) => segment.deletedText).join('') === 'plant',
+        `划掉的只有那一个词（实际划「${marks.map((s) => s.deletedText).join('')}」）`,
+      )
+    } else {
+      check(false, '「报成整句重写但只改一个词」的用例可以被解析', coercedRewrite.problems.join('；'))
+    }
+
+    /*
+     * 一处错误横跨两个词（farmer and herder → farmers and herders）：
+     * 译文上要**各画各的**（两个词分别划掉、分别改正），中间没错的 and 不划；
+     * 但它们必须共用同一个编号——逻辑上仍是同一处错误，点哪一边选中的都是它。
+     */
+    const spreadAnswer = ' the farmer and herder are here.'
+    const spread = parseCorrection(
+      JSON.stringify({
+        errors: [
+          {
+            id: 'spread-1',
+            type: 'replace',
+            category: 'function-word',
+            oldText: 'farmer and herder',
+            targetText: 'farmers and herders',
+            explanation: '两个名词都要用复数。',
+          },
+        ],
+        highlights: [],
+      }),
+      spreadAnswer,
+    )
+    if (spread.ok) {
+      const spreadLayout = buildLayout(
+        validateCorrection(spread.correction.errors, spread.correction.highlights, spreadAnswer),
+        spreadAnswer,
+      )
+      const marks = spreadLayout.segments.filter((segment) => segment.errorId === 'spread-1')
+      check(marks.length === 2, `一处错误横跨两个词时画成 ${marks.length} 处勾画（期望 2 处）`)
+      check(
+        marks.every((segment) => segment.kind === 'replace') &&
+          marks.map((segment) => segment.deletedText).join(' + ') === 'farmer + herder',
+        `两侧各改各的、and 不被划掉（实际划「${marks.map((s) => s.deletedText).join(' + ')}」）`,
+      )
+      check(
+        marks.map((segment) => segment.targetText).join(' + ') === 'farmers + herders',
+        '两侧各自写上正确的词',
+      )
+      const struck = marks.map((segment) => segment.deletedText ?? segment.text).join('+')
+      check(!struck.includes('and'), `没错的词（and）没有被划掉（实际划掉「${struck}」）`)
+    } else {
+      check(false, '一处错误横跨两个词的用例可以被解析', spread.problems.join('；'))
+    }
 
     // 调序弧线单独用那道语序题验证
     const reorder = await renderApp({ exerciseId: 'sentence-004' })
@@ -219,7 +693,37 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       reorder.answerPaneHtml.includes('mk-reorder') || reorder.answerPaneHtml.includes('data-reorder-owner'),
       '语序题在译文上标出了要调换的片段',
     )
-    check(reorder.html.includes('arc-svg'), '语序题画出了配对弧线')
+
+    const reorderCase = MOCK_CASES.find((item) => item.exercise.id === 'sentence-004')
+    if (reorderCase) {
+      const reorderCorrection = fixtureCorrectionFor('sentence-004', reorderCase.sampleAnswer)
+      const reorderValidated = validateCorrection(
+        reorderCorrection.errors,
+        reorderCorrection.highlights,
+        reorderCase.sampleAnswer,
+      )
+      const reorderLayout = buildLayout(reorderValidated, reorderCase.sampleAnswer)
+
+      /*
+       * 关键回归：DOM 上写的 data-reorder-index 必须是**片段序号**（sourceIndex），
+       * 而不是片段在译文里的字符位置。
+       * 曾经就是写成了字符位置——弧线查找用的是序号，两边永远对不上，
+       * 结果一条弧线都画不出来；而"页面里有没有 <svg>"这种断言依然是绿的。
+       */
+      let keyMismatch: string | null = null
+      for (const group of reorderLayout.reorderGroups) {
+        const pattern = new RegExp(`data-reorder-owner="${group.errorId}"[^>]*data-reorder-index="(\\d+)"`, 'g')
+        const drawn = [...reorder.answerPaneHtml.matchAll(pattern)].map((match) => Number(match[1])).sort((a, b) => a - b)
+        const expected = group.parts.map((part) => part.sourceIndex).sort((a, b) => a - b)
+        if (drawn.join(',') !== expected.join(',')) {
+          keyMismatch = `${group.errorId}：DOM 里是 [${drawn.join(', ')}]，排版结果要的是 [${expected.join(', ')}]`
+        }
+      }
+      check(keyMismatch === null, '弧线配对用的片段序号与排版结果一致（不是字符位置）', keyMismatch ?? undefined)
+
+      const arcs = (reorder.answerPaneHtml.match(/class="arc-path"/g) ?? []).length
+      check(arcs > 0, `语序题真的画出了 ${arcs} 条配对弧线`)
+    }
     reorder.restore()
 
     // 切换页面不能丢东西：写一段独有文字 → 切到别的题型 → 切回来，内容必须还在
@@ -235,6 +739,72 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       )
     }
     roundTrip.restore()
+
+    // 段落模式也必须有「换一换」：这是用户明确提过的（此前只有段落-002 有备选）
+    console.log('\n[界面渲染 · 换一换] 段落模式的默认题也要能换')
+    const paragraphProbe = await renderApp({ exerciseId: 'paragraph-001' })
+    check(paragraphProbe.hasRotateButton, '段落题的原文栏有「换一换」按钮')
+    check(!paragraphProbe.rotateDisabled, '段落题的「换一换」可用（备选篇目已在 variants.ts 里）')
+    paragraphProbe.restore()
+
+    // AI 出题：选领域 → 生成 → 自动切到新题并留存
+    console.log('\n[界面渲染 · AI 出题] 走一遍出题流程')
+    const generateProbe = await renderApp({ exerciseId: 'sentence-001', checkGenerate: true })
+    const gen = generateProbe.generated
+    check(Boolean(gen), '找到了「AI 出题」按钮并点开')
+    if (gen) {
+      check(gen.dialogOpened, '点「AI 出题」弹出了选择领域的面板')
+      check(gen.dialogClosed, '生成完成后弹窗自动关闭')
+      check(gen.sourceChanged, '原文换成了刚生成的那一篇')
+    }
+    generateProbe.restore()
+
+    // 返回修改 → 查看上次批改（不重新提交）；四栏边界可拖动
+    console.log('\n[界面渲染 · 面板] 返回上次结果与拖动边界')
+    const panelProbe = await renderApp({ exerciseId: 'sentence-001', checkPanels: true })
+    const panels = panelProbe.panels
+    check(Boolean(panels), '面板交互探针跑通了')
+    if (panels) {
+      check(panels.hasSplitter, '四栏之间是可见可拖的分隔条')
+      check(panels.manualApplied, '拖动之后切换成手动比例（split-manual）')
+      check(panels.editorShown, '点「返回修改」回到作答框')
+      check(panels.canReturnToResult, '作答框旁边出现「查看上次批改」')
+      check(panels.resultBack, '点它就回到上次的批改结果（内容与之前一致）')
+      check(panels.judgeCallsAfterReturn === 1, `回到上次结果没有重新调用接口（调用 ${panels.judgeCallsAfterReturn} 次）`)
+    }
+    panelProbe.restore()
+
+    // 对照视图 + 设置
+    console.log('\n[界面渲染 · 视图与设置] 对照视图与设置项')
+    const viewProbe = await renderApp({ exerciseId: 'sentence-001', checkViews: true })
+    const views = viewProbe.views
+    check(Boolean(views), '视图探针跑通了')
+    if (views) {
+      check(views.compareLines >= 1, `对照视图按句拆开（${views.compareLines} 句）`)
+      check(views.marksInCompareView === 0, '对照视图里没有任何勾画（不划线、不填补）')
+      check(views.coloredSpans >= 1, `对照视图保留了颜色区分（${views.coloredSpans} 处着色）`)
+      check(
+        /<span[^>]*class="compare-mark"/.test(views.compareHtml),
+        '着色用的是行内 span 而不是 button（长内容才会在内部自动折行）',
+      )
+      check(views.compareText.includes('I am'), '对照视图下方给出的是"修改后的完整那句"')
+      check(views.settingsOpened, '导航栏的「设置」能打开设置面板')
+      check(views.toggledBoxes && views.boxesBefore && !views.boxesAfter, '关掉「显示填补的正确写法」后填补文字消失')
+      check(
+        /line-height/.test(views.lineHeightStyle),
+        `行距由设置控制（.annotated-lines 的行内样式：${views.lineHeightStyle}）`,
+      )
+    }
+    viewProbe.restore()
+
+    console.log('\n[界面渲染 · 练习记录] 打开一条记录，检查译文上还带着勾画')
+    const records = await renderApp({ exerciseId: 'sentence-001', checkRecords: true })
+    check(Boolean(records.record), '练习记录页能打开一条记录')
+    if (records.record) {
+      check(records.record.hasAnnotatedLines, '记录里的译文是带勾画的，不是纯文本')
+      check(records.record.marks >= 3, `记录里的译文上有 ${records.record.marks} 处标注`)
+    }
+    records.restore()
     sentence.restore()
   } catch (error) {
     check(false, '界面渲染没有抛出异常', error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error))
@@ -259,7 +829,6 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
 
     const request = {
       source: 'Ecological civilization is a form of human progress.',
-      referenceTranslation: '生态文明是一种人类进步形态。',
       direction: 'en-to-zh' as const,
       genre: 'news' as const,
       level: 'polish' as const,
@@ -312,10 +881,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const { captureScreens } = await import('./visual')
     const result = await captureScreens([
       { name: '01-compose', width: 1600, height: 950, action: 'plain' },
-      { name: '02-result', width: 1600, height: 950, action: 'submit' },
+      // 点了结果页里的一处勾画：能看到那一行下面的气泡与右下角的单处说明
+      { name: '02-result', width: 1600, height: 950, action: 'submit', clickMark: 0 },
       // 再用句子题截一张：它同时含替换、插入、删除三种标记，
       // 默认的文章题只有一处亮点，看不出标注长什么样
-      { name: '03-marks', width: 1600, height: 950, action: 'submit', exerciseId: 'sentence-002', clickTab: '句子' },
+      { name: '03-marks', width: 1600, height: 950, action: 'submit', exerciseId: 'sentence-002', clickTab: '句子', clickMark: 0 },
       { name: '04-mobile', width: 420, height: 900, action: 'plain' },
     ])
     check(result.ok, result.ok ? `生成了 ${result.files.length} 张截屏` : `截屏未完成：${result.note ?? ''}`)
@@ -337,6 +907,112 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     // 注意：本文件会被 esbuild 打包到 node_modules/.cache 下执行，
     // 因此 import.meta.dirname 指向的是缓存目录。npm run smoke 的当前目录才是项目根。
     const root = process.cwd()
+
+    // 标记的视觉约定：绿色是"做得好"，用波浪线；删除/替换才是横线。
+    // jsdom 不套用 CSS，只能直接读样式表来守住这条约定。
+    const css = readFileSync(path.join(root, 'src/styles.css'), 'utf8')
+    // 上下两排的高度规则：默认一半、下方最多一半、最少 180px
+    const bottomRowRule = /\.split-row-bottom\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(/max-height:\s*50%/.test(bottomRowRule), '下方两栏最多顶到一半处（再多就自己滚动）', bottomRowRule.trim())
+    check(/min-height:\s*180px/.test(bottomRowRule), '下方两栏最少留 180px（顶到头就不动了）', bottomRowRule.trim())
+    const topRowRule = /\.split-row-top\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(/min-height:\s*200px/.test(topRowRule), '上方两排也有下限，不会被下方顶没', topRowRule.trim())
+
+    /*
+     * 填补方框的字号必须与正文一致（曾经缩到 0.78em，看起来像被压扁了），
+     * 行高也不能用正文那个 2.5（那是给标记留的空白，照搬会把方框撑得虚高）。
+     */
+    const fixLayerRule = /\.fix-layer\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    // .annotated-lines 在样式表里出现多次（另一处只改 padding），取带 font-size 的那条
+    const annotatedRule =
+      [...css.matchAll(/\.annotated-lines\s*\{([^}]*)\}/gs)].map((match) => match[1] ?? '').find((rule) => /font-size/.test(rule)) ?? ''
+    const fixLayerSize = /font-size:\s*([\d.]+)px/.exec(fixLayerRule)?.[1] ?? ''
+    const annotatedSize = /font-size:\s*([\d.]+)px/.exec(annotatedRule)?.[1] ?? ''
+    check(
+      fixLayerSize !== '' && fixLayerSize === annotatedSize,
+      `方框的字号与正文一致（方框 ${fixLayerSize}px / 正文 ${annotatedSize}px）`,
+      `fix-layer: ${fixLayerRule.trim()}`,
+    )
+    const fixTextRule = /\.fix-text\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(/font-size:\s*0\.78em/.test(fixTextRule), '填补文字用之前那档小字（0.78em）', fixTextRule.trim())
+    check(/line-height:\s*1\.6/.test(fixTextRule), '填补文字行高 1.6（不再是压扁的 1.35）', fixTextRule.trim())
+    // 只留文字：不许有边框、底色、阴影、内边距
+    check(
+      !/box-shadow/.test(fixTextRule) && !/padding/.test(fixTextRule),
+      '填补内容没有阴影、没有内边距',
+      fixTextRule.trim(),
+    )
+    check(
+      !/font-weight:\s*(bold|[6-9]00)/.test(fixTextRule),
+      '填补内容不加粗',
+      fixTextRule.trim(),
+    )
+    // 背景透明、没有边框线条（用 span 才不会带出浏览器默认的按钮底色）
+    check(/background:\s*none/.test(fixTextRule), '填补内容的背景是透明的', fixTextRule.trim())
+    check(/border:\s*none/.test(fixTextRule), '填补内容没有边框线条', fixTextRule.trim())
+    // 永不换行：跨行靠把补写内容**拆成几段**（一段对一行），而不是让方框自己乱折
+    check(/white-space:\s*nowrap/.test(fixTextRule), '填补方框本身永不折行（跨行靠拆段实现）', fixTextRule.trim())
+    /*
+     * 插入空位：一块 inline-block 的荧光笔空格，宽度由 FixLayer 量出补写内容的宽度后写上去。
+     * CSS 里那个 0.6em 只是兜底——关掉「显示填补的正确写法」时量不到宽度，
+     * 插入点也不该整个消失。
+     */
+    const slotRule = /\.mk-slot\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(/display:\s*inline-block/.test(slotRule), '插入空位是 inline-block（不会被折行切开）', slotRule.trim() || '样式表里找不到 .mk-slot')
+    check(/width:\s*0\.6em/.test(slotRule), '插入空位有兜底宽度（关掉方框也看得见）', slotRule.trim())
+
+    /*
+     * 被改内容**允许在词与词之间断开换行**（放不下时才断）。
+     * 曾经 `.mk-replace` 被锁了 `white-space: nowrap`，于是行尾放不下时它整块被顶到下一行去——
+     * 用户要的正是"需要时可以被拆到两行上"（词内部仍然不拆，那靠正常的断行规则）。
+     */
+    const replaceRule = /\.mk-replace\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(!/nowrap/.test(replaceRule), '替换类不再锁死不许换行（放不下时可以在词间断开）', replaceRule.trim() || '样式表里找不到 .mk-replace')
+    const compareMarkRule = /\.compare-mark\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(
+      !/font-weight:\s*(bold|[6-9]00)/.test(compareMarkRule),
+      '对照视图里改动过的字也不加粗',
+      compareMarkRule.trim(),
+    )
+    const noteToRule = /\.note-to\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(!/font-weight:\s*(bold|[6-9]00)/.test(noteToRule), '清单里"改成什么"也不加粗', noteToRule.trim())
+    const bubbleToRule = /\.ann-bubble-to\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(!/font-weight:\s*(bold|[6-9]00)/.test(bubbleToRule), '气泡里"改成什么"也不加粗', bubbleToRule.trim())
+    check(/line-height:\s*2\.5/.test(annotatedRule), '正文行高基准仍是 2.5（方框需要时再额外加）')
+
+    /*
+     * 记号的视觉语言只有一种：**相应颜色的荧光笔底色**。
+     * 红橙两色的"被改动内容"都靠底色（底色挂在最外层，补写的字更长时会被撑成等宽的带子），
+     * 绿色亮点同样用底色，波浪线已去掉；三者的删除线/下划线一律不许再有。
+     */
+    const highlightRule = /\.mk-highlight\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(
+      /background:\s*var\(--mark-green-bg\)/.test(highlightRule) && !/text-decoration/.test(highlightRule),
+      '绿色亮点用底色勾画，波浪线已去掉',
+      highlightRule.trim() || '样式表里找不到 .mk-highlight',
+    )
+    for (const [pattern, label] of [
+      [/\.mk-delete\s*\{([^}]*)\}/s, '删除类'],
+      [/\.mk-deleted\s*\{([^}]*)\}/s, '替换掉的原文'],
+      [/\.mk-rewrite-old\s*\{([^}]*)\}/s, '重写掉的原文'],
+    ] as const) {
+      const rule = pattern.exec(css)?.[1] ?? ''
+      check(!/line-through/.test(rule), `${label}不再划删除线（记号改用底色）`, rule.trim() || '样式表里找不到这条规则')
+    }
+
+    /*
+     * 撑宽用的是**真空档**（padding），**不许**再用负 margin 把它抵消掉。
+     *
+     * 两种做法的差别就在用户要的那一条上：加负 margin 时原文一个字都不挪、
+     * 带子于是压在相邻文字上（实测按像素数：空档里数得出 201 个字的像素，也就是"相邻文字在荧光里"）；
+     * 不加负 margin 时空档真的占地方，相邻文字被推到带子两侧，空档里 0 个字的像素。
+     * 这条在 jsdom 里量不出来（jsdom 不排版），只能在源码层面守住。
+     */
+    const fixLayerSource = readFileSync(path.join(root, 'src/components/FixLayer.tsx'), 'utf8')
+    check(
+      /style\.paddingLeft\s*=/.test(fixLayerSource) && !/style\.marginLeft\s*=/.test(fixLayerSource),
+      '撑宽用的是真空档（相邻文字被推开，不会压在荧光里）',
+    )
 
     for (const file of ['start.ps1', '启动.bat']) {
       const full = path.join(root, file)

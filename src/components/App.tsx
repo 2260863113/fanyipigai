@@ -1,29 +1,39 @@
-import { useMemo, useState, type JSX } from 'react'
+import { useMemo, useRef, useState, type JSX } from 'react'
 import { MOCK_CASES, fixtureCorrectionFor } from '../domain/mock'
 import {
   DIRECTION_LABEL,
   GENRE_LABEL,
+  KIND_LABEL,
   LEVEL_LABEL,
   MODE_TABS,
+  UNIT_LABEL,
   type Correction,
   type Exercise,
+  type Direction,
+  type Genre,
   type Mode,
   type PolishLevel,
 } from '../domain/types'
 import { validateCorrection, type ValidatedCorrection } from '../domain/validate'
-import { buildLayout } from '../domain/layout'
+import { buildLayout, type AnnotatedLayout } from '../domain/layout'
+import { toAiShape } from '../domain/parse'
 import { AnnotationText } from './AnnotationText'
-import { requestJudgment, type JudgeSectionInput } from '../domain/client'
+import { requestGeneration, requestJudgment, type JudgeSectionInput } from '../domain/client'
 import { splitSections, type Section } from '../domain/sections'
 import { variantsFor } from '../domain/variants'
+import { GENERATION_TOPICS, LENGTH_RULE, type GeneratedExercise } from '../domain/generate'
 import type { JudgeFailureKind } from '../domain/ai'
 import { ScoreSummary } from './ScoreSummary'
-import { AnnotationList } from './AnnotationList'
-import { DetailPanel, type SelectionData } from './DetailPanel'
+import { DetailPanel } from './DetailPanel'
+import { useSplitDrag } from './split-drag'
+import { CompareView } from './CompareView'
+import { LINE_HEIGHT_RANGE, useSettings } from './settings'
+import { RawResponseButton } from './RawResponseButton'
 import { RecordsView, type RecordView } from './RecordsView'
+import { exerciseOf, loadCustom, saveCustom, type CustomExercise } from '../domain/custom'
 import type { Selection } from './AnnotationText'
 
-type Tab = Mode | 'records'
+type Tab = Mode | 'records' | 'custom'
 type Source = 'live' | 'fixture'
 
 interface JudgeError {
@@ -32,8 +42,11 @@ interface JudgeError {
 }
 
 const ALL_CASES = MOCK_CASES
+const EMPTY_GENERATED: GeneratedExercise[] = []
+const EMPTY_LAYOUT: AnnotatedLayout = { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 }
 
-function casesOfMode(mode: Mode): typeof ALL_CASES {
+function casesOfMode(mode: Tab): typeof ALL_CASES {
+  if (mode === 'records' || mode === 'custom') return []
   return ALL_CASES.filter((item) => item.exercise.mode === mode)
 }
 
@@ -43,6 +56,8 @@ interface Draft {
   level: PolishLevel
   source: Source
   sectionCount: number
+  /** AI 原样返回的完整文本；界面上的「查看 AI 完整返回内容」用它 */
+  raw: string
 }
 
 export function App(): JSX.Element {
@@ -61,7 +76,29 @@ export function App(): JSX.Element {
   const [draftsByExercise, setDraftsByExercise] = useState<Record<string, Record<number, string>>>({})
   const [sectionByExercise, setSectionByExercise] = useState<Record<string, number>>({})
   const [resultByExercise, setResultByExercise] = useState<Record<string, Draft>>({})
+  /**
+   * 每道题当前看的是哪一面：'answer' 作答框 / 'result' 上次的批改结果。
+   *
+   * 点「返回修改」只切到作答框，**结果仍然留着**——只要没改一个字就能点回去看，
+   * 不用重新提交一次（重新提交要花十几秒，还可能因为模型波动给出不一样的结果）。
+   * 一旦真的改了作答，结果就作废（见 updateAnswer）。
+   */
+  const [viewByExercise, setViewByExercise] = useState<Record<string, 'answer' | 'result'>>({})
+  /** 四栏边界：默认按内容自动平衡，用户拖过之后按他定的比例 */
+  const splitRef = useRef<HTMLElement | null>(null)
+  const { split, style: splitStyle, beginDrag, resetSplit } = useSplitDrag(splitRef)
+  /** 界面偏好：行距、是否显示填补的文字、译文看哪种视图（存 localStorage） */
+  const { settings, update: updateSettings } = useSettings()
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [variantByExercise, setVariantByExercise] = useState<Record<string, number>>({})
+  /** AI 现出的题：按题目留存，之后「换一换」还能翻回来 */
+  const [generatedByExercise, setGeneratedByExercise] = useState<Record<string, GeneratedExercise[]>>({})
+  const [genOpen, setGenOpen] = useState(false)
+  const [genTopic, setGenTopic] = useState(GENERATION_TOPICS[0] ?? '')
+  const [genGenre, setGenGenre] = useState<Genre>(firstCase.exercise.genre)
+  const [genDirection, setGenDirection] = useState<Direction>(firstCase.exercise.direction)
+  const [genBusy, setGenBusy] = useState(false)
+  const [genError, setGenError] = useState<string | null>(null)
   const [level, setLevel] = useState<PolishLevel>('polish')
 
   const [judging, setJudging] = useState(false)
@@ -71,9 +108,20 @@ export function App(): JSX.Element {
   const [records, setRecords] = useState<RecordView[]>([])
   const [openRecord, setOpenRecord] = useState<RecordView | null>(null)
 
+  /** 自己贴的那一篇（存在浏览器里，只留最新一篇）；贴题弹窗的开关与草稿 */
+  const [custom, setCustom] = useState<CustomExercise | null>(() => loadCustom())
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const [pasteText, setPasteText] = useState('')
+  const [pasteError, setPasteError] = useState<string | null>(null)
+
   const activeCase = ALL_CASES.find((item) => item.exercise.id === exerciseId) ?? firstCase
-  const exercise: Exercise = activeCase.exercise
+  /** 当前在做的是不是自己贴的那一篇 */
+  const customExercise = useMemo(() => (custom ? exerciseOf(custom) : null), [custom])
+  const isCustom = customExercise !== null && customExercise.id === exerciseId
+  const exercise: Exercise = isCustom && customExercise ? customExercise : activeCase.exercise
   const mode = exercise.mode
+  // 恒定的空数组：直接写 `?? []` 会每帧新建一个引用，让下面的 useMemo 失效
+  const generatedOptions = generatedByExercise[exercise.id] ?? EMPTY_GENERATED
 
   /**
    * 交替使用的原文。
@@ -82,16 +130,25 @@ export function App(): JSX.Element {
    */
   const sourceOptions = useMemo(
     () => [
-      { source: exercise.source, referenceTranslation: exercise.referenceTranslation },
-      ...variantsFor(exercise.id),
+      { source: exercise.source, referenceTranslation: exercise.referenceTranslation, topic: exercise.topic, genre: exercise.genre },
+      ...variantsFor(exercise.id).map((variant) => ({ ...variant, topic: exercise.topic, genre: exercise.genre })),
+      ...generatedOptions.map((generated) => ({
+        source: generated.source,
+        referenceTranslation: generated.referenceTranslation,
+        topic: generated.topic,
+        genre: generated.genre,
+      })),
     ],
-    [exercise.id, exercise.source, exercise.referenceTranslation],
+    [exercise, generatedOptions],
   )
   const variantIndex = variantByExercise[exercise.id] ?? 0
   const safeVariantIndex = variantIndex < sourceOptions.length ? variantIndex : 0
   const current = sourceOptions[safeVariantIndex] ?? sourceOptions[0]
   const currentSource = current?.source ?? exercise.source
   const currentReference = current?.referenceTranslation ?? exercise.referenceTranslation
+  // AI 出的题可能换了领域与文体，顶栏要如实显示当前这一篇
+  const currentTopic = current?.topic ?? exercise.topic
+  const currentGenre = current?.genre ?? exercise.genre
 
   /** 原文按段落切分；单段题只有一个元素，因此下面所有逻辑对四类题型通用 */
   const sourceSections: Section[] = useMemo(() => splitSections(currentSource), [currentSource])
@@ -99,16 +156,12 @@ export function App(): JSX.Element {
   const drafts = draftsByExercise[exercise.id] ?? {}
   const sectionIndex = sectionByExercise[exercise.id] ?? 0
   const result = resultByExercise[exercise.id] ?? null
+  const view = viewByExercise[exercise.id] ?? 'result'
   const currentSection = sourceSections[sectionIndex] ?? sourceSections[0]
   const currentAnswer = drafts[sectionIndex] ?? ''
   const filledSections = sourceSections.filter((_, index) => (drafts[index] ?? '').trim().length > 0).length
   const allFilled = filledSections === sourceSections.length
 
-  const selectionData: SelectionData = useMemo(() => {
-    const errors = new Map(result?.validated.errors.map((entry) => [entry.error.id, entry]) ?? [])
-    const highlights = new Map(result?.validated.highlights.map((entry) => [entry.highlight.id, entry.highlight]) ?? [])
-    return { errors, highlights }
-  }, [result])
   const caseRecords = records.filter((record) => record.exerciseId === exercise.id)
 
   const isFixtureAnswer = useMemo(() => {
@@ -116,6 +169,18 @@ export function App(): JSX.Element {
     if (!trimmed) return false
     return ALL_CASES.some((item) => item.sampleAnswer.trim() === trimmed)
   }, [currentAnswer])
+
+  /**
+   * 选中一处批注；再点同一处就取消。
+   *
+   * 译文上的勾画、右下栏、练习记录页三处都走这一个入口，
+   * 因此"点哪里看哪里"的行为在整站是一致的。
+   */
+  function toggleSelection(next: Selection | null): void {
+    setSelection((previous) =>
+      next && previous && previous.kind === next.kind && previous.id === next.id ? null : next,
+    )
+  }
 
   /**
    * 切到某道题。
@@ -144,16 +209,100 @@ export function App(): JSX.Element {
     })
     setSelection(null)
     setError(null)
+    setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))
     setNotice(`已换成第 ${nextIndex + 1} 篇原文，这道题的作答已清空。`)
+  }
+
+  /**
+   * 用一篇刚生成出来的题：
+   * 存进这道题的池子（以后「换一换」还能翻回来），并立刻切到它，
+   * 同时清掉这道题旧的作答与结果——原文变了，旧作答不再对应。
+   */
+  function applyGeneratedExercise(generated: GeneratedExercise): void {
+    const pool = generatedByExercise[exercise.id] ?? []
+    // 位置 0 是题目本身的原文，接着是手写备选，生成出来的排在最后
+    const nextIndex = 1 + variantsFor(exercise.id).length + pool.length
+
+    setGeneratedByExercise((previous) => ({
+      ...previous,
+      [exercise.id]: [...(previous[exercise.id] ?? []), generated],
+    }))
+    setVariantByExercise((previous) => ({ ...previous, [exercise.id]: nextIndex }))
+    setDraftsByExercise((previous) => ({ ...previous, [exercise.id]: {} }))
+    setSectionByExercise((previous) => ({ ...previous, [exercise.id]: 0 }))
+    setResultByExercise((previous) => {
+      const next = { ...previous }
+      delete next[exercise.id]
+      return next
+    })
+    setSelection(null)
+    setError(null)
+    setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))
+  }
+
+  function openGenerator(): void {
+    setGenTopic(GENERATION_TOPICS[0] ?? '')
+    setGenGenre(exercise.genre)
+    setGenDirection(exercise.direction)
+    setGenError(null)
+    setGenOpen(true)
+  }
+
+  async function runGenerate(): Promise<void> {
+    const topic = genTopic.trim()
+    if (genBusy || !topic) return
+    setGenBusy(true)
+    setGenError(null)
+
+    const outcome = await requestGeneration({ direction: genDirection, genre: genGenre, topic, mode })
+    setGenBusy(false)
+
+    if (!outcome.ok) {
+      setGenError(outcome.message)
+      return
+    }
+    applyGeneratedExercise(outcome.exercise)
+    setGenOpen(false)
+    setNotice(
+      `AI 已出一篇新题（${outcome.exercise.topic} · ${GENRE_LABEL[outcome.exercise.genre]}），已留存，` +
+        `点「换一换」随时能翻回来。`,
+    )
   }
 
   function selectTab(nextTab: Tab): void {
     setTab(nextTab)
     setOpenRecord(null)
     if (nextTab === 'records') return
+    if (nextTab === 'custom') {
+      // 贴过就直接切到那一篇；没贴过就把贴题弹窗打开
+      if (customExercise) selectExercise(customExercise.id)
+      else openPaste()
+      return
+    }
     // 切题型只换"当前在看哪道题"，不清空任何一道题的作答与结果
     const next = casesOfMode(nextTab)[0]
     if (next) selectExercise(next.exercise.id)
+  }
+
+  /** 打开贴题弹窗：把当前那一篇的原文放进去，方便改一改再练。 */
+  function openPaste(): void {
+    setPasteText(custom?.source ?? '')
+    setPasteError(null)
+    setPasteOpen(true)
+  }
+
+  /** 贴进去了：存下来（只留这一篇）并立刻切过去。 */
+  function applyPaste(): void {
+    const text = pasteText.trim()
+    if (text.length < 2) {
+      setPasteError('请先把原文贴进来（至少几个字）')
+      return
+    }
+    const saved = saveCustom(text)
+    setCustom(saved)
+    setTab('custom')
+    selectExercise(saved.id)
+    setPasteOpen(false)
   }
 
   function updateAnswer(value: string): void {
@@ -170,6 +319,7 @@ export function App(): JSX.Element {
       return next
     })
     setSelection(null)
+    setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))
   }
 
   function setSection(nextIndex: number): void {
@@ -194,6 +344,7 @@ export function App(): JSX.Element {
     attemptLevel: PolishLevel,
   ): void {
     setResultByExercise((previous) => ({ ...previous, [exercise.id]: judging_ }))
+    setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))
     setSelection(null)
     setOpenRecord(null)
     setRecords((previous) => [
@@ -210,6 +361,7 @@ export function App(): JSX.Element {
         correction: judging_.correction,
         validated: judging_.validated,
         source: judging_.source,
+        raw: judging_.raw,
         createdAt: new Date(),
       },
     ])
@@ -224,7 +376,6 @@ export function App(): JSX.Element {
     const answerSections = buildAnswerSections()
     const outcome = await requestJudgment({
       source: currentSource,
-      referenceTranslation: currentReference,
       direction: exercise.direction,
       genre: exercise.genre,
       level,
@@ -244,7 +395,14 @@ export function App(): JSX.Element {
       setNotice(`有 ${outcome.repaired.length} 处批注因位置与译文对不上而未标出——位置校验拦住了它们。`)
     }
     commit(
-      { correction: outcome.correction, validated: outcome.validated, level, source: 'live', sectionCount: outcome.sectionCount },
+      {
+        correction: outcome.correction,
+        validated: outcome.validated,
+        level,
+        source: 'live',
+        sectionCount: outcome.sectionCount,
+        raw: outcome.raw,
+      },
       answerSections,
       level,
     )
@@ -262,7 +420,15 @@ export function App(): JSX.Element {
     setError(null)
     setNotice('这是内置示例的批改结果，不是 AI 现场批改的。')
     commit(
-      { correction: fixture, validated: checked, level, source: 'fixture', sectionCount: 1 },
+      {
+        correction: fixture,
+        validated: checked,
+        level,
+        source: 'fixture',
+        sectionCount: 1,
+        // 内置示例没有"模型原始文本"这回事，就按 AI 的字段形状把它还原出来
+        raw: JSON.stringify(toAiShape(fixture), null, 2),
+      },
       [{ start: 0, text: currentAnswer }],
       level,
     )
@@ -277,8 +443,9 @@ export function App(): JSX.Element {
         attempt: openRecord.attempt,
         sectionCount: 1,
         source: openRecord.source,
+        raw: openRecord.raw,
       }
-    : result
+    : result && view === 'result'
       ? {
           correction: result.correction,
           validated: result.validated,
@@ -289,8 +456,12 @@ export function App(): JSX.Element {
           attempt: caseRecords.length,
           sectionCount: result.sectionCount,
           source: result.source,
+          raw: result.raw,
         }
       : null
+
+  /** 有上一次的结果、且当前停在作答框上（点了「返回修改」但还没改字） */
+  const canReturnToResult = Boolean(result) && view === 'answer'
 
   const inMode = tab === 'records' ? [] : casesOfMode(tab)
 
@@ -298,12 +469,17 @@ export function App(): JSX.Element {
    * 右上角要显示的带批注的作答。
    * 位置早已由校验结果给出（validated 里带 span），这里只是把它排版成片段序列。
    */
+  /*
+   * 排版结果只在"结果真的换了"时重建。
+   * 注意依赖不能写成 [shown]：shown 是每次渲染都新建的对象字面量，
+   * 那样每渲染一次都会重建 layout，底下依赖它的测量层（弧线、填补方框）
+   * 就会跟着反复重算、甚至和"申请空白"互相打架（实际踩过）。
+   */
+  const shownValidated = shown?.validated
+  const shownAnswer = shown?.answer
   const answerLayout = useMemo(
-    () =>
-      shown
-        ? buildLayout(shown.validated, shown.answer)
-        : { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 },
-    [shown],
+    () => (shownValidated && shownAnswer !== undefined ? buildLayout(shownValidated, shownAnswer) : EMPTY_LAYOUT),
+    [shownValidated, shownAnswer],
   )
 
   return (
@@ -328,12 +504,23 @@ export function App(): JSX.Element {
           ))}
         </nav>
 
+        <div className="topbar-right">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setSettingsOpen(true)}
+            title="行距、填补的文字、译文视图"
+          >
+            设置
+          </button>
+        </div>
+
         {tab !== 'records' && (
           <div className="topbar-right">
             {shown?.source === 'fixture' && <span className="chip chip-warn">内置示例批改</span>}
             <span className="chip">{DIRECTION_LABEL[exercise.direction]}</span>
-            <span className="chip">{GENRE_LABEL[exercise.genre]}</span>
-            <span className="chip">{exercise.topic}</span>
+            <span className="chip">{GENRE_LABEL[currentGenre]}</span>
+            <span className="chip">{currentTopic}</span>
           </div>
         )}
       </header>
@@ -343,8 +530,9 @@ export function App(): JSX.Element {
           records={records}
           openRecord={openRecord}
           onOpen={setOpenRecord}
-          onSelect={setSelection}
+          onSelect={toggleSelection}
           selection={selection}
+          settings={settings}
         />
       ) : (
         <>
@@ -366,56 +554,134 @@ export function App(): JSX.Element {
             </nav>
           )}
 
-          <main className="split">
+          <main className={`split${split ? ' split-manual' : ''}`} ref={splitRef} style={splitStyle}>
+            <div className="split-row split-row-top">
             <section className="pane pane-source">
               <header className="pane-head">
                 <h2>原文</h2>
                 <div className="head-meta">
-                  {sourceOptions.length > 1 && (
+                  {/*
+                    自己贴的那一篇没有备选、也不该让 AI 换掉（换掉就不是他自己贴的那篇了），
+                    这里只留一个「重新贴一篇」。
+                  */}
+                  {isCustom ? (
                     <button
                       type="button"
                       className="btn btn-ghost"
-                      onClick={rotateSource}
-                      title="换一篇同话题、同文体的原文继续练"
+                      onClick={openPaste}
+                      title="换一篇自己贴的原文；贴新的会覆盖上一篇（练习记录仍留着）"
                     >
-                      换一换
+                      重新贴一篇
                     </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={rotateSource}
+                        disabled={sourceOptions.length < 2}
+                        title={
+                          sourceOptions.length < 2
+                            ? '这道题暂时只有一篇原文；点右边的「AI 出题」可以现出一篇'
+                            : '换一篇同话题、同文体的原文继续练'
+                        }
+                      >
+                        换一换
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={openGenerator}
+                        title="按领域让 AI 现出一篇同规格的题；生成后会留存，可用「换一换」翻回来"
+                      >
+                        AI 出题
+                      </button>
+                    </>
                   )}
                   {multiSection && (
                     <span className="chip">
                       第 {sectionIndex + 1} / {sourceSections.length} 段
                     </span>
                   )}
-                  <span className="chip">官方建议 {exercise.suggestedMinutes} 分钟</span>
+                  {isCustom ? (
+                    <span className="chip" title="题型是按原文自己判的：多个自然段按文章题、两句以上按段落题、很短又没标点按术语题，其余按句子题">
+                      自动判定 · {KIND_LABEL[exercise.mode]}
+                    </span>
+                  ) : (
+                    <span className="chip">官方建议 {exercise.suggestedMinutes} 分钟</span>
+                  )}
                 </div>
               </header>
               <div className="pane-body">
                 <p className={mode === 'term' ? 'source-text source-term' : 'source-text'}>
                   {multiSection ? (currentSection?.text ?? currentSource) : currentSource}
                 </p>
-                <details className="reference">
-                  <summary>参考译文（随题固定，可折叠）</summary>
-                  <p>{currentReference}</p>
-                </details>
+                {/* 自己贴的题没有参考译文，那一栏就别摆个空壳子 */}
+                {currentReference ? (
+                  <details className="reference">
+                    <summary>参考译文（随题固定，可折叠）</summary>
+                    <p>{currentReference}</p>
+                  </details>
+                ) : null}
               </div>
             </section>
+
+            <div
+              className="splitter splitter-v"
+              role="separator"
+              aria-orientation="vertical"
+              title="拖动调整左右宽度；双击恢复自动"
+              onPointerDown={(event) => beginDrag('v', event)}
+              onDoubleClick={resetSplit}
+            />
 
             <section className="pane pane-answer">
               <header className="pane-head">
                 <h2>我的译文</h2>
                 <div className="head-meta">
                   {shown && (
+                    <div className="view-switch" role="group" aria-label="译文视图">
+                      <button
+                        type="button"
+                        className={settings.answerView === 'correct' ? 'view-btn view-btn-active' : 'view-btn'}
+                        onClick={() => updateSettings({ answerView: 'correct' })}
+                        title="在译文上勾画：划线、方框、调序弧线"
+                      >
+                        批改视图
+                      </button>
+                      <button
+                        type="button"
+                        className={settings.answerView === 'compare' ? 'view-btn view-btn-active' : 'view-btn'}
+                        onClick={() => updateSettings({ answerView: 'compare' })}
+                        title="一句一句对照：每句下方给出修改后的完整那句，不划线不填补"
+                      >
+                        对照视图
+                      </button>
+                    </div>
+                  )}
+                  {shown && (
                     <button
                       type="button"
                       className="btn btn-ghost"
                       onClick={() => {
-                        // 回到作答状态：清掉结果，输入框重新出现（文字还在 drafts 里）
-                        setResultByExercise((previous) => { const next = { ...previous }; delete next[exercise.id]; return next })
+                        // 回到作答状态：**结果留着**，输入框重新出现（文字还在 drafts 里）。
+                        // 只要没改字，右上角就多一个「查看上次批改」能点回来
+                        setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'answer' }))
                         setOpenRecord(null)
                         setSelection(null)
                       }}
                     >
                       返回修改
+                    </button>
+                  )}
+                  {!shown && canReturnToResult && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => setViewByExercise((previous) => ({ ...previous, [exercise.id]: 'result' }))}
+                      title="回到上一次的批改结果（不重新提交，也不消耗 API）"
+                    >
+                      查看上次批改
                     </button>
                   )}
                   {!shown && (
@@ -471,12 +737,30 @@ export function App(): JSX.Element {
 
                 {/*
                   提交前：可编辑的输入框。
-                  提交后：同一栏换成**带批注的**作答——划掉的词、上方的小字、
+                  提交后：同一栏换成**带批注的**作答——勾了底色的词、上方的小字、
                   插入标记、调序弧线都直接长在你的译文上。
-                  右下角的清单是补充（可以逐条读原因），不能取代这里的标注。
+                  点任意一处勾画，会在那一行下面浮出气泡（简要说明），
+                  右下角同时只显示这一处的完整解释。
                 */}
                 {shown ? (
-                  <AnnotationText layout={answerLayout} answer={shown.answer} onSelect={setSelection} />
+                  settings.answerView === 'compare' ? (
+                    <CompareView
+                      validated={shown.validated}
+                      answer={shown.answer}
+                      selection={selection}
+                      onSelect={toggleSelection}
+                    />
+                  ) : (
+                    <AnnotationText
+                      layout={answerLayout}
+                      answer={shown.answer}
+                      validated={shown.validated}
+                      selection={selection}
+                      lineHeightBase={settings.lineHeight}
+                      showFixBoxes={settings.showFixBoxes}
+                      onSelect={toggleSelection}
+                    />
+                  )
                 ) : (
                   <textarea
                     className="answer-input answer-input-fill"
@@ -518,6 +802,18 @@ export function App(): JSX.Element {
               </div>
             </section>
 
+            </div>
+
+            <div
+              className="splitter splitter-h"
+              role="separator"
+              aria-orientation="horizontal"
+              title="拖动调整上下高度；双击恢复自动"
+              onPointerDown={(event) => beginDrag('h', event)}
+              onDoubleClick={resetSplit}
+            />
+
+            <div className="split-row split-row-bottom">
             <section className="pane pane-score">
               <header className="pane-head">
                 <h2>总体评分</h2>
@@ -538,39 +834,275 @@ export function App(): JSX.Element {
               </div>
             </section>
 
+            <div
+              className="splitter splitter-v"
+              role="separator"
+              aria-orientation="vertical"
+              title="拖动调整左右宽度；双击恢复自动"
+              onPointerDown={(event) => beginDrag('v', event)}
+              onDoubleClick={resetSplit}
+            />
+
             <section className="pane pane-notes">
               <header className="pane-head">
-                <h2>逐处批注</h2>
+                <h2>批注详情</h2>
                 <div className="head-meta">
                   {shown && (
                     <span className="chip">
-                      {shown.validated.errors.length} 处错误
+                      共 {shown.validated.errors.length} 处错误
                       {shown.validated.highlights.length > 0 && ` · ${shown.validated.highlights.length} 处优秀`}
                     </span>
                   )}
+                  {shown && <RawResponseButton raw={shown.raw} />}
                 </div>
               </header>
               <div className="pane-body">
                 {shown ? (
-                  <AnnotationList
-                    correction={shown.correction}
+                  <DetailPanel
+                    selection={selection}
                     validated={shown.validated}
                     answer={shown.answer}
-                    onSelect={setSelection}
-                    selectedId={selection?.id}
+                    onClose={() => setSelection(null)}
+                    embedded
                   />
                 ) : (
-                  <p className="hint">提交批改后，这里会逐条列出标出来的问题。</p>
+                  <p className="hint">提交批改后，点译文上的任意一处勾画，这里显示那一处的说明。</p>
                 )}
               </div>
-              {shown && (
-                <DetailPanel selection={selection} data={selectionData} onClose={() => setSelection(null)} />
-              )}
             </section>
+            </div>
           </main>
         </>
       )}
 
+      {/* 设置：行距、是否显示填补的文字、译文默认视图。纯界面偏好，存在浏览器里 */}
+      {settingsOpen && (
+        <div className="raw-modal-backdrop" onClick={() => setSettingsOpen(false)} role="presentation">
+          <div
+            className="raw-modal gen-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="设置"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="raw-modal-head">
+              <span>设置</span>
+              <span className="raw-modal-note">只影响显示，不影响批改结果；存在这台浏览器上</span>
+              <button type="button" className="raw-modal-close" onClick={() => setSettingsOpen(false)} aria-label="关闭">
+                ×
+              </button>
+            </header>
+
+            <div className="gen-body">
+              <p className="gen-label">正文行距（{settings.lineHeight.toFixed(1)}）</p>
+              <input
+                className="gen-range"
+                type="range"
+                min={LINE_HEIGHT_RANGE.min}
+                max={LINE_HEIGHT_RANGE.max}
+                step={LINE_HEIGHT_RANGE.step}
+                value={settings.lineHeight}
+                onChange={(event) => updateSettings({ lineHeight: Number(event.target.value) })}
+              />
+              <p className="hint">行距越大，勾画上方的方框越不容易跟上一行挤在一起。</p>
+
+              <p className="gen-label">译文视图</p>
+              <div className="gen-chips">
+                <button
+                  type="button"
+                  className={settings.answerView === 'correct' ? 'gen-chip gen-chip-active' : 'gen-chip'}
+                  onClick={() => updateSettings({ answerView: 'correct' })}
+                >
+                  批改视图（在译文上勾画）
+                </button>
+                <button
+                  type="button"
+                  className={settings.answerView === 'compare' ? 'gen-chip gen-chip-active' : 'gen-chip'}
+                  onClick={() => updateSettings({ answerView: 'compare' })}
+                >
+                  对照视图（一句一句对照）
+                </button>
+              </div>
+
+              <p className="gen-label">填补的文字</p>
+              <label className="gen-check">
+                <input
+                  type="checkbox"
+                  checked={settings.showFixBoxes}
+                  onChange={(event) => updateSettings({ showFixBoxes: event.target.checked })}
+                />
+                显示填补的正确写法（关掉后只留荧光笔底色与调序弧线）
+              </label>
+            </div>
+
+            <footer className="gen-foot">
+              <button type="button" className="btn btn-primary" onClick={() => setSettingsOpen(false)}>
+                完成
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/*
+        贴题：把自己找来的原文贴进来就能练，不用等我们出题。
+        只贴原文——方向按有没有汉字自动判断，题型按段落数/句数自动判断，参考译文留空。
+      */}
+      {pasteOpen && (
+        <div className="raw-modal-backdrop" onClick={() => setPasteOpen(false)} role="presentation">
+          <div
+            className="raw-modal gen-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="贴一篇自己的题"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="raw-modal-head">
+              <span>贴一篇自己的题</span>
+              <span className="raw-modal-note">只贴原文就行；存在这台浏览器上，只留最新一篇</span>
+              <button type="button" className="raw-modal-close" onClick={() => setPasteOpen(false)} aria-label="关闭">
+                ×
+              </button>
+            </header>
+
+            <div className="gen-body">
+              <p className="gen-label">原文</p>
+              <textarea
+                className="answer-input gen-textarea"
+                value={pasteText}
+                placeholder="把要翻译的原文整段贴在这里（中英都行；有空行就会按文章题分段处理）"
+                onChange={(event) => {
+                  setPasteText(event.target.value)
+                  setPasteError(null)
+                }}
+              />
+              <p className="hint">
+                方向与题型是自动判的：有汉字就按中译英，多个自然段按文章题（逐段作答）、
+                两句以上按段落题、很短又没有标点按术语题，其余按句子题。
+                篇长要求（英译汉 250–350 词那套）对自己贴的题不适用，多短都能练。
+              </p>
+              {pasteError && <p className="error-text">{pasteError}</p>}
+            </div>
+
+            <footer className="gen-foot">
+              <button type="button" className="btn" onClick={() => setPasteOpen(false)}>
+                取消
+              </button>
+              <button type="button" className="btn btn-primary" onClick={applyPaste} disabled={pasteText.trim().length < 2}>
+                开始练习
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/*
+        AI 出题：选领域（也可自己输入）+ 文体 + 方向，现出一篇同规格的题。
+        生成结果按题目留存，之后「换一换」还能翻回来接着练。
+      */}
+      {genOpen && (
+        <div className="raw-modal-backdrop" onClick={() => !genBusy && setGenOpen(false)} role="presentation">
+          <div
+            className="raw-modal gen-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="AI 出题"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="raw-modal-head">
+              <span>AI 出题</span>
+              <span className="raw-modal-note">生成后会留存，可用「换一换」翻回来</span>
+              <button
+                type="button"
+                className="raw-modal-close"
+                onClick={() => setGenOpen(false)}
+                disabled={genBusy}
+                aria-label="关闭"
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="gen-body">
+              <p className="gen-label">方向</p>
+              <div className="gen-chips">
+                {(Object.keys(DIRECTION_LABEL) as Direction[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={key === genDirection ? 'gen-chip gen-chip-active' : 'gen-chip'}
+                    onClick={() => setGenDirection(key)}
+                    disabled={genBusy}
+                  >
+                    {DIRECTION_LABEL[key]}
+                  </button>
+                ))}
+              </div>
+
+              <p className="gen-label">文体</p>
+              <div className="gen-chips">
+                {(Object.keys(GENRE_LABEL) as Genre[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={key === genGenre ? 'gen-chip gen-chip-active' : 'gen-chip'}
+                    onClick={() => setGenGenre(key)}
+                    disabled={genBusy}
+                  >
+                    {GENRE_LABEL[key]}
+                  </button>
+                ))}
+              </div>
+
+              <p className="gen-label">领域</p>
+              <div className="gen-chips">
+                {GENERATION_TOPICS.map((topic) => (
+                  <button
+                    key={topic}
+                    type="button"
+                    className={topic === genTopic ? 'gen-chip gen-chip-active' : 'gen-chip'}
+                    onClick={() => setGenTopic(topic)}
+                    disabled={genBusy}
+                  >
+                    {topic}
+                  </button>
+                ))}
+              </div>
+              <input
+                className="gen-input"
+                value={genTopic}
+                onChange={(event) => setGenTopic(event.target.value)}
+                placeholder="也可以自己输入领域，例如：低碳转型"
+                disabled={genBusy}
+                spellCheck={false}
+              />
+
+              <p className="hint">
+                篇幅要求：{LENGTH_RULE[genDirection].min}-{LENGTH_RULE[genDirection].max}{' '}
+                {LENGTH_RULE[genDirection].unit}（程序会硬校验，不达标会自动退回重写）。
+                {mode === 'article'
+                  ? '文章题直接用全文。'
+                  : `当前是${UNIT_LABEL[mode]}题，会从全文里截取对应大小。`}
+              </p>
+              {genError && <p className="hint gen-error">{genError}</p>}
+            </div>
+
+            <footer className="gen-foot">
+              <button type="button" className="btn" onClick={() => setGenOpen(false)} disabled={genBusy}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => void runGenerate()}
+                disabled={genBusy || genTopic.trim().length === 0}
+              >
+                {genBusy ? '正在出题…（通常十几秒）' : '生成题目'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
       <footer className="app-foot">
         <span>颜色约定：红 = 硬性错误（术语、漏译、语法、标点），橙 = 表达问题，绿 = 表达优秀。</span>
       </footer>

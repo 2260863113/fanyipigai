@@ -5,7 +5,7 @@
  * 没有存档，想优化提示词就只能靠回忆"它当时好像是返回了坏 JSON"。
  *
  * 存什么：每一次失败尝试的原始返回全文、finish_reason、失败原因、以及这一次请求的完整上下文
- *        （原文、参考译文、学生作答、方向、文体、风格、模型名）。
+ *        （原文、学生作答、方向、文体、风格、模型名）。**不含参考译文**——它本来就没发给模型。
  *        原始返回是排查提示词问题的唯一直接证据，所以必须完整保留、不做截断。
  *
  * 不存什么：API 密钥。这条是硬性的——存档目录会被频繁查看和分享。
@@ -56,7 +56,6 @@ export interface FailureRecord {
     level: string
     answerLength: number
     source: string
-    referenceTranslation: string
     answer: string
   }
   history: FailureAttempt[]
@@ -80,7 +79,7 @@ export class FailureCollector {
 
 /** 把收集到的信息落盘。返回实际的错误信息（成功时为空）。 */
 export async function archiveFailure(
-  request: { source: string; referenceTranslation: string; direction: string; genre: string; level: string },
+  request: { source: string; direction: string; genre: string; level: string },
   model: string,
   kind: FailureKind,
   collector: FailureCollector,
@@ -100,7 +99,6 @@ export async function archiveFailure(
       level: request.level,
       answerLength: fullAnswer.length,
       source: request.source,
-      referenceTranslation: request.referenceTranslation,
       answer: fullAnswer,
     },
     history: collector.attempts,
