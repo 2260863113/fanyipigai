@@ -120,6 +120,13 @@ const browserProcess = spawn(
   { stdio: 'ignore' },
 )
 
+/** 逐条打勾并记下结果（与其它验收脚本同一套写法） */
+const results = []
+function check(ok, label, detail) {
+  results.push({ ok })
+  console.log(`  ${ok ? '✓' : '✗'} ${label}${!ok && detail ? ` — ${detail}` : ''}`)
+}
+
 try {
   let ready = false
   for (let i = 0; i < 40 && !ready; i += 1) {
@@ -272,11 +279,64 @@ try {
   console.log('点过勾画后 =', JSON.stringify(after))
   console.log('页面错误（含交互后）=', JSON.stringify(cdp.errors))
 
+  /*
+   * 练习记录页的「译文」也要能切视图（用户要求："练习记录，译文部分也要支持不同视图的分段按钮"）。
+   *
+   * 为什么在这里验：记录页要有记录才看得出效果，而刚才这一次提交正好留下了一条。
+   * 断言的是"两个视图都能真的画出来"——只查按钮在不在是不够的：
+   * 切过去变成空白、或者还是勾画视图，按钮照样在。
+   */
+  console.log('\n=== 练习记录：当时的译文也能切视图 ===')
+  const records = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const tab = [...document.querySelectorAll('.mode-tab')].find((b) => b.textContent.trim() === '练习记录');
+       if (!tab) return { error: '找不到「练习记录」标签' };
+       tab.click();
+       await sleep(700);
+       const item = document.querySelector('.record-item');
+       if (!item) return { error: '还没有练习记录' };
+       item.click();
+       await sleep(800);
+       const read = () => ({
+         hasSwitch: !!document.querySelector('.pane-answer .view-switch'),
+         active: document.querySelector('.pane-answer .view-switch .view-btn-active')?.textContent?.trim() ?? null,
+         annotated: document.querySelectorAll('.pane-answer .annotated [data-mark-id]').length,
+         compareLines: document.querySelectorAll('.pane-answer .compare-list .compare-line').length,
+       });
+       const before = read();
+       const compareBtn = [...document.querySelectorAll('.pane-answer .view-switch .view-btn')].find((b) => b.textContent.includes('对照视图'));
+       if (!compareBtn) return { error: '记录页的译文栏里没有视图分段按钮', before };
+       compareBtn.click();
+       await sleep(600);
+       const after = read();
+       const corrected = [...document.querySelectorAll('.pane-answer .compare-corrected')].map((p) => ({
+         label: p.querySelector('.compare-label')?.textContent?.trim() ?? '',
+         text: (p.textContent || '').trim().slice(0, 40),
+       }));
+       return { before, after, corrected: corrected.slice(0, 2) };
+     })()`,
+  )
+  console.log('记录页视图 =', JSON.stringify(records))
+  check(records.error === undefined, '练习记录页能打开一条记录并看到译文栏', records.error)
+  check(records.before?.hasSwitch === true, '译文栏标题里有「批改视图 / 对照视图」分段按钮')
+  check(records.before?.annotated > 0, `批改视图里画着勾画（${records.before?.annotated} 处）`)
+  check(
+    records.after?.compareLines > 0 && records.after?.active === '对照视图',
+    `点「对照视图」真的换成逐句对照（${records.after?.compareLines} 行，当前 ${records.after?.active}）`,
+  )
+  check(
+    (records.corrected ?? []).every((line) => line.label === '改后'),
+    '对照视图里每句都带「改后」标签（与练习页同一套排版）',
+    JSON.stringify(records.corrected),
+  )
+
   const pass =
     outcome === 'ok' &&
     state.hasAnnotated === true &&
     state.rootTextLen > 200 &&
     state.fallbackShown === false &&
+    results.every((result) => result.ok) &&
     cdp.errors.length === 0
   console.log(pass ? '\n✓ 验收通过：提交后正常渲染，无异常' : '\n✗ 验收未通过')
   process.exitCode = pass ? 0 : 1

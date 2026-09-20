@@ -193,6 +193,43 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(false, '收藏断句可以验证', error instanceof Error ? error.message : String(error))
   }
 
+  /*
+   * 对照视图的分句必须与收藏**同出一套判据**。
+   *
+   * 用户报过两次同一件事：第一次报了收藏，第二次报的是"对照模式下也要注意
+   * `xxxxx  "xxxx."someone says` 这种分句"。根因不是某处判据写错，而是**判据有两份**：
+   * 引号那条规则只补进了收藏那份，对照视图那份照旧。现在两份都调 domain/sentences.ts，
+   * 因此这一组断言的重点是"两边给出的切点完全一致"。
+   */
+  console.log('\n[对照视图] 分句与收藏同一套判据（句末标点跟着引号也要断开）')
+  try {
+    const { splitSentenceSpans } = await import('../src/domain/favorites')
+    const cases = ['sgadgg ds  ds ." sdf  fds ."someone says.', 'sgadgg ds  ds .“ sdf  fds .”someone says.']
+    for (const text of cases) {
+      const layout = splitSentences(text).map((item) => text.slice(item.start, item.end))
+      check(layout.length === 3, `对照视图里切成 3 句（实际 ${layout.length}：${JSON.stringify(layout)}）`)
+      check(layout.join('') === text, '对照视图切出来的句子首尾相接、不重不漏', JSON.stringify(layout))
+      const favorite = splitSentenceSpans(text).map((item) => text.slice(item.from, item.to))
+      check(
+        JSON.stringify(layout) === JSON.stringify(favorite),
+        '对照视图与收藏的切点完全一致（同一个判据）',
+        `对照 ${JSON.stringify(layout)} ／ 收藏 ${JSON.stringify(favorite)}`,
+      )
+    }
+    /*
+     * 收藏按逗号切、对照视图不按逗号切——这是两者唯一该有的差别。
+     * 断言两边都写上，免得日后"统一判据"时顺手把逗号也统一掉。
+     */
+    const comma = 'A decade of work, which began in 2016, has turned the coast into a park.'
+    check(splitSentences(comma).length === 1, '对照视图里逗号**不**断句（要的是句子）')
+    check(
+      splitSentenceSpans(comma).length === 3,
+      '收藏里逗号断句（要的是"那一小截"）',
+    )
+  } catch (error) {
+    check(false, '对照视图的分句可以验证', error instanceof Error ? error.message : String(error))
+  }
+
   // 批改提示词：不含参考译文，并且**明确要求忽略标点后的空格**（用户要求）
   console.log('\n[提示词] 参考译文不发给模型；标点后的空格不必管')
   try {
@@ -204,6 +241,23 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(
       systemMessage.includes('不要为"少了一个空格"或"多了一个空格"标任何东西'),
       '提示词里把这句写成了"不要标"（而不只是"注意"）',
+    )
+    /*
+     * explanation 的写法（用户要求："让 ai 给出修改原因时，告诉他要用；分号分隔每一小点"）。
+     * 界面上的小卡片就是按分号断行、逐条编号的（见 AnnotationText.tsx 的 withSemicolonBreaks），
+     * 因此提示词里必须把这条规矩说清楚，否则卡片里永远是一条读不到头的流水句。
+     */
+    check(
+      systemMessage.includes('每一小点之间一律用全角分号'),
+      '提示词要求 explanation 的每一小点之间用「；」隔开',
+    )
+    check(
+      systemMessage.includes('一个分号 = 一个小点'),
+      '提示词把"一个分号 = 一个小点"这条口径写死了（界面按它断行）',
+    )
+    check(
+      systemMessage.includes('explanation 里说了两件以上的事时'),
+      '交卷自查里也列了这条（模型最后一遍会再核一次）',
     )
   } catch (error) {
     check(false, '提示词的标点口径可以验证', error instanceof Error ? error.message : String(error))
@@ -450,6 +504,109 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
   } catch (error) {
     check(false, '对照视图的纯函数可以执行', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 术语题：本地判分映射成 Correction 之后，**每一条的区间必须是真的**。
+   *
+   * 用户要求"术语提交后，需要按照像文章模式一样，进行对比后，颜色批注和修改"。
+   * "颜色批注"要成立，下游三件事都得拿到真的区间：右下角说明要据此取出"你写的是哪一串"、
+   * 收藏要据此取到它所在的那一行、对照视图要据此给出一条"改后"。
+   * 早先这里给的是一串零长度占位（`start === end === 下标`），于是术语题的说明里
+   * "要改的是"永远是空的——映射与下游对不上，就是这种不报错的坏味道。
+   */
+  console.log('\n[术语题] 本地判分映射出的区间是真的（说明 / 收藏 / 对照视图都靠它）')
+  try {
+    const { answeredTermCount, correctionFromVerdicts, judgeTerms, termAnswerText, termMarkId } = await import(
+      '../src/domain/term-exercise'
+    )
+    const { TERMS_BY_DOMAIN } = await import('../src/domain/terms')
+    const { sentencePair } = await import('../src/domain/favorites')
+    const terms = TERMS_BY_DOMAIN.politics.slice(0, 5)
+    check(terms.length === 5, `术语库能取到一组 5 条（实际 ${terms.length}）`)
+    const first = terms[0]
+    const fourth = terms[3]
+    const fifth = terms[4]
+    // 取不到就没什么可验的：直接抛出去，让上面那个 catch 报出来（不静悄悄地跳过）
+    if (!first || !fourth || !fifth) throw new Error(`术语库里只取到 ${terms.length} 条，验不了这一组`)
+    const answers = [first.en, 'definitely wrong here', '', fourth.en, `${fifth.en} xyz`]
+    const verdicts = judgeTerms(terms, answers)
+    check(
+      verdicts.map((verdict) => verdict.correct).join(',') === 'true,false,false,true,false',
+      `判分口径：照标准写的对、胡写与漏写的错（实际 ${verdicts.map((v) => (v.correct ? '✓' : '✗')).join('')}）`,
+    )
+    check(answeredTermCount(answers) === 4, '写了几条由 answeredTermCount 数出来（提交按钮够不够格看它）')
+    check(
+      termAnswerText(answers) === answers.join('\n'),
+      '五条答案拼成的"整段作答文字"就是逐行用换行连接（下游一律按它办事）',
+    )
+
+    const { correction, validated } = correctionFromVerdicts(verdicts)
+    check(
+      correction.errors.length === 3 && correction.highlights.length === 2,
+      `三条错、两条对（实际 ${correction.errors.length} 错 / ${correction.highlights.length} 对）`,
+    )
+    check(
+      correction.errors.map((error) => error.id).join(',') === 't2,t3,t5',
+      `编号由 termMarkId 统一给（实际 ${correction.errors.map((error) => error.id).join(',')}）`,
+    )
+    check(
+      correction.highlights.map((highlight) => highlight.id).join(',') === 'h1,h4',
+      `译对的那两条编号也成对（实际 ${correction.highlights.map((h) => h.id).join(',')}）`,
+    )
+    const text = termAnswerText(answers)
+    let spansReal = true
+    let detail = ''
+    for (const [index, verdict] of verdicts.entries()) {
+      const id = termMarkId(index, verdict.correct)
+      const entry = validated.errors.find((item) => item.error.id === id)
+      if (!entry) continue
+      const shown = text.slice(entry.span.start, entry.span.end)
+      if (shown !== verdict.answer) {
+        spansReal = false
+        detail = `${id} 指向「${shown}」，应当是「${verdict.answer}」`
+      }
+    }
+    check(spansReal, '每一处错的区间都**真的指向那一条答案**（不是零长度占位）', detail)
+    const empty = validated.errors.find((entry) => entry.error.id === 't3')
+    check(
+      empty?.changes.length === 0,
+      '没作答的那条没有可划的字，就不给改动项（界面上只说"没作答"）',
+      JSON.stringify(empty?.changes ?? []),
+    )
+    check(
+      validated.errors.every((entry) => entry.changes.every((change) => change.to.length > 0)),
+      '有作答而写错的：改动项写明了标准译法（这就是界面上的"改后"）',
+    )
+
+    // 收藏：这一条所在的"整句"就是它自己那一行——靠的正是上面那个真区间
+    const firstError = validated.errors[0]
+    const standard = firstError?.error.targetText ?? ''
+    const pair = sentencePair(text, firstError?.span ?? { start: 0, end: 0 }, standard)
+    check(
+      pair.before === 'definitely wrong here',
+      `收藏里取到的是这一条那一行（实际 ${JSON.stringify(pair.before)}）`,
+    )
+    check(pair.after === standard, `"改后"是这条的标准译法（实际 ${JSON.stringify(pair.after)}）`)
+
+    // 对照视图：每一条各占一行（没作答那条是空行，按规矩不出行）
+    const termLines = buildCompareLines(validated, text)
+    check(
+      termLines.length === 4,
+      `对照视图里每一条各占一行（空的那条不出行，实际 ${termLines.length}）`,
+      JSON.stringify(termLines.map((line) => line.original)),
+    )
+    check(
+      termLines[0]?.corrected.map((part) => part.text).join('').trim() === first.en,
+      '译对的那条在"改后"里原样保留',
+    )
+    check(
+      termLines[1]?.corrected.map((part) => part.text).join('').trim() === terms[1]?.en,
+      '写错的那条在"改后"里换成标准译法',
+      JSON.stringify(termLines[1]?.corrected.map((part) => part.text).join('')),
+    )
+  } catch (error) {
+    check(false, '术语判分的映射可以验证', error instanceof Error ? error.message : String(error))
   }
 
   /*
@@ -1556,6 +1713,38 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       const rule = pattern.exec(css)?.[1] ?? ''
       check(!/line-through/.test(rule), `${label}不划删除线（只勾底色）`, rule.trim() || '样式表里找不到这条规则')
     }
+
+    /*
+     * 小卡片里那颗「收藏」必须真的点得动（用户报过两次"点不了"）。
+     *
+     * 根因不在 JS：整张卡片是 `pointer-events: none`（免得挡住底下的勾画），
+     * 而它是**继承给整棵子树**的——里面的按钮一起收不到点击，那一下会穿到卡片底下的文字上。
+     * 所以卡片脚下那一行必须把事件收回来。
+     *
+     * ⚠️ 这个 bug 用浏览器探针抓不到：jsdom 不做命中测试，`pointer-events` 在它那里
+     * 形同不存在，脚本点那颗按钮照样"成功"（verify-per-page.mjs 就一直是绿的）。
+     * 能守住它的只有这条样式表断言。
+     */
+    const bubbleRule = /\.ann-bubble\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    const bubbleFootRule = /\.ann-bubble-foot\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(/pointer-events:\s*none/.test(bubbleRule), '气泡本身不接管鼠标事件（不挡住底下的勾画）', bubbleRule.trim())
+    check(
+      /pointer-events:\s*auto/.test(bubbleFootRule),
+      '气泡脚下那一行把事件收回来（否则卡片里的「收藏」永远点不动）',
+      bubbleFootRule.trim() || '样式表里找不到 .ann-bubble-foot',
+    )
+
+    /*
+     * 术语题的两条版式（用户要求）：
+     *   - 输入框**不画边框**（上下已经有分割线了，再加方框就是三道线挤在一起）；
+     *   - 提交按钮挪进了标题栏，作答区里那行 `已写 0 / 5 条…` 与按钮一起删掉了。
+     */
+    const termInputRule = /\.term-input\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(/border:\s*none/.test(termInputRule), '术语输入框没有边框（用户要求）', termInputRule.trim())
+    check(
+      !/\.term-actions\s*\{/.test(css),
+      '作答区里那行按钮/提示（含"已写 0 / 5 条…"）已经删掉，按钮在标题栏',
+    )
 
     /*
      * 撑宽用的是**真空档**（padding），**不许**再用负 margin 把它抵消掉。

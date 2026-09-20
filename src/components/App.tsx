@@ -37,12 +37,14 @@ import { PasteModal } from './PasteModal'
 import { GenerateModal } from './GenerateModal'
 import { SourcePane } from './SourcePane'
 import { AnswerPane, PAGE_STATE_HINT, nextPageHint, type PageState } from './AnswerPane'
+import { AnswerViewSwitch } from './AnswerViewSwitch'
+import { CompareView } from './CompareView'
 import { ScorePane } from './ScorePane'
 import { NotesPane } from './NotesPane'
 import { TopBar } from './TopBar'
 import { ArticleBar } from './ArticleBar'
 import { ArticlePickerModal } from './ArticlePickerModal'
-import { TermRows } from './TermRows'
+import { TermRows, TermResults } from './TermRows'
 import { DomainBar } from './DomainBar'
 import {
   exerciseOfSentence,
@@ -52,7 +54,15 @@ import {
 } from '../domain/sentence-exercise'
 import { articleById, ARTICLE_EXCERPTS, articlesOf } from '../domain/articles'
 import { exerciseOfArticle } from '../domain/article-exercise'
-import { exerciseOfTerms, correctionFromVerdicts, judgeTerms, termExerciseId, termsForExerciseId } from '../domain/term-exercise'
+import {
+  answeredTermCount,
+  correctionFromVerdicts,
+  exerciseOfTerms,
+  judgeTerms,
+  termAnswerText,
+  termExerciseId,
+  termsForExerciseId,
+} from '../domain/term-exercise'
 import { loadSelection, saveSelection, type ArticleSelection } from './article-selection'
 import { loadRecords, saveRecords } from './records-store'
 
@@ -774,11 +784,26 @@ export function App(): JSX.Element {
    * 「有没有已提交的结果」当作"这一组是否已判过"，逐条现算即可——
    * 既省一份状态，也不会出现"存下来的判分与标准译法不一致"。
    */
+  /*
+   * 五条答案与"整段作答文字"。
+   *
+   * 术语题在界面上是五个独立的框，但**下游一律按一段文字办事**——
+   * 练习记录存 answer、收藏要"这一处所在的整句"、对照视图要切句。
+   * 因此这里算一次、两处共用（判分与提交都用它），免得两处的拼法悄悄不一致。
+   */
+  const termAnswers = useMemo(
+    () => activeTerms.map((_, index) => drafts[index] ?? ''),
+    [activeTerms, drafts],
+  )
+  const termAnswer = useMemo(() => termAnswerText(termAnswers), [termAnswers])
+  /** 写满五条才让提交（按钮禁用 + 悬停说明，替代原先那句"已写 0 / 5 条"的提示） */
+  const allTermsAnswered = activeTerms.length > 0 && answeredTermCount(termAnswers) === activeTerms.length
+
   const termVerdicts = useMemo(() => {
     if (!isTermExercise) return null
     if (!pageResult) return null
-    return judgeTerms(activeTerms, activeTerms.map((_, index) => drafts[index] ?? ''))
-  }, [isTermExercise, pageResult, activeTerms, drafts])
+    return judgeTerms(activeTerms, termAnswers)
+  }, [isTermExercise, pageResult, activeTerms, termAnswers])
 
   /**
    * 术语题提交：**本地判分，不调 AI**。
@@ -790,12 +815,12 @@ export function App(): JSX.Element {
    */
   function submitTerms(): void {
     if (!isTermExercise) return
-    const answers = activeTerms.map((_, index) => drafts[index] ?? '')
+    const answers = termAnswers
     const verdicts = judgeTerms(activeTerms, answers)
     const { correction, validated } = correctionFromVerdicts(verdicts)
     const wrong = verdicts.filter((verdict) => !verdict.correct).length
-    // 术语题没有分页，它的"一页"就是这五条，合起来当作被批的那段文字（与练习记录一致）
-    const pageAnswer = answers.join('\n')
+    // 术语题没有分页，它的"一页"就是这五条，合起来当作被批的那段文字（与练习记录、收藏一致）
+    const pageAnswer = termAnswer
     commit(
       { exerciseId: exercise.id, sectionIndex, topic: exercise.topic, direction: exercise.direction },
       {
@@ -894,6 +919,7 @@ export function App(): JSX.Element {
           onSelect={toggleSelection}
           selection={selection}
           settings={settings}
+          onSettingsChange={updateSettings}
           favorites={favorites}
           onToggleFavorite={(favorite) => setFavorites((previous) => toggleFavorite(previous, favorite))}
         />
@@ -990,12 +1016,15 @@ export function App(): JSX.Element {
 
             {/*
               术语题走**另一条渲染路径**：它一次给五条术语、逐条作答、由程序本地对照判分
-              （见 term-exercise.ts）。它没有"整段作答文本"，因此不画勾画，
-              也不需要视图切换、修改档位、逐页提交这些为整篇译文准备的东西。
+              （见 term-exercise.ts）。它没有"整段作答文本"，因此不画整段勾画，
+              判完也不切成"一页一页"——五条就是一道题。
               与其它题型刻意分开渲染，而不是往 AnswerPane 里塞一堆 if——
               那会让两个本来不同的交互在一个组件里互相牵制。
+
+              标题栏里的按钮位置与文章模式**对齐**（用户要求）：提交批改在最右，
+              判完之后换成「重新作答」，左边是视图切换。
             */}
-            {termVerdicts !== null || isTermExercise ? (
+            {isTermExercise ? (
               <section className="pane pane-answer">
                 <header className="pane-head">
                   <h2>我的译文</h2>
@@ -1004,24 +1033,62 @@ export function App(): JSX.Element {
                     <span className="chip" title="术语有唯一正确译法，因此由程序对照标准译法判分，不交给 AI">
                       本地判分
                     </span>
+                    {termVerdicts === null ? (
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={submitTerms}
+                        disabled={!allTermsAnswered}
+                        title={allTermsAnswered ? undefined : '请先把五条都写上'}
+                      >
+                        提交批改
+                      </button>
+                    ) : (
+                      <>
+                        {/* 判完之后也能切视图（用户要求：术语提交后，像文章模式一样对比、批注） */}
+                        {shown && <AnswerViewSwitch view={settings.answerView} onChange={updateSettings} />}
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => {
+                            // 重新作答：作废这一组的结果，作答本身**留着**让人改
+                            // （与逐页批改里的「返回编辑」同一个动作）
+                            dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
+                            setNotice(null)
+                            setSelection(null)
+                          }}
+                        >
+                          重新作答
+                        </button>
+                      </>
+                    )}
                   </div>
                 </header>
                 <div className="pane-body">
                   {notice && <p className="hint notice">{notice}</p>}
-                  <TermRows
-                    terms={activeTerms}
-                    answers={activeTerms.map((_, index) => drafts[index] ?? '')}
-                    verdicts={termVerdicts}
-                    disabled={termVerdicts !== null}
-                    onChange={(row, value) => updateAnswerAt(row, value)}
-                    onSubmit={submitTerms}
-                    onReset={() => {
-                      // 重新作答：作废这一组的结果，作答本身**留着**让人改（与逐页批改里的「返回编辑」同一个动作）
-                      dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
-                      setNotice(null)
-                      setSelection(null)
-                    }}
-                  />
+                  {termVerdicts === null ? (
+                    <TermRows
+                      terms={activeTerms}
+                      answers={termAnswers}
+                      disabled={false}
+                      onChange={(row, value) => updateAnswerAt(row, value)}
+                    />
+                  ) : settings.answerView === 'compare' && shown ? (
+                    /* 对照视图：一行"你写的"、一行"标准译法"，与文章模式同一套排版 */
+                    <CompareView
+                      validated={shown.validated}
+                      answer={shown.answer}
+                      selection={selection}
+                      onSelect={toggleSelection}
+                    />
+                  ) : (
+                    /* 批改视图：五条各一行，译错的划掉并给出标准译法 */
+                    <TermResults
+                      verdicts={termVerdicts}
+                      selectedId={selection?.id ?? null}
+                      onSelect={toggleSelection}
+                    />
+                  )}
                 </div>
               </section>
             ) : (

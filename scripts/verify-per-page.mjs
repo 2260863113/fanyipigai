@@ -533,11 +533,49 @@ try {
          收藏按钮: (document.querySelector('.pane-answer .ann-bubble button')?.textContent || '').trim(),
        };
        const bubbleFavorite = document.querySelector('.pane-answer .ann-bubble button');
+       /*
+        * 点它之前先确认"它真的能收到点击"。
+        *
+        * 气泡本身是 pointer-events: none（免得挡住底下的勾画），而那条规则是**整棵子树**
+        * 一起生效的——里面的按钮曾因此永远点不动（用户报过两次"小卡片无法点击收藏"）。
+        * 这里沿 DOM 往上走一遍，确认没有任何一层把鼠标事件关掉。
+        *
+        * ⚠️ 只用 .click() 是查不出来的：那是脚本直接调方法，**绕过了命中测试**，
+        * jsdom 里更是压根没有命中测试（所以这个 bug 在原来的脚本里一直是绿的）。
+        */
+       const 指针事件链 = (() => {
+         const chain = [];
+         let node = bubbleFavorite;
+         while (node && node !== document.body) {
+           chain.push((node.className || node.tagName) + '=' + getComputedStyle(node).pointerEvents);
+           node = node.parentElement;
+         }
+         return chain;
+       })();
+       /*
+        * 判据看**按钮自己算出来的** pointer-events：它是个继承属性，
+        * 祖先设了 none、而某一层又写回 auto 时，按钮上算出来的就是 auto。
+        * 修好之前这里是 none（继承自 .ann-bubble），点不动。
+        */
+       const 能收到点击 = bubbleFavorite ? getComputedStyle(bubbleFavorite).pointerEvents !== 'none' : false;
+       // 再用一次真实命中测试复核（先把按钮滚进视口，否则点不到它）
+       if (bubbleFavorite) bubbleFavorite.scrollIntoView({ block: 'nearest' });
+       await sleep(150);
+       const 命中 = (() => {
+         if (!bubbleFavorite) return '(没有按钮)';
+         const rect = bubbleFavorite.getBoundingClientRect();
+         const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+         if (!hit) return '(点位在视口外，跳过)';
+         return hit === bubbleFavorite || bubbleFavorite.contains(hit) ? '是' : '否：' + (hit.className || hit.tagName);
+       })();
        if (bubbleFavorite) bubbleFavorite.click();
        await sleep(400);
        const bubbleAfter = {
          卡片在: !!document.querySelector('.pane-answer .ann-bubble'),
          收藏按钮: (document.querySelector('.pane-answer .ann-bubble button')?.textContent || '').trim(),
+         能收到点击,
+         指针事件链,
+         命中,
        };
        let favoriteCount = 0;
        let favoriteStored = null;
@@ -748,6 +786,20 @@ try {
   console.log('小卡片收藏 =', JSON.stringify({ 点之前: walked.bubbleBefore, 点之后: walked.bubbleAfter, 收藏条数: walked.favoriteCount, 落盘内容: walked.favoriteStored }))
   check(walked.bubbleBefore.卡片在, '点一处勾画，小卡片出来了')
   check(walked.bubbleBefore.收藏按钮 === '收藏', '小卡片自己带一颗「收藏」按钮', walked.bubbleBefore.收藏按钮)
+  /*
+   * 这颗按钮必须**真的收得到点击**：气泡是 pointer-events: none，不把事件收回来就点不动。
+   * 用户报过两次这个毛病，而 `.click()` 查不出来（它绕过命中测试），因此这里单独验两件事。
+   */
+  check(
+    walked.bubbleAfter.能收到点击 === true,
+    '小卡片里那颗「收藏」真的能收到点击（pointer-events 没有被祖先关掉）',
+    JSON.stringify(walked.bubbleAfter.指针事件链),
+  )
+  check(
+    !String(walked.bubbleAfter.命中).startsWith('否'),
+    '真实命中测试：点那个位置落到的就是这颗按钮',
+    String(walked.bubbleAfter.命中),
+  )
   check(walked.bubbleAfter.卡片在, '点小卡片里的「收藏」之后，卡片**不消失**（点它不算"点外面"）')
   check(walked.bubbleAfter.收藏按钮 === '已收藏', '收藏之后按钮文案变成「已收藏」', walked.bubbleAfter.收藏按钮)
   check(walked.favoriteCount === 1, `收藏落盘了（localStorage 里 ${walked.favoriteCount} 条）`)

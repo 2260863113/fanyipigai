@@ -8,6 +8,8 @@ import type { ValidatedCorrection } from '../domain/validate'
 import { scoreCorrection } from '../domain/scoring'
 import { AnnotationList } from './AnnotationList'
 import { AnnotationText, type Selection } from './AnnotationText'
+import { AnswerViewSwitch } from './AnswerViewSwitch'
+import { CompareView } from './CompareView'
 import { buildLayout } from '../domain/layout'
 import { ScoreSummary } from './ScoreSummary'
 import { DetailPanel } from './DetailPanel'
@@ -51,6 +53,8 @@ interface Props {
   selection: Selection | null
   /** 界面偏好（行距、是否显示修改框）*/
   settings: ViewSettings
+  /** 改界面偏好；练习记录页只用它切译文视图（与练习页同一个开关） */
+  onSettingsChange: (patch: Partial<ViewSettings>) => void
   /** 选中一处批注；传 null 表示关闭详情 */
   onSelect: (selection: Selection | null) => void
   /** 收藏列表：右下角那颗「收藏」要知道这一处是不是已经收藏过 */
@@ -64,7 +68,7 @@ interface Props {
  * 顶部导航栏里的一栏，因此占据整个主体区域：左边是全部记录的列表，
  * 右边沿用练习页的四栏结构——上排是题干原文与当时写的译文，下排是计分与逐处批注。
  */
-export function RecordsView({ records, openRecord, onOpen, selection, settings, onSelect, favorites, onToggleFavorite }: Props) {
+export function RecordsView({ records, openRecord, onOpen, selection, settings, onSettingsChange, onSelect, favorites, onToggleFavorite }: Props) {
   /*
    * 题干原文：内置题的原文在 EXERCISE_SOURCES 里，**文章库**的选段在 articles.ts 里，
    * **自己贴的题**在浏览器本地按题号留了档（见 domain/custom.ts）——不然翻回旧记录时那一栏会是空的。
@@ -229,17 +233,35 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
             <section className="pane pane-answer">
               <header className="pane-head">
                 <h2>当时的译文</h2>
+                {/*
+                  译文视图的分段按钮（用户要求："练习记录，译文部分也要支持不同视图的分段按钮"）。
+                  用的是**设置里那一个** answerView：练习页切过之后打开记录就是同一个视图，
+                  两个页面里的"同一个开关"不会各说各话。
+                */}
+                <div className="head-meta">
+                  <AnswerViewSwitch view={settings.answerView} onChange={onSettingsChange} />
+                </div>
               </header>
               <div className="pane-body">
-                <AnnotationText
-                  layout={answerLayout}
-                  answer={openRecord.answer}
-                  validated={openRecord.validated}
-                  selection={selection}
-                  lineHeightBase={settings.lineHeight}
-                  showFixBoxes={settings.showFixBoxes}
-                  onSelect={onSelect}
-                />
+                {settings.answerView === 'compare' ? (
+                  /* 对照视图：与练习页同一套排版（一句原译、一句改后，各占一行） */
+                  <CompareView
+                    validated={openRecord.validated}
+                    answer={openRecord.answer}
+                    selection={selection}
+                    onSelect={onSelect}
+                  />
+                ) : (
+                  <AnnotationText
+                    layout={answerLayout}
+                    answer={openRecord.answer}
+                    validated={openRecord.validated}
+                    selection={selection}
+                    lineHeightBase={settings.lineHeight}
+                    showFixBoxes={settings.showFixBoxes}
+                    onSelect={onSelect}
+                  />
+                )}
               </div>
             </section>
 

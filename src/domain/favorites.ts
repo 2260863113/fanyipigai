@@ -12,6 +12,9 @@
  */
 
 import type { Direction, MarkColor, Mode } from './types'
+import { splitSentenceSpans as splitShared, type SentenceSpan } from './sentences'
+
+export type { SentenceSpan }
 
 const STORAGE_KEY = 'translation-practice.favorites'
 /** 最多留这么多条，再多就把最旧的挤掉（本地存储不是仓库） */
@@ -55,84 +58,17 @@ export interface Favorite {
 }
 
 /**
- * 句末标点后面、真正属于"句子结尾"的那些收尾字符（引号、右括号之类）。
+ * 把一段文本切成句子（返回**首尾相接、不重不漏**的区间），**逗号也算句末**。
  *
- * ⚠️ 这里**同时收了 `“` 与 `”`**（以及 ASCII 的 `"`），看起来违反常识，但有必要：
- * 用户报的原例正是 `… fds .“ sdf  fds .”someone says.`——句末那个点号后面跟的是
- * **左引号** `“`（他敲的时候左右不分）。若只认右引号，这个句子就切不开。
- * 一句话里"标点紧跟引号"本身就是很强的收句信号，方向不对也仍然该切。
- */
-const TRAILING = /["'“”‘’）)】]/
-/**
- * 句末标点。
+ * 判据本身在 domain/sentences.ts 里，对照视图与句子题用的是同一个实现
+ * （差别只有 `splitAtCommas` 这一个开关）。收藏这一份要说的话只有一句：
  *
  * **逗号也算**（用户要求："收藏分句也把逗号算进去，相当于收藏的句子按 `,` `。` `"` 来分"）。
- * 中文的顿号、分号同理——收藏要的是"这一处所在的**那一小截**"，而不是语法意义上的完整句子：
- * 一整句里只有半截被改过时，把整句抄进收藏反而让人找不到重点。
- */
-const END_PUNCT = /[,，。！？!?…；;、\n]/
-
-/** 一个句子的区间（`from` 含、`to` 不含）。 */
-export interface SentenceSpan {
-  from: number
-  to: number
-}
-
-/**
- * 把一段文本切成句子（返回**首尾相接、不重不漏**的区间）。
- *
- * ## 句末的判据
- *
- * - `,，。！？!?…；;、` 与换行：本身就是句末（**逗号也算**，见 END_PUNCT 的说明）；
- * - `.`：要"收得住"才算句末。两种算，一种不算：
- *   1. 点号后面是空白或结尾（`… total. Then…`）→ 算；
- *   2. 点号后面**紧跟一个收尾引号**（`… fds ."` / `… fds .”`）→ 算。
- *      **这就是用户报过的那一条**：句子以引号收尾时，引号后面往往没有空格，
- *      不认它就会把三句粘成一句；
- *   3. 点号后面紧跟数字（`3.5`）→ 不算（小数点）。
- *
- * ## 不重不漏靠"一次只切一刀 + 引号归前一句"
- *
- * 每个切点只切一次，切点后面的收尾引号归**前一句**（`… fds ."` 是自足的一句）。
- * 于是"右引号后面紧跟着下一个句子的第一个词"这种写法（`."someone says.`）也能切对：
- * 引号留在前一句里，下一句从 `someone` 开始，两边接得严丝合缝。
- *
- * ⚠️ 已知取舍：`e.g.` 这类缩写后面跟空格（或跟引号）看起来就是一个句末，会被切开。
- * 要做对得引一张缩写表；而收藏里的一截多切一刀只是少给一点上下文，不值得。
+ * 中文的顿号、分号同理——收藏要的是"这一处所在的**那一小截**"，
+ * 而不是语法意义上的完整句子：一整句里只有半截被改过时，把整句抄进收藏反而让人找不到重点。
  */
 export function splitSentenceSpans(text: string): SentenceSpan[] {
-  /** 标点后面紧跟收尾引号 → 这一句到此为止 */
-  const quoteCloses = (index: number): boolean => {
-    const after = text[index + 1]
-    return after !== undefined && TRAILING.test(after)
-  }
-  const endsAt = (index: number): boolean => {
-    const char = text[index] ?? ''
-    if (END_PUNCT.test(char)) return true
-    if (char !== '.') return false
-    const after = text[index + 1]
-    if (after !== undefined && /[0-9]/.test(after)) return false // 3.5
-    return after === undefined || /\s/.test(after) || quoteCloses(index)
-  }
-
-  const spans: SentenceSpan[] = []
-  let start = 0
-  for (let index = 0; index < text.length; index += 1) {
-    if (!endsAt(index)) continue
-    let end = index + 1
-    /*
-     * 句末标点后面的收尾引号属于这一句。ASCII 的 `"` 只在这个位置收（紧跟标点），
-     * 别处它可能是**开启**引号——`" sdf` 开头那个就是，不能被上一句抢走。
-     */
-    if (quoteCloses(index)) {
-      while (end < text.length && TRAILING.test(text[end] ?? '')) end += 1
-    }
-    spans.push({ from: start, to: end })
-    start = end
-    index = end - 1
-  }
-  if (start < text.length) spans.push({ from: start, to: text.length })
-  return spans
+  return splitShared(text, { splitAtCommas: true })
 }
 
 /**

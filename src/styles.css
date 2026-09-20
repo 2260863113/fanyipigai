@@ -247,6 +247,13 @@ button {
   white-space: nowrap;
 }
 
+/*
+ * 输入框**不画边框**（用户要求："术语模式，去掉输入框的边框"）。
+ *
+ * 为什么可以去：它本来就被夹在两条分割线之间，上下边界已经由分割线给出来了，
+ * 再加一个方框就是三条线挤在两三个像素里，看着很吵。
+ * 焦点仍然看得出来——换成浅底 + 一条下划线（不用 outline：那又会画出第四道线）。
+ */
 .term-input {
   width: 100%;
   min-width: 0;
@@ -254,15 +261,15 @@ button {
   font-size: 13.5px;
   font-family: inherit;
   color: var(--ink);
-  background: var(--paper-soft);
-  border: 1px solid var(--line);
-  border-radius: 5px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
 }
 
 .term-input:focus {
   outline: none;
-  border-color: var(--accent);
-  background: var(--paper);
+  background: var(--paper-soft);
+  box-shadow: inset 0 -1px 0 var(--accent);
 }
 
 .term-input:disabled {
@@ -271,12 +278,67 @@ button {
   cursor: not-allowed;
 }
 
-.term-row-ok .term-input {
-  border-color: #4a8f5f;
+/*
+ * ── 判分之后的作答行 ─────────────────────────────
+ *
+ * 用户要求"术语提交后，需要按照像文章模式一样，进行对比后，颜色批注和修改"：
+ * 于是这里不再只是一个禁用输入框，而是**用与文章模式同一套勾画语言**画出来——
+ *   译错的：整条答案加相应颜色的荧光底色 + 一道横线划掉（`.mk-delete`），右边跟标准译法；
+ *   译对的：米绿底色（`.mk-highlight`），不再重复标准译法（本来就一样）。
+ * 一条术语只有"对/错"两态，没有"只改一半"，所以整条一起标，不像文章那样按词缩窄。
+ *
+ * ⚠️ 标准译法**跟在同一行**（`→ 标准译法`）：这一行只占上下五等份里的一份，
+ * 另起一行就是"两行字挤进一行的格子"，术语一长就压到下一行上去。
+ * 允许折行（`flex-wrap`），因此真的放不下时是在**行内部**折，不会越出去。
+ */
+.term-result {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
 }
 
-.term-row-bad .term-input {
-  border-color: var(--mark-red);
+.term-result:hover,
+.term-result:focus-visible {
+  background: rgba(44, 107, 237, 0.06);
+  outline: none;
+}
+
+/* 选中的那一条：与右下角详情、对照视图里选中一处是同一个记号 */
+.term-result[data-selected='true'] {
+  background: var(--paper-soft);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.term-answer {
+  font-size: 13.5px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* 没作答的那一条：不给它划横线（没有字可划），只如实说没写 */
+.term-answer-blank {
+  font-size: 13.5px;
+  color: var(--ink-faint);
+}
+
+/* 答案与标准译法之间的那个箭头：只是分隔，不抢颜色 */
+.term-arrow {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+/* 标准译法（文章模式里那句"改成什么"）：与划掉的那条同色 */
+.term-fix {
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .term-mark {
@@ -290,16 +352,6 @@ button {
 
 .term-mark-bad {
   color: var(--mark-red);
-}
-
-.term-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-top: 6px;
-  border-top: 1px solid var(--line);
 }
 
 /* ── 文章库那一行：领域下拉 · 方向切换 · 设置 ───────────
@@ -971,6 +1023,13 @@ button {
   border-color: var(--line-strong);
 }
 
+/* 小卡片里那颗按钮：卡片本来就窄，用常规尺寸会把说明挤成两三行 */
+.btn-tiny {
+  padding: 2px 10px;
+  font-size: 11.5px;
+  border-radius: 6px;
+}
+
 .hint {
   color: var(--ink-faint);
   font-size: 12.5px;
@@ -1439,6 +1498,12 @@ button {
   /*
    * 不接管鼠标事件：气泡可能盖住下一行的字，
    * 但用户仍然应该能直接点到那行字上的勾画。
+   *
+   * ⚠️ 这条规则正是"小卡片里的「收藏」点不动"的原因：`pointer-events: none`
+   * 会让**整棵子树**（包括里面的按钮）都收不到点击——那一下会穿到气泡底下的文字上，
+   * 于是收藏按钮永远点不到（用户报过两次）。所以下面 `.ann-bubble-foot` 单独把事件收回来。
+   * 光靠浏览器探针发现不了这个：jsdom 不做命中测试，`pointer-events` 在它那里形同不存在，
+   * 脚本里点那颗按钮照样是"成功的"。守着它的只能是样式表断言（见 scripts/smoke.ts）。
    */
   pointer-events: none;
 }
@@ -1490,6 +1555,21 @@ button {
 .ann-bubble-num {
   color: inherit;
   margin-right: 3px;
+}
+
+/*
+ * 卡片脚下那一行（「收藏」按钮 + 右侧小字）。
+ *
+ * **必须把事件收回来**：整张卡片是 `pointer-events: none`（见上），
+ * 不收回来的话按钮点不动——那一击会穿到卡片底下的文字上，表现是"点收藏没反应"。
+ * 只收回这一行而不是整张卡片：卡片正文仍然不该挡住底下的勾画。
+ */
+.ann-bubble-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  pointer-events: auto;
 }
 
 .ann-bubble-more {

@@ -19,6 +19,7 @@
 
 import { useEffect, useRef, useState, type JSX } from 'react'
 import { AnnotationText, type Selection } from './AnnotationText'
+import { AnswerViewSwitch } from './AnswerViewSwitch'
 import { CompareView } from './CompareView'
 import { LEVEL_LABEL, type PolishLevel } from '../domain/types'
 import type { AnnotatedLayout } from '../domain/layout'
@@ -126,26 +127,7 @@ export function AnswerPane({
       <header className="pane-head">
         <h2>我的译文</h2>
         <div className="head-meta">
-          {resultShown && (
-            <div className="view-switch" role="group" aria-label="译文视图">
-              <button
-                type="button"
-                className={settings.answerView === 'correct' ? 'view-btn view-btn-active' : 'view-btn'}
-                onClick={() => onSettingsChange({ answerView: 'correct' })}
-                title="在译文上勾画：划线、方框、调序弧线"
-              >
-                批改视图
-              </button>
-              <button
-                type="button"
-                className={settings.answerView === 'compare' ? 'view-btn view-btn-active' : 'view-btn'}
-                onClick={() => onSettingsChange({ answerView: 'compare' })}
-                title="一句一句对照：每句下方给出修改后的完整那句，不划线不填补"
-              >
-                对照视图
-              </button>
-            </div>
-          )}
+          {resultShown && <AnswerViewSwitch view={settings.answerView} onChange={onSettingsChange} />}
           {/*
             批过的页是只读的，所以这里给的是「返回编辑」而不是可写的输入框。
             放开之后（unlocked）按钮消失，页面重新可写，并且**不再自动提交**。

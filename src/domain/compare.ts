@@ -9,6 +9,7 @@
 
 import type { MarkColor } from './types'
 import { colorForCategory, type ValidatedCorrection } from './validate'
+import { splitSentenceSpans } from './sentences'
 
 /** 对照视图里的一段文字；着色表示「这里被改过 / 值得肯定」。 */
 export interface CompareSpan {
@@ -30,35 +31,21 @@ export interface CompareLine {
   changed: boolean
 }
 
-const CJK_END = /[。！？；…]/
-const LATIN_END = /[.!?]/
-const TRAILING = /["'”’）)】]/
-
-function isSentenceDot(text: string, index: number): boolean {
-  const next = text[index + 1]
-  // 后面必须跟空白或到结尾，否则 "3.5"、"U.S." 这类会被切碎
-  if (next !== undefined && !/\s/.test(next)) return false
-  const prev = text[index - 1]
-  if (prev !== undefined && /\d/.test(prev)) return false
-  return true
-}
-
-/** 把文本切成句子（返回的是原文里的区间，供着色时换算）。 */
+/**
+ * 把文本切成句子（返回的是原文里的区间，供着色时换算）。
+ *
+ * 判据在 domain/sentences.ts——**这里不再自己写一份**。原先这里有一份自己的实现，
+ * 它不认"句末标点后面跟引号"（`xxxxx "xxxx."someone says` 会被当成一句），
+ * 而收藏那一份认；两份判据分家之后，用户就在对照视图里看到了分句不对。
+ * 现在两边同一个实现，差别只有收藏多开的那个"逗号也算句末"。
+ *
+ * 这里只做两件本层的事：把 `{from,to}` 换成 `{start,end}`（历史命名），
+ * 以及丢掉纯空白的那几刀（对照视图里一行空行没有意义）。
+ */
 export function splitSentences(text: string): Array<{ start: number; end: number }> {
-  const result: Array<{ start: number; end: number }> = []
-  let start = 0
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index] ?? ''
-    const isEnd = CJK_END.test(char) || (LATIN_END.test(char) && isSentenceDot(text, index))
-    if (!isEnd) continue
-    let end = index + 1
-    while (end < text.length && TRAILING.test(text[end] ?? '')) end += 1
-    result.push({ start, end })
-    start = end
-    index = end - 1
-  }
-  if (start < text.length) result.push({ start, end: text.length })
-  return result.filter((item) => text.slice(item.start, item.end).trim().length > 0)
+  return splitSentenceSpans(text)
+    .map(({ from, to }) => ({ start: from, end: to }))
+    .filter((item) => text.slice(item.start, item.end).trim().length > 0)
 }
 
 interface Edit {

@@ -162,7 +162,15 @@ try {
          rows: rows.length,
          sources: sourceRows.map((s) => s.textContent.trim()),
          inputs: document.querySelectorAll('.term-input').length,
-         hasSubmit: [...document.querySelectorAll('.btn-primary')].some((b) => b.textContent.includes('提交批改')),
+         /*
+          * 提交按钮的位置（用户要求："术语模式的提交按钮改到译文栏标题的右边和文章模式的位置一样"）。
+          * 因此必须在 .pane-answer .pane-head 里面——只查"页面上有没有这颗按钮"是不够的，
+          * 按钮挪回作答区里它照样能满足。
+          */
+         submitInHead: !!document.querySelector('.pane-answer .pane-head .btn-primary'),
+         输入框边框: [...document.querySelectorAll('.term-input')].map((i) => getComputedStyle(i).borderTopWidth),
+         已写提示还在吗: (document.querySelector('.pane-answer')?.innerText || '').includes('已写'),
+         按钮行: document.querySelectorAll('.term-actions').length,
          hasChip: (document.body.innerText || '').includes('本地判分'),
          noAnnotated: !document.querySelector('.annotated'),
          /*
@@ -170,35 +178,35 @@ try {
           * 作答栏只有输入框、**不再出现原文**；两栏的横线对得上。
           */
          原文栏五等分: (() => {
-           const heights = sourceRows.map((r) => Math.round(r.getBoundingClientRect().height));
-           if (heights.length !== 5) return { 行数: heights.length };
-           const min = Math.min(...heights);
-           const max = Math.max(...heights);
-           return { 行数: 5, 最小: min, 最大: max, 等分: max - min <= 2 };
-         })(),
-         分割线: (() => {
-           const withLine = (selector) =>
-             [...document.querySelectorAll(selector)].filter((row) => {
-               const top = getComputedStyle(row).borderTopWidth;
-               return parseFloat(top) > 0;
-             }).length;
-           const sourceLines = withLine('.term-source-row');
-           const answerLines = withLine('.term-row');
-           return {
-             原文有线的行: sourceLines,
-             作答有线的行: answerLines,
-             原文五条之间四条线: sourceLines === 4,
-             作答五条之间四条线: answerLines === 4,
-           };
-         })(),
-         作答栏里没有原文: (() => {
-           const paneBody = document.querySelector('.pane-answer .pane-body');
-           const box = document.querySelector('.pane-answer .term-rows');
-           if (!paneBody || !box) return { 说明: '找不到作答栏' };
-           const sources = sourceRows.map((s) => (s.querySelector('.term-source-text')?.textContent || '').trim()).filter(Boolean);
-           const bodyText = paneBody.innerText || '';
-           return { 命中: sources.filter((s) => bodyText.includes(s)) };
-         })(),
+          const heights = sourceRows.map((r) => Math.round(r.getBoundingClientRect().height));
+          if (heights.length !== 5) return { 行数: heights.length };
+          const min = Math.min(...heights);
+          const max = Math.max(...heights);
+          return { 行数: 5, 最小: min, 最大: max, 等分: max - min <= 2 };
+        })(),
+        分割线: (() => {
+          const withLine = (selector) =>
+            [...document.querySelectorAll(selector)].filter((row) => {
+              const top = getComputedStyle(row).borderTopWidth;
+              return parseFloat(top) > 0;
+            }).length;
+          const sourceLines = withLine('.term-source-row');
+          const answerLines = withLine('.term-row');
+          return {
+            原文有线的行: sourceLines,
+            作答有线的行: answerLines,
+            原文五条之间四条线: sourceLines === 4,
+            作答五条之间四条线: answerLines === 4,
+          };
+        })(),
+        作答栏里没有原文: (() => {
+          const paneBody = document.querySelector('.pane-answer .pane-body');
+          const box = document.querySelector('.pane-answer .term-rows');
+          if (!paneBody || !box) return { 说明: '找不到作答栏' };
+          const sources = sourceRows.map((s) => (s.querySelector('.term-source-text')?.textContent || '').trim()).filter(Boolean);
+          const bodyText = paneBody.innerText || '';
+          return { 命中: sources.filter((s) => bodyText.includes(s)) };
+        })(),
        };
      })()`,
   )
@@ -212,13 +220,19 @@ try {
     JSON.stringify(pane.原文栏五等分),
   )
   check(pane.分割线?.原文五条之间四条线 === true, `原文五条之间有 4 条分割线（实际 ${pane.分割线?.原文有线的行}）`)
-  check(pane.分割线?.作答五条之间四条线 === true, `作答五条之间也有 4 条分割线（实际 ${pane.分割线?.作答有线的行}）`)
+  check(pane.分割线?.作答五条之间四条线 === true, `作答五条之间有 4 条分割线（实际 ${pane.分割线?.作答有线的行}）`)
   check(
     (pane.作答栏里没有原文?.命中 ?? []).length === 0,
     '右侧作答栏里不再出现原文（只有输入框）',
     JSON.stringify(pane.作答栏里没有原文),
   )
-  check(pane.hasSubmit === true, '有「提交批改」按钮')
+  check(pane.submitInHead === true, '「提交批改」在译文栏**标题栏右边**（与文章模式同一个位置）')
+  check(
+    (pane.输入框边框 ?? []).every((width) => parseFloat(width) === 0),
+    `输入框没有边框（用户要求，实际边框宽 ${JSON.stringify(pane.输入框边框)}）`,
+  )
+  check(pane.已写提示还在吗 === false, '去掉了"已写 0 / 5 条。术语要求一字不差…"那句提示')
+  check(pane.按钮行 === 0, '作答区里不再有按钮行（按钮与提示都挪走/删掉了）')
   check(pane.hasChip === true, '标明了「本地判分」（不交给 AI）')
   check(pane.noAnnotated === true, '术语题不渲染整段勾画（没有可勾画的整段文字）')
   console.log(`      五条术语：${pane.sources.join(' ｜ ')}`)
@@ -255,37 +269,55 @@ try {
 
   const beforeSubmit = await cdp.evaluate(
     `({
-       buttonLabels: [...document.querySelectorAll('.pane-answer .btn')].map((b) => b.textContent.trim() + (b.disabled ? '(禁用)' : '')),
+       buttonLabels: [...document.querySelectorAll('.pane-answer .pane-head .btn')].map((b) => b.textContent.trim() + (b.disabled ? '(禁用)' : '')),
        values: [...document.querySelectorAll('.term-input')].map((i) => i.value),
-       hint: (document.querySelector('.term-actions .hint')?.textContent ?? '').trim(),
      })`,
   )
-  console.log(`      [诊断] 按钮=${JSON.stringify(beforeSubmit.buttonLabels)} 提示=${beforeSubmit.hint}`)
+  console.log(`      [诊断] 标题栏按钮=${JSON.stringify(beforeSubmit.buttonLabels)}`)
   console.log(`      [诊断] 输入框值=${JSON.stringify(beforeSubmit.values)}`)
-  const crash = await cdp.evaluate(`({
-    rootLen: (document.getElementById('root')?.innerText || '').length,
-    head: (document.getElementById('root')?.innerText || '').slice(0, 200),
-    hasTermRows: !!document.querySelector('.term-rows'),
-    hasPaneAnswer: !!document.querySelector('.pane-answer'),
-    full: (document.getElementById('root')?.innerText || '').slice(0, 2000),
-  })`)
-  console.log(`      [诊断] 页面=${JSON.stringify({ rootLen: crash.rootLen, hasTermRows: crash.hasTermRows })}`)
-  console.log('      ── 兜底界面全文 ──')
-  console.log(String(crash.full).split('\n').slice(0, 26).map((line) => '      ' + line).join('\n'))
 
-  console.log('\n=== 3. 提交 → 本地判分 ===')
+  console.log('\n=== 3. 提交 → 本地判分 → 颜色批注 ===')
   await cdp.evaluate(
-    "[...document.querySelectorAll('.btn-primary')].find((b) => b.textContent.includes('提交批改')).click()",
+    "[...document.querySelectorAll('.pane-answer .pane-head .btn-primary')].find((b) => b.textContent.includes('提交批改')).click()",
   )
   await sleep(900)
   const graded = await cdp.evaluate(
     `({
        marks: [...document.querySelectorAll('.term-mark')].map((m) => m.textContent.trim()),
-       inputsDisabled: [...document.querySelectorAll('.term-input')].map((i) => i.disabled),
-       hasReset: [...document.querySelectorAll('.btn')].some((b) => b.textContent.includes('重新作答')),
+       inputs: document.querySelectorAll('.term-input').length,
+       results: document.querySelectorAll('.term-result').length,
+       /*
+        * 颜色批注与修改（用户要求："术语提交后，需要按照像文章模式一样，进行对比后，颜色批注和修改"）：
+        * 译错的整条划掉（.mk-delete > .mk-deleted 才有横线）+ 给出标准译法（.term-fix）；
+        * 译对的用绿色底色（.mk-highlight）。三者缺一都不算"像文章模式一样"。
+        */
+       struck: document.querySelectorAll('.term-result .mk-delete .mk-deleted').length,
+       struckLine: (() => {
+         const el = document.querySelector('.term-result .mk-delete .mk-deleted');
+         return el ? getComputedStyle(el).textDecorationLine : null;
+       })(),
+       fixes: [...document.querySelectorAll('.term-fix')].map((f) => f.textContent.trim()),
+       /*
+        * 标准译法必须是**同一行里的兄弟节点**（「→ 标准译法」跟在划掉的那条后面）。
+        * 另起一行的写法曾经把两行字挤进"五等份里的那一份"，术语一长就压到下一行上。
+        */
+       fixesInline: document.querySelectorAll('.term-result > .term-fix').length,
+       correctTint: document.querySelectorAll('.term-result .mk-highlight').length,
+       wrongTint: [...document.querySelectorAll('.term-result .mk-delete')].map((el) => el.style.background),
+       hasReset: [...document.querySelectorAll('.pane-answer .pane-head .btn')].some((b) => b.textContent.includes('重新作答')),
+       hasViewSwitch: !!document.querySelector('.pane-answer .view-switch'),
+       /*
+        * 判完之后仍然是"上下五等份"：批注行用的是与输入框同一套 .term-row 等分
+        * （用户要的是五栏对五栏，判完也得对得上，不然两栏的横线就错位了）。
+        */
+       作答五等分: (() => {
+         const heights = [...document.querySelectorAll('.term-row')].map((r) => Math.round(r.getBoundingClientRect().height));
+         if (heights.length !== 5) return { 行数: heights.length };
+         return { 最小: Math.min(...heights), 最大: Math.max(...heights) };
+       })(),
        notice: (document.querySelector('.notice')?.textContent ?? '').trim(),
        score: (document.querySelector('.score-number')?.textContent ?? '').trim(),
-       detailText: (document.querySelector('.pane-notes')?.innerText ?? '').slice(0, 200),
+       detailText: (document.querySelector('.pane-notes')?.innerText ?? '').slice(0, 300),
      })`,
   )
   check(graded.marks.length === 5, `五条都给出了判分标记（实际 ${graded.marks.length}）`)
@@ -298,10 +330,83 @@ try {
     graded.marks.slice(0, 3).every((m) => m === '✓') && graded.marks.slice(3).every((m) => m === '✗'),
     `严格对照判分：照标准写的判对、胡写的判错（实际 ${graded.marks.join('')}）`,
   )
-  check(graded.inputsDisabled.every(Boolean), '判分后输入框锁住（要改得先按「重新作答」）')
-  check(graded.hasReset === true, '给了「重新作答」的入口')
+  check(graded.inputs === 0 && graded.results === 5, `判完后五条换成批注行（输入框 ${graded.inputs} 个、批注行 ${graded.results} 条）`)
+  check(graded.struck === 2, `译错的两条被划掉（实际 ${graded.struck} 条）`)
+  check(
+    graded.struckLine === 'line-through',
+    `划掉是**真的横线**（computed text-decoration-line 实际 ${graded.struckLine}）`,
+  )
+  check(graded.fixes.length === 2, `译错的两条给出了标准译法（实际 ${graded.fixes.length} 条）`)
+  check(
+    graded.fixesInline === 2,
+    `标准译法与答案在**同一行**（不另起一行，免得两行字挤进五等份里的一份，实际 ${graded.fixesInline} 条）`,
+  )
+  check(
+    graded.fixes.every((text) => text.length > 2),
+    `标准译法写出来了（${graded.fixes.join(' ｜ ')}）`,
+  )
+  check(graded.correctTint === 3, `译对的三条用绿色底色勾画（实际 ${graded.correctTint} 条）`)
+  check(
+    (graded.作答五等分?.最大 ?? 0) - (graded.作答五等分?.最小 ?? 0) <= 2 && graded.results === 5,
+    `判完之后作答栏仍然是上下五等份（行高 ${graded.作答五等分?.最小}–${graded.作答五等分?.最大}px，两栏横线还对得上）`,
+    JSON.stringify(graded.作答五等分),
+  )
+  check(
+    (graded.wrongTint ?? []).length === 2 && graded.wrongTint.every((bg) => String(bg).includes('--mark-red-bg')),
+    `译错的两条是红色荧光底（实际 ${JSON.stringify(graded.wrongTint)}）`,
+  )
+  check(graded.hasReset === true, '「重新作答」在标题栏右边（与提交按钮同一个位置）')
+  check(graded.hasViewSwitch === true, '判完后也有「批改视图 / 对照视图」分段按钮（像文章模式一样）')
   check(/错 2 条/.test(graded.notice), `提示里说出了错几条（${graded.notice}）`)
   console.log(`      分数=${graded.score}　提示=${graded.notice}`)
+  console.log(`      改后=${graded.fixes.join(' ｜ ')}`)
+
+  console.log('\n=== 3b. 点某一条 → 右下角说清这一条 ===')
+  await cdp.evaluate("document.querySelectorAll('.term-result')[3].click()")
+  await sleep(400)
+  const detail = await cdp.evaluate(
+    `({
+       selected: document.querySelectorAll('.term-result[data-selected="true"]').length,
+       notes: (document.querySelector('.pane-notes')?.innerText ?? '').replace(/\\s+/g, ' ').slice(0, 240),
+     })`,
+  )
+  check(detail.selected === 1, `点过的那一条被标为选中（实际 ${detail.selected} 条）`)
+  check(
+    detail.notes.includes('标准译法是') || detail.notes.includes('标准译法'),
+    '右下角给出这一条的完整说明（含标准译法）',
+    detail.notes,
+  )
+  console.log(`      [诊断] 右下角=${detail.notes}`)
+
+  console.log('\n=== 3c. 对照视图：一条原译、一条改后 ===')
+  await cdp.evaluate(
+    "[...document.querySelectorAll('.pane-answer .view-switch .view-btn')].find((b) => b.textContent.includes('对照视图')).click()",
+  )
+  await sleep(400)
+  const compare = await cdp.evaluate(
+    `({
+       lines: [...document.querySelectorAll('.compare-list .compare-line')].map((li) => ({
+         original: (li.querySelector('.compare-original')?.textContent ?? '').trim(),
+         corrected: (li.querySelector('.compare-corrected')?.textContent ?? '').trim(),
+       })),
+     })`,
+  )
+  check(compare.lines.length === 5, `五条术语各出一行对照（实际 ${compare.lines.length}）`)
+  check(
+    compare.lines.every((line) => line.original.startsWith('原译') && line.corrected.startsWith('改后')),
+    '每一条都是"原译 / 改后"两行交替',
+    JSON.stringify(compare.lines.slice(0, 2)),
+  )
+  check(
+    compare.lines.slice(3).every((line) => line.corrected.includes('改后') && line.corrected.length > 3),
+    '写错的两条在"改后"里给出标准译法',
+    JSON.stringify(compare.lines.slice(3)),
+  )
+  console.log(`      第一行：${JSON.stringify(compare.lines[0])}`)
+  await cdp.evaluate(
+    "[...document.querySelectorAll('.pane-answer .view-switch .view-btn')].find((b) => b.textContent.includes('批改视图')).click()",
+  )
+  await sleep(300)
 
   console.log('\n=== 4. 判分是本地算的：没有打批改接口 ===')
   const requests = await cdp.evaluate(
@@ -315,17 +420,18 @@ try {
 
   console.log('\n=== 5. 重新作答 → 解锁且保留已写内容 ===')
   await cdp.evaluate(
-    "[...document.querySelectorAll('.btn')].find((b) => b.textContent.includes('重新作答')).click()",
+    "[...document.querySelectorAll('.pane-answer .pane-head .btn')].find((b) => b.textContent.includes('重新作答')).click()",
   )
   await sleep(500)
   const after = await cdp.evaluate(
     `({
        marks: document.querySelectorAll('.term-mark').length,
+       results: document.querySelectorAll('.term-result').length,
        editable: [...document.querySelectorAll('.term-input')].every((i) => !i.disabled),
        kept: [...document.querySelectorAll('.term-input')].map((i) => i.value),
      })`,
   )
-  check(after.marks === 0, '判分标记清掉了')
+  check(after.marks === 0 && after.results === 0, '批注行与判分标记都清掉了，回到可写的五个输入框')
   check(after.editable === true, '输入框重新可编辑')
   check(
     after.kept.every((v) => v.length > 0),

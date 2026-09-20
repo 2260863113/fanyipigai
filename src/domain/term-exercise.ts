@@ -16,12 +16,15 @@
  * ## 为什么判分结果复用 Correction 的形状
  *
  * 界面右下的「总体评分 / 逐处批注」是按 Correction + ValidatedCorrection 渲染的。
- * 术语题没有"作答文本里的区间"这回事，但**仍然是一组可逐条展示的对错**，
- * 因此这里把它映射过去：
+ * 术语题虽然一次给五条独立短语，但**仍然是一组可逐条展示的对错**，因此这里把它映射过去：
  *   - 每译错一条 → 一个 errors 项，`oldText` 是用户的答案、`targetText` 是标准译法，
  *     `explanation` 说明标准译法是什么；
  *   - 每译对一条 → 一个 highlights 项（它确实值得肯定）。
- * 复用同一形状的好处是评分、练习记录、收藏这些下游功能一行都不用改。
+ * 复用同一形状的好处是评分、练习记录、收藏、对照视图这些下游功能一行都不用改。
+ *
+ * 位置也不是占位：五条答案按行拼成一段文字（见 termAnswerText），
+ * 每一条在其中的起止位置都是真的，因此"点这一条 → 右下角说清这一条"、
+ * "收藏这一条"、"在对照视图里给这一条一行对照"全都走既有的那套代码。
  */
 
 import { CATEGORY_LABEL, type Correction, type ErrorObject, type Exercise } from './types'
@@ -124,7 +127,9 @@ export interface TermVerdict {
   correct: boolean
 }
 
-/** 逐条判分。 */
+/**
+ * 逐条判分。
+ */
 export function judgeTerms(terms: readonly Term[], answers: readonly string[]): TermVerdict[] {
   return terms.map((term, index) => {
     const answer = answers[index] ?? ''
@@ -133,11 +138,51 @@ export function judgeTerms(terms: readonly Term[], answers: readonly string[]): 
 }
 
 /**
- * 把逐条判分结果映射成 Correction + ValidatedCorrection，好让既有的
- * 评分、练习记录、收藏这些下游功能原样复用。
+ * 五条答案拼成的**一整段文字**（一行一条，用换行分隔）。
  *
- * 术语题没有"作答文本里的字符区间"，因此这里的 span 一律是零长度、指向 0——
- * 界面在术语模式下不会去画勾画（没有可勾画的整段文字），只读 span 做展示与计数。
+ * 为什么要有这么一段文字：术语题本身是五个独立的短语，但本站在别处一律按"一段作答文字"
+ * 办事——练习记录存 `answer`、收藏要"这一处所在的整句"、对照视图要切句、右下角说明要
+ * 拿区间去译文里取原文。与其为术语题在每一条下游路径上各开一个特例，
+ * 不如在这里定义清楚"术语题的作答文字长什么样"，让那些路径原样复用。
+ */
+export function termAnswerText(answers: readonly string[]): string {
+  return answers.join('\n')
+}
+
+/** 这一组写了几条（提交按钮够不够格点下去，就看它等不等于 5）。 */
+export function answeredTermCount(answers: readonly string[]): number {
+  return answers.filter((answer) => answer.trim().length > 0).length
+}
+
+/**
+ * 第几条的批注编号。
+ *
+ * 编号必须**只有一处产生**：作答行上挂的 `data-mark-id`、右下角详情、收藏的判重键
+ * 全靠它对齐。写错前缀（把错的写成 `h1`）不会报错，只会让"点了没反应"，
+ * 因此这里给一个函数，而不是两处各拼一次字符串。
+ */
+export function termMarkId(index: number, correct: boolean): string {
+  return `${correct ? 'h' : 't'}${index + 1}`
+}
+
+/**
+ * 把逐条判分结果映射成 Correction + ValidatedCorrection，好让既有的
+ * 评分、练习记录、收藏、对照视图这些下游功能原样复用。
+ *
+ * ## 区间是真的（不是零长度占位）
+ *
+ * 每一条答案在 `termAnswerText(verdicts)` 里都有自己的起止位置，这里就按那个位置给区间，
+ * 并且把 `changes` 填成"整条换成标准译法"。这样下游拿到的区间是**可用的**：
+ * 右下角说明能取出"你写的是哪一串"、收藏能取到它所在的那一行、
+ * 对照视图能给出"原译 / 改后"一行对一行。
+ * （早先这里一律给零长度区间，于是术语题的说明里"要改的是"永远是空的。）
+ *
+ * 为什么不走 `validateError` 走一遍：位置是**程序自己算的**（不是模型报的），
+ * 本来就准；而它要求锚点必须有非空片段，未作答那一条没有字可取，会被它拒掉。
+ * 因此这里直接构造校验结果，`rejections` 恒为空——没有"被拦下的批注"这回事。
+ *
+ * 术语题错了一定是术语问题（不会有"搭配不当""语序错"），分类固定给 terminology；
+ * 一条术语只有对错两态、没有"只改一半"，所以整条一起标，不按词缩窄。
  */
 export function correctionFromVerdicts(verdicts: readonly TermVerdict[]): {
   correction: Correction
@@ -148,19 +193,29 @@ export function correctionFromVerdicts(verdicts: readonly TermVerdict[]): {
   const validatedErrors: ValidatedError[] = []
   const validatedHighlights: ValidatedHighlight[] = []
 
+  /*
+   * 逐行累加出每一条在整段文字里的起点：`+ 1` 是行与行之间那个换行，
+   * 于是这些位置与 `termAnswerText` 拼出来的那段文字**严格对得上**。
+   */
+  let cursor = 0
   verdicts.forEach((verdict, index) => {
-    const id = `t${index + 1}`
-    const span = { start: index, end: index, snippet: '' }
+    const start = cursor
+    const end = start + verdict.answer.length
+    cursor = end + 1
+    const span = { start, end, snippet: verdict.answer }
+    const id = termMarkId(index, verdict.correct)
+
     if (verdict.correct) {
-      const highlight = { id: `h${index + 1}`, anchor: { ...span, snippet: verdict.answer }, comment: `「${verdict.term.zh}」译对了：${verdict.term.en}` }
+      const highlight = {
+        id,
+        anchor: { ...span },
+        comment: `「${verdict.term.zh}」译对了：${verdict.term.en}`,
+      }
       highlights.push(highlight)
-      validatedHighlights.push({ highlight, span: { start: index, end: index } })
+      validatedHighlights.push({ highlight, span: { start, end } })
       return
     }
-    /*
-     * 分类固定给 terminology（术语不准）——术语题错了一定是术语问题，
-     * 不会有"搭配不当""语序错"这些。
-     */
+
     const empty = normalizeAnswer(verdict.answer).length === 0
     const error: ErrorObject = {
       id,
@@ -168,15 +223,20 @@ export function correctionFromVerdicts(verdicts: readonly TermVerdict[]): {
       category: 'terminology',
       oldText: verdict.answer,
       targetText: verdict.term.en,
-      anchor: { ...span, snippet: verdict.answer },
-      originalSpan: { ...span, snippet: verdict.answer },
+      anchor: { ...span },
+      originalSpan: { ...span },
       explanation: empty
-        ? `「${verdict.term.zh}」没有作答。标准译法：${verdict.term.en}`
-        : `「${verdict.term.zh}」的标准译法是「${verdict.term.en}」，你写的是「${verdict.answer}」。` +
+        ? `「${verdict.term.zh}」没有作答；标准译法：${verdict.term.en}`
+        : `「${verdict.term.zh}」的标准译法是「${verdict.term.en}」；你写的是「${verdict.answer}」；` +
           `术语与固定表述要求一字不差（${CATEGORY_LABEL.terminology}）。`,
     }
     errors.push(error)
-    validatedErrors.push({ error, changes: [], span: { start: index, end: index } })
+    validatedErrors.push({
+      error,
+      // 未作答那一条没有字可划，就不给改动项（界面上只说"没作答"）
+      changes: empty ? [] : [{ start, end, to: verdict.term.en }],
+      span: { start, end },
+    })
   })
 
   return {
@@ -184,3 +244,4 @@ export function correctionFromVerdicts(verdicts: readonly TermVerdict[]): {
     validated: { errors: validatedErrors, highlights: validatedHighlights, rejections: [] },
   }
 }
+
