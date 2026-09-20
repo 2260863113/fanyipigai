@@ -84,10 +84,22 @@ export type SessionAction =
   | { type: 'generatedApplied'; exerciseId: string; generated: GeneratedExercise; variantIndex: number }
   /** 作答被修改：结果作废（这一段文字已经不是被批改的那一段了） */
   | { type: 'answerChanged'; exerciseId: string; text: string }
+  /**
+   * 写到指定的"行"（术语题的五条各写各的）。
+   *
+   * 与 answerChanged 的差别只有一个：写入哪个坑由调用方指定，而不是当前段号。
+   * 术语题一次显示五行、五行同时可编辑，没有"当前在第几段"这回事。
+   */
+  | { type: 'answerAtChanged'; exerciseId: string; row: number; text: string }
   | { type: 'sectionChanged'; exerciseId: string; sectionIndex: number }
   | { type: 'viewChanged'; exerciseId: string; view: AnswerView }
   /** 批改完成：存下结果并把画面切到结果那一面 */
   | { type: 'resultCommitted'; exerciseId: string; draft: JudgeDraft }
+  /**
+   * 只作废结果，**保留作答**。
+   * 术语题的「重新作答」用它：判分要清掉，但用户已写的五条译文要留着让他改。
+   */
+  | { type: 'resultCleared'; exerciseId: string }
 
 /** 取某个题号的会话（没有就用空会话，调用方不需要判空）。 */
 export function sessionOf(state: ExerciseSessions, exerciseId: string): ExerciseSession {
@@ -142,6 +154,14 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
     case 'answerChanged':
       return withSession(state, action.exerciseId, afterAnswerChanged(session, action.text))
 
+    case 'answerAtChanged':
+      return withSession(state, action.exerciseId, {
+        ...session,
+        drafts: { ...session.drafts, [action.row]: action.text },
+        result: null,
+        view: 'result',
+      })
+
     case 'sectionChanged':
       return withSession(state, action.exerciseId, { ...session, sectionIndex: action.sectionIndex })
 
@@ -150,6 +170,10 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
 
     case 'resultCommitted':
       return withSession(state, action.exerciseId, { ...session, result: action.draft, view: 'result' })
+
+    case 'resultCleared':
+      // 只清结果与视图，**不动 drafts**（术语题的「重新作答」靠它保住已写的译文）
+      return withSession(state, action.exerciseId, { ...session, result: null, view: 'result' })
   }
 }
 

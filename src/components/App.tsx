@@ -42,8 +42,10 @@ import { NotesPane } from './NotesPane'
 import { TopBar } from './TopBar'
 import { ArticleBar } from './ArticleBar'
 import { ArticlePickerModal } from './ArticlePickerModal'
-import { ARTICLE_EXCERPTS, articleById, articlesOf } from '../domain/articles'
+import { TermRows } from './TermRows'
+import { articleById, ARTICLE_EXCERPTS, articlesOf } from '../domain/articles'
 import { exerciseOfArticle } from '../domain/article-exercise'
+import { exerciseOfTerms, correctionFromVerdicts, judgeTerms, termExerciseId, termsForExerciseId } from '../domain/term-exercise'
 import { loadSelection, saveSelection, type ArticleSelection } from './article-selection'
 import { loadRecords, saveRecords } from './records-store'
 
@@ -129,8 +131,20 @@ export function App(): JSX.Element {
   const isCustom = customExercise !== null && customExercise.id === exerciseId
   /** 当前在做的是不是文章库里的一篇 */
   const activeArticle = useMemo(() => articleById(exerciseId), [exerciseId])
+  /**
+   * 当前是不是**术语库**里的一组术语。
+   * 术语题不走文章库那套问答：它一次给五条术语，批改完全本地（见 term-exercise.ts）。
+   */
+  const activeTerms = useMemo(() => termsForExerciseId(exerciseId), [exerciseId])
+  const isTermExercise = activeTerms.length > 0
   const exercise: Exercise =
-    isCustom && customExercise ? customExercise : activeArticle ? exerciseOfArticle(activeArticle) : activeCase.exercise
+    isCustom && customExercise
+      ? customExercise
+      : activeArticle
+        ? exerciseOfArticle(activeArticle)
+        : isTermExercise
+          ? exerciseOfTerms(exerciseId, activeTerms)
+          : activeCase.exercise
   const mode = exercise.mode
   /** 这道题自己的会话状态（作答、结果、看哪一面、第几份原文、AI 生成的题池） */
   const session = sessionOf(sessions, exercise.id)
@@ -282,6 +296,14 @@ export function App(): JSX.Element {
       else openPaste()
       return
     }
+    /*
+     * 术语栏由**术语库**供题（不是内置题库）：进去就落到上次那个领域的第 1 组。
+     * 领域跟着文章栏选的那个走——术语与文章是同一套主题域，没必要让人选两次。
+     */
+    if (nextTab === 'term') {
+      selectExercise(termExerciseId(articleSelection.domain, 1))
+      return
+    }
     // 切题型只换"当前在看哪道题"，不清空任何一道题的作答与结果
     const next = casesOfMode(nextTab)[0]
     if (next) selectExercise(next.exercise.id)
@@ -318,6 +340,15 @@ export function App(): JSX.Element {
 
   function setSection(nextIndex: number): void {
     dispatchSession({ type: 'sectionChanged', exerciseId: exercise.id, sectionIndex: nextIndex })
+  }
+
+  /**
+   * 写到指定的"行"。术语题用它——一题五条术语，每条各写各的，
+   * 复用 drafts 的 `段号 → 文字` 结构（第几行就是第几段），因此
+   * 切栏目、切题目都不会丢，与其它题型的作答同一套保障。
+   */
+  function updateAnswerAt(row: number, value: string): void {
+    dispatchSession({ type: 'answerAtChanged', exerciseId: exercise.id, row, text: value })
   }
 
   /** 把逐段作答整理成接口需要的形状（每段带它在全文中的起点）。 */
@@ -471,6 +502,63 @@ export function App(): JSX.Element {
   const canReturnToResult = Boolean(result) && view === 'answer'
 
   /**
+   * 术语题的逐条判分结果。
+   *
+   * 由本地算出来，不进 result：术语判分是**纯函数**（对照标准译法），
+   * 没有"AI 返回了什么"可存，也不需要重试与失败分类。因此这里按
+   * 「有没有已提交的结果」当作"这一组是否已判过"，逐条现算即可——
+   * 既省一份状态，也不会出现"存下来的判分与标准译法不一致"。
+   */
+  const termVerdicts = useMemo(() => {
+    if (!isTermExercise) return null
+    if (!result && view !== 'result') return null
+    if (!result) return null
+    return judgeTerms(activeTerms, activeTerms.map((_, index) => drafts[index] ?? ''))
+  }, [isTermExercise, result, view, activeTerms, drafts])
+
+  /**
+   * 术语题提交：**本地判分，不调 AI**。
+   *
+   * 术语有唯一正确译法（官方固定表述），交给模型判会有两个坏处：
+   * 同一份答案两次可能不同、用户无法自己核对分数怎么来的。
+   * 因此这里直接对照 domain/terms.ts 里的标准译法判，结果映射成
+   * Correction + ValidatedCorrection 的形状，好让评分、练习记录、收藏原样复用。
+   */
+  function submitTerms(): void {
+    if (!isTermExercise) return
+    const verdicts = judgeTerms(activeTerms, activeTerms.map((_, index) => drafts[index] ?? ''))
+    const { correction, validated } = correctionFromVerdicts(verdicts)
+    const wrong = verdicts.filter((verdict) => !verdict.correct).length
+    commit(
+      {
+        correction,
+        validated,
+        level,
+        // 判分来源标成 fixture：它不是 AI 现场批改的，界面不该说"这是 AI 批的"
+        source: 'fixture',
+        sectionCount: 1,
+        raw: JSON.stringify(
+          verdicts.map((verdict) => ({
+            zh: verdict.term.zh,
+            yours: verdict.answer,
+            standard: verdict.term.en,
+            correct: verdict.correct,
+          })),
+          null,
+          2,
+        ),
+      },
+      [{ start: 0, text: activeTerms.map((_, index) => drafts[index] ?? '').join('\n') }],
+      level,
+    )
+    setNotice(
+      wrong === 0
+        ? `全部 ${verdicts.length} 条都译对了。`
+        : `这一组 ${verdicts.length} 条，错 ${wrong} 条——标准译法见右下角逐条说明。`,
+    )
+  }
+
+  /**
    * 右上角要显示的带批注的作答。
    * 位置早已由校验结果给出（validated 里带 span），这里只是把它排版成片段序列。
    */
@@ -590,6 +678,43 @@ export function App(): JSX.Element {
               onDoubleClick={resetSplit}
             />
 
+            {/*
+              术语题走**另一条渲染路径**：它一次给五条术语、逐条作答、由程序本地对照判分
+              （见 term-exercise.ts）。它没有"整段作答文本"，因此不画勾画，
+              也不需要视图切换、修改档位、提交全篇这些为整篇译文准备的东西。
+              与其它题型刻意分开渲染，而不是往 AnswerPane 里塞一堆 if——
+              那会让两个本来不同的交互在一个组件里互相牵制。
+            */}
+            {termVerdicts !== null || isTermExercise ? (
+              <section className="pane pane-answer">
+                <header className="pane-head">
+                  <h2>我的译文</h2>
+                  <div className="head-meta">
+                    <span className="chip">术语翻译 · {activeTerms.length} 条</span>
+                    <span className="chip" title="术语有唯一正确译法，因此由程序对照标准译法判分，不交给 AI">
+                      本地判分
+                    </span>
+                  </div>
+                </header>
+                <div className="pane-body">
+                  {notice && <p className="hint notice">{notice}</p>}
+                  <TermRows
+                    terms={activeTerms}
+                    answers={activeTerms.map((_, index) => drafts[index] ?? '')}
+                    verdicts={termVerdicts}
+                    disabled={termVerdicts !== null}
+                    onChange={(row, value) => updateAnswerAt(row, value)}
+                    onSubmit={submitTerms}
+                    onReset={() => {
+                      // 重新作答：把这一组的结果作废（清空判分），作答本身**留着**让人改
+                      dispatchSession({ type: 'resultCleared', exerciseId: exercise.id })
+                      setNotice(null)
+                      setSelection(null)
+                    }}
+                  />
+                </div>
+              </section>
+            ) : (
             <AnswerPane
               shown={shown}
               layout={answerLayout}
@@ -624,6 +749,7 @@ export function App(): JSX.Element {
               onAnswerChange={updateAnswer}
               onSectionChange={setSection}
             />
+            )}
 
             </div>
 

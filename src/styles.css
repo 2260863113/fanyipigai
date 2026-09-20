@@ -152,6 +152,119 @@ button {
   color: #8a5200;
 }
 
+/* ── 术语题：上五栏原文、下五栏作答 ───────────────────
+   一次一组 5 条，左原文右作答、一行一条。批改完全本地（见 domain/term-exercise.ts），
+   所以判分结果是逐条的 ✓/✗ 与右下角的逐条标准译法，而不是译文上的勾画。 */
+
+.term-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.term-rows-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 2.2em;
+  gap: 10px;
+  padding: 0 2px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.term-col-label,
+.term-col-verdict {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.term-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.term-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 2.2em;
+  gap: 10px;
+  align-items: center;
+}
+
+.term-source {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+/* 译法未人工核对时标出来——不假装它是权威答案 */
+.term-unverified {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #b06a00;
+  border: 1px solid #e0b070;
+  border-radius: 3px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.term-input {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 13.5px;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+
+.term-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--paper);
+}
+
+.term-input:disabled {
+  /* 判分后锁住：要改得先按「重新作答」 */
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+
+.term-row-ok .term-input {
+  border-color: #4a8f5f;
+}
+
+.term-row-bad .term-input {
+  border-color: var(--mark-red);
+}
+
+.term-mark {
+  font-size: 15px;
+  text-align: center;
+}
+
+.term-mark-ok {
+  color: #4a8f5f;
+}
+
+.term-mark-bad {
+  color: var(--mark-red);
+}
+
+.term-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
 /* ── 文章库那一行：领域下拉 · 方向切换 · 设置 ───────────
    它取代了原来的「题目切换条」——那条是一排按钮，题目一多就铺不完。
    现在左边是下拉、中间是两段方向切换、右边是设置，三块各占一区。 */
