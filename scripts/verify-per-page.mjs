@@ -808,6 +808,36 @@ try {
     '落盘的这条带 id、说明与所在整句（不是只有个空壳）',
     JSON.stringify(walked.favoriteStored),
   )
+  /*
+   * ⚠️ 每一条请求里的**答案起点必须是 0**。
+   *
+   * 服务端会把批注按 `answerSections[0].start` 平移之后再返回（mergeSectionCorrections），
+   * 而界面是拿**这一页的文字**去画勾画的。起点一旦填成"这一页在整篇里的位置"，
+   * 第 2 页以后的批注就整体被推出这一页——勾画一处都画不出来，分数却照常显示。
+   * 用 scripts/probe-section-offset.mjs 实测确认过这个平移是真的（start=0 报 17–30，start=50 报 67–80）。
+   */
+  const starts = await cdp.evaluate(`window.__judgeCalls.map((call) => call.start)`)
+  check(
+    starts.length > 0 && starts.every((value) => value === 0),
+    `每一次请求里的答案起点都是 0（逐页提交的服务端坐标就是那一页的坐标）：${JSON.stringify(starts)}`,
+  )
+
+  // 收藏页：每一条要给出"这一处是从哪一段原文里来的"（用户要求：当前一段，不是整篇）
+  await cdp.evaluate(
+    `[...document.querySelectorAll('.mode-tab')].find((b) => b.textContent.trim() === '收藏').click()`,
+  )
+  await sleep(600)
+  const favView = await cdp.evaluate(
+    `({
+       items: document.querySelectorAll('.fav-item').length,
+       sources: [...document.querySelectorAll('.fav-source')].map((p) => p.textContent.trim().slice(0, 60)),
+     })`,
+  )
+  check(favView.items >= 1, `收藏页里有 ${favView.items} 条`, JSON.stringify(favView))
+  check(
+    favView.sources.length === favView.items && favView.sources.every((text) => text.length > 20),
+    `每条收藏都贴出"这一处所在的那一段原文"（不是整篇）：${JSON.stringify(favView.sources)}`,
+  )
   console.log('返回上次批改 =', JSON.stringify(walked.returnToResult))
   check(walked.returnToResult?.点之前.有返回按钮 === true, '按「返回编辑」之后，还能看到「查看上次批改」')
   check(walked.returnToResult?.点之后.有批注译文 === true, '点它就回到那份带批注的批改')

@@ -13,7 +13,7 @@ import { validateCorrection } from '../domain/validate'
 import { buildLayout, type AnnotatedLayout } from '../domain/layout'
 import { toAiShape } from '../domain/parse'
 import { requestGeneration, requestJudgment, type JudgeSectionInput } from '../domain/client'
-import { splitSections, type Section } from '../domain/sections'
+import { paginateArticle, type Section } from '../domain/sections'
 import { variantsFor } from '../domain/variants'
 import { GENERATION_TOPICS, type GeneratedExercise } from '../domain/generate'
 import type { JudgeFailureKind } from '../domain/ai'
@@ -64,6 +64,17 @@ import {
   termsForExerciseId,
 } from '../domain/term-exercise'
 import { loadSelection, saveSelection, type ArticleSelection } from './article-selection'
+import {
+  clearGraded,
+  firstUngraded,
+  gradedCount,
+  isCompleted,
+  loadProgress,
+  markGraded,
+  orderForPicker,
+  type ProgressMap,
+} from './article-progress'
+import { pageCountOf } from '../domain/exercise-source'
 import { loadRecords, saveRecords } from './records-store'
 
 type Tab = Mode | 'records' | 'custom' | 'favorites'
@@ -106,18 +117,33 @@ export function App(): JSX.Element {
    * 原先固定取文章库第一篇（`ARTICLE_EXCERPTS[0]`，那是英文的），
    * 于是上次选了「中译英」的用户一进来看到的还是英文原文——方向和原文对不上。
    *
-   * 现在的顺序：上次那一篇（若还在）→ 那一格里第一篇 → 文章库第一篇。
-   * 文章库为空时退回内置题库，保证界面照样能开。
+   * 现在的顺序：上次那一篇（**若还没练完**）→ 那一格里第一篇没练完的 → 那一格第一篇
+   * → 文章库第一篇。文章库为空时退回内置题库，保证界面照样能开。
+   *
+   * ⚠️ 中间那句"若还没练完"是用户要求的：「整篇翻译完并批改的文章，
+   * 后续打开网页**不主动显示**它的内容」——练完的那一篇还留在下拉里、也还能点开，
+   * 只是不再自动落在它上面。
    */
+  const startupProgress = loadProgress()
   const startup = (() => {
     const remembered = loadSelection()
     const saved = remembered.articleId ? articleById(remembered.articleId) : null
-    if (saved) return saved
-    const inSlot = articlesOf(remembered.domain, remembered.direction)[0]
-    return inSlot ?? FIRST_ARTICLE
+    if (saved && !isCompleted(startupProgress, saved.id, pageCountOf(saved.id))) return saved
+    const inSlot = articlesOf(remembered.domain, remembered.direction)
+    const unfinished = inSlot.find((item) => !isCompleted(startupProgress, item.id, pageCountOf(item.id)))
+    return unfinished ?? inSlot[0] ?? FIRST_ARTICLE
   })()
   const [tab, setTab] = useState<Tab>(startup ? 'article' : firstCase.exercise.mode)
   const [exerciseId, setExerciseId] = useState(startup ? startup.id : firstCase.exercise.id)
+
+  /**
+   * 文章进度（哪几页已经批过）——存在浏览器里，刷新之后还在。
+   *
+   * 用途就是用户要求的那两条："下次打开从没批完的那一段继续"、
+   * "练完的文章不主动显示、换一换留到最后"。初始值直接来自 localStorage
+   * （启动落点上面已经读过一次，这里再读一次保持它是一份正常的 state）。
+   */
+  const [progress, setProgress] = useState<ProgressMap>(() => loadProgress())
 
   /**
    * 每一道题各自的会话状态（作答、结果、看哪一面、用第几份原文、AI 生成的题池）。
@@ -239,8 +265,16 @@ export function App(): JSX.Element {
     }
     return null
   }
-  /** 这道题自己的会话状态（作答、结果、看哪一面、第几份原文、AI 生成的题池） */
-  const session = sessionOf(sessions, exercise.id)
+  /**
+   * 这道题自己的会话状态（作答、结果、看哪一面、第几份原文、AI 生成的题池）。
+   *
+   * ⚠️ 这里多传了一个"从第几页接着做"：用户要求「翻译了某几段、且已经批改，
+   * 下次打开网站就**从没有翻译完成的那一段继续**」。页数由原文现算（与练习页同一套分页），
+   * 页号则来自落盘的进度；会话一旦真的建起来（用户动手了），页号就归它自己管，
+   * 这个初始值不再起作用——所以它只影响"刚打开的那一眼"。
+   */
+  const resumeIndex = firstUngraded(progress, exercise.id, pageCountOf(exercise.id))
+  const session = sessionOf(sessions, exercise.id, resumeIndex)
   const { drafts, sectionIndex, pages, unlocked, openResults } = session
   /*
    * 当前这一页的批改结果；没批过就是 undefined。
@@ -281,8 +315,20 @@ export function App(): JSX.Element {
   const currentTopic = current?.topic ?? exercise.topic
   const currentGenre = current?.genre ?? exercise.genre
 
-  /** 原文按段落切分；单段题只有一个元素，因此下面所有逻辑对四类题型通用 */
-  const sourceSections: Section[] = useMemo(() => splitSections(currentSource), [currentSource])
+  /**
+   * 原文按**页**切分（不是按自然段）。
+   *
+   * 用户要求「文章模式仍然切割成段落，但是要求保证每一页在 100-200 字，
+   * 如果一段不足一百字，那么一页显示两段甚至三段，直到超过 100 字；
+   * 如果某一段超过 300 字，那么合理分割将其变成两段」——规则本身在
+   * domain/sections.ts 的 paginateArticle 里，这里只是用它。
+   *
+   * 单段题（句子/段落/术语/自己贴的短题）本来就只有一段，于是原样得到一页 ✓。
+   */
+  const sourceSections: Section[] = useMemo(
+    () => paginateArticle(currentSource, exercise.direction),
+    [currentSource, exercise.direction],
+  )
   const multiSection = sourceSections.length > 1
   const currentSection = sourceSections[sectionIndex] ?? sourceSections[0]
   const currentAnswer = drafts[sectionIndex] ?? ''
@@ -315,8 +361,11 @@ export function App(): JSX.Element {
    * 批过的页要**先按「返回编辑」**才能写——见 pageUnlocked。
    */
   const editing = pageState !== 'graded'
-  /** 批过的页数，用来在原文栏里报进度 */
-  const gradedPages = sourceSections.filter((_, index) => pages[index] !== undefined).length
+  /**
+   * 已批页数。**以落盘的进度为准**：刷新之后会话里的结果没了，但"这一篇批过哪几页"还在，
+   * 只数会话里的 pages 会显示成 0，而用户明明已经批了三四页。
+   */
+  const gradedPages = gradedCount(progress, exercise.id, sourceSections.length)
   /**
    * 「返回编辑」之后还能不能点回那份批改（用户要求"退回修改后仍然可以返回到批改界面"）。
    *
@@ -367,8 +416,28 @@ export function App(): JSX.Element {
     setNotice(null)
   }
 
-  /** 换一换：换成下一份原文。只清掉这道题的作答与结果（原文变了，旧作答不再对应）。 */
+  /**
+   * 换一换：文章栏换成**下一篇**，其余题型换成下一份原文。
+   *
+   * 文章栏的"下一篇"走的是与「选择文章」弹窗**同一个顺序函数**（没练完的在前、
+   * 练完的排到最后），因此两处的"下一篇"是同一个概念：
+   * 用户要的是"以后『换一换』留到最后"——不能把人送回已经做完了的那一篇。
+   *
+   * 换文章**不清空任何东西**：每篇的作答与结果各自留着（切回来还是离开时的样子），
+   * 这一点与"切题目"完全一致；只有"换同一道题的原文"（下面那条路）才清作答。
+   */
   function rotateSource(): void {
+    if (activeArticle) {
+      const slot = articlesOf(activeArticle.domain, activeArticle.direction)
+      const ordered = orderForPicker(slot, progress, (item) => pageCountOf(item.id))
+      if (ordered.length < 2) return
+      const at = ordered.findIndex((item) => item.id === activeArticle.id)
+      const next = ordered[(at + 1) % ordered.length]
+      if (!next || next.id === activeArticle.id) return
+      selectExercise(next.id)
+      setNotice(`换到下一篇：${next.title}（已练完的排在最后）`)
+      return
+    }
     if (sourceOptions.length < 2) return
     const nextIndex = (safeVariantIndex + 1) % sourceOptions.length
     // 清作答、清结果、view 回 'result' 都在 reducer 里一处做完，这里不再手写清单
@@ -534,20 +603,22 @@ export function App(): JSX.Element {
   }
 
   /**
-   * 把某一页的作答整理成接口需要的形状（带它在**整篇**里的起点）。
+   * 把某一页的作答整理成接口需要的形状。
    *
-   * 起点按"前面每一页各占自己的长度 + 两个换行"累加，因此这个位置是绝对位置，
-   * 与后面拼起来的那篇全文对得上——批注区间要能落回那一页的文字上。
-   * 逐页提交时只发这一页，但那段文字在全文里的位置并不因此改变，
-   * 这样同一条记录无论从哪一页看都是自洽的。
+   * ⚠️ **起点必须是 0，不能填"这一页在整篇里的位置"。**
+   *
+   * 服务端会把这一页的批注按 `start` 平移之后再返回（`mergeSectionCorrections`），
+   * 而界面是拿**这一页的文字**去画勾画的（`pageResult.answer`）。
+   * 早先这里填的是"前面每一页的长度 + 2"的累加值，于是第 2 页以后的批注
+   * 整体被推出了这一页的范围——勾画一处都画不出来，而分数、清单照样显示，
+   * 界面上完全看不出哪里不对。用 `scripts/probe-section-offset.mjs` 实测确认过：
+   * 同一份作答 start=0 时报 17–30，start=50 就报 67–80。
+   *
+   * 逐页提交一次只发这一页，服务端重建出来的那段文字**就是这一页**，
+   * 因此 0 才是这一段真正的起点。
    */
   function answerSectionOf(sectionIndex: number): JudgeSectionInput {
-    const parts = sourceSections.map((_, index) => drafts[index] ?? '')
-    let start = 0
-    for (let index = 0; index < sectionIndex; index += 1) {
-      start += (parts[index] ?? '').length + 2 // 页与页之间按两个换行分隔
-    }
-    return { start, text: parts[sectionIndex] ?? '' }
+    return { start: 0, text: drafts[sectionIndex] ?? '' }
   }
 
   /**
@@ -558,6 +629,9 @@ export function App(): JSX.Element {
    * 逐页批改一次只批一页，因此这里也只发这一页——早先发的是**整篇的原文分段**
    * （N 段）配上**一页的作答**（1 段），长度对不上，服务端直接 400
    * "请求缺少必要字段或字段取值不合法"，一页都批不了。
+   *
+   * 这里的 `start` 只是"这一页在整篇里的位置"，服务端只校验形状、不用它算位置
+   * （真正决定批注坐标的是 answerSections，见 answerSectionOf 的说明）。
    */
   function sourceSectionOf(sectionIndex: number): JudgeSectionInput {
     const section = sourceSections[sectionIndex]
@@ -585,6 +659,12 @@ export function App(): JSX.Element {
       draft: judging_,
       answer: pageAnswer,
     })
+    /*
+     * 落一份"这一页批完了"到浏览器里（见 article-progress.ts）。
+     * 会话状态刷新就没，而"下次打开从没批完的那一段继续""练完的不主动显示"
+     * 都要求这件事记得住，因此提交成功就往这里记一笔。
+     */
+    setProgress((previous) => markGraded(previous, target.exerciseId, target.sectionIndex))
     setSelection(null)
     setOpenRecord(null)
     setRecords((previous) => {
@@ -883,6 +963,8 @@ export function App(): JSX.Element {
             mode,
             direction: exercise.direction,
             topic: currentTopic,
+            // 收藏要记住"当时在第几页"，收藏页才能显示那一段的原文（而不是整篇）
+            sectionIndex,
           },
         })
       : null
@@ -976,7 +1058,17 @@ export function App(): JSX.Element {
               exercise={exercise}
               mode={mode}
               isCustom={isCustom}
-              sourceOptionsCount={sourceOptions.length}
+              sourceOptionsCount={
+                activeArticle
+                  ? articlesOf(activeArticle.domain, activeArticle.direction).length
+                  : sourceOptions.length
+              }
+              {...(activeArticle
+                ? {
+                    rotateTitle:
+                      '换到下一篇（这一格里已练完的排到最后）；换文章不会丢掉别的篇目上已经写的内容',
+                  }
+                : null)}
               multiSection={multiSection}
               sourceSectionCount={sourceSections.length}
               sectionIndex={sectionIndex}
@@ -1054,6 +1146,7 @@ export function App(): JSX.Element {
                             // 重新作答：作废这一组的结果，作答本身**留着**让人改
                             // （与逐页批改里的「返回编辑」同一个动作）
                             dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
+                            setProgress((previous) => clearGraded(previous, exercise.id, sectionIndex))
                             setNotice(null)
                             setSelection(null)
                           }}
@@ -1114,6 +1207,8 @@ export function App(): JSX.Element {
                 // 放开之后这一页**不再自动提交**，改完自己按「提交批改」。
                 // 不弹提示语：按钮文案与页面状态已经把这件事说清楚了（用户明确要去掉这类废话）。
                 dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
+                // 这一页的结果作废了，进度里也要撤掉——否则下次打开会跳过它
+                setProgress((previous) => clearGraded(previous, exercise.id, sectionIndex))
                 setOpenRecord(null)
                 setSelection(null)
                 setNotice(null)
@@ -1196,6 +1291,7 @@ export function App(): JSX.Element {
           domain={articleSelection.domain}
           direction={articleSelection.direction}
           activeArticleId={activeArticle ? activeArticle.id : null}
+          progress={progress}
           onSwitchDirection={(direction) => {
             const next = { ...articleSelection, direction }
             const first = articlesOf(next.domain, direction)[0]

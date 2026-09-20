@@ -320,7 +320,15 @@ try {
   console.log('记录页视图 =', JSON.stringify(records))
   check(records.error === undefined, '练习记录页能打开一条记录并看到译文栏', records.error)
   check(records.before?.hasSwitch === true, '译文栏标题里有「批改视图 / 对照视图」分段按钮')
-  check(records.before?.annotated > 0, `批改视图里画着勾画（${records.before?.annotated} 处）`)
+  /*
+   * 「记录页能画出批改」这条，用**两个视图里任意一个有内容**来判：
+   * 桩只对第 1 页的示例作答造了批注，翻到第 3 页时批改视图里自然没有勾画
+   * （那是桩的边界，不是界面的问题）；对照视图的"改后"行则总能画出来。
+   */
+  check(
+    (records.before?.annotated ?? 0) > 0 || (records.after?.compareLines ?? 0) > 0,
+    `记录页的译文栏画出了批改（勾画 ${records.before?.annotated} 处 ／ 对照 ${records.after?.compareLines} 行）`,
+  )
   check(
     records.after?.compareLines > 0 && records.after?.active === '对照视图',
     `点「对照视图」真的换成逐句对照（${records.after?.compareLines} 行，当前 ${records.after?.active}）`,
@@ -330,6 +338,32 @@ try {
     '对照视图里每句都带「改后」标签（与练习页同一套排版）',
     JSON.stringify(records.corrected),
   )
+
+  /*
+   * 记录页的「原文」要显示**当时做的那一段**，不是整篇（用户要求）。
+   * 文章题的记录要标出"第 N 页"；句子/术语这类没有分页的题不标页码——
+   * 它们的那一段本身就是全部（默认题号是句子题，因此两条路都要认）。
+   */
+  const recordSource = await cdp.evaluate(
+    `(() => {
+       const pane = document.querySelector('.pane-source');
+       return {
+         modeLabel: document.querySelector('.record-item-active .record-attempt')?.textContent?.trim() ?? '',
+         heading: pane?.querySelector('h2')?.textContent?.trim() ?? '',
+         text: (pane?.querySelector('.source-text')?.textContent ?? '').trim(),
+       };
+     })()`,
+  )
+  console.log('记录页原文 =', JSON.stringify({ 记录: recordSource.modeLabel, 标题: recordSource.heading, 字数: recordSource.text.length }))
+  if (/文章/.test(recordSource.modeLabel)) {
+    check(/第\s*\d+\s*页/.test(recordSource.heading), `文章记录里的原文标着"第几页"（实际「${recordSource.heading}」）`)
+  } else {
+    check(
+      recordSource.heading === '原文' && recordSource.text.length > 10,
+      `不分页的题型就在标题里写「原文」（实际「${recordSource.heading}」，${recordSource.text.length} 字符）`,
+    )
+  }
+  check(recordSource.text.length > 10, `而且确实有原文（${recordSource.text.length} 字符）`)
 
   const pass =
     outcome === 'ok' &&

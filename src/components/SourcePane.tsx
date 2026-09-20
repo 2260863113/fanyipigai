@@ -28,6 +28,7 @@ export function SourcePane({
   currentReference,
   onRepaste,
   onRotate,
+  rotateTitle,
   onOpenGenerator,
   onSectionChange,
   onPickArticle,
@@ -55,6 +56,8 @@ export function SourcePane({
   currentReference: string
   onRepaste: () => void
   onRotate: () => void
+  /** 「换一换」的悬停说明；文章栏换的是"下一篇"，说法与换原文不同 */
+  rotateTitle?: string
   onOpenGenerator: () => void
   onSectionChange: (index: number) => void
   /** 有这一项就显示「选择文章」（文章栏用），放在标题栏右侧靠左 */
@@ -116,9 +119,10 @@ export function SourcePane({
                 onClick={onRotate}
                 disabled={sourceOptionsCount < 2}
                 title={
-                  sourceOptionsCount < 2
+                  rotateTitle ??
+                  (sourceOptionsCount < 2
                     ? '这道题暂时只有一篇原文；点右边的「AI 出题」可以现出一篇'
-                    : '换一篇同话题、同文体的原文继续练'
+                    : '换一篇同话题、同文体的原文继续练')
                 }
               >
                 换一换

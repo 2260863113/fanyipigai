@@ -1,9 +1,7 @@
 import { useMemo, useRef } from 'react'
 import type { Correction, Direction, Mode, PolishLevel } from '../domain/types'
 import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
-import { EXERCISE_SOURCES } from '../domain/mock'
-import { articleById } from '../domain/articles'
-import { customSources } from '../domain/custom'
+import { pageSourceOf } from '../domain/exercise-source'
 import type { ValidatedCorrection } from '../domain/validate'
 import { scoreCorrection } from '../domain/scoring'
 import { AnnotationList } from './AnnotationList'
@@ -70,16 +68,17 @@ interface Props {
  */
 export function RecordsView({ records, openRecord, onOpen, selection, settings, onSettingsChange, onSelect, favorites, onToggleFavorite }: Props) {
   /*
-   * 题干原文：内置题的原文在 EXERCISE_SOURCES 里，**文章库**的选段在 articles.ts 里，
-   * **自己贴的题**在浏览器本地按题号留了档（见 domain/custom.ts）——不然翻回旧记录时那一栏会是空的。
-   * 顺序无所谓（三种题的编号前缀不同、不会撞车），找不到就如实显示"未保存题干"。
+   * 题干原文：**这一条记录当时做的那一段**，不是整篇。
+   *
+   * 用户要求：「收藏模式下，原文应该是当前一段的原文，而不是整篇文章。」
+   * 文章题一篇被切成好几页（见 domain/sections.ts 的 paginateArticle），
+   * 一条记录就是**一页**，所以这里按记录里的页号取那一页。
+   * 五个来源（文章库/内置题/自己贴的/句子库/术语库）的查找集中在 domain/exercise-source.ts，
+   * 与练习页同一套分页，因此拿到的永远是"当时屏幕上那一段"。
    */
-  const source = openRecord
-    ? (EXERCISE_SOURCES[openRecord.exerciseId] ??
-       articleById(openRecord.exerciseId)?.excerpt ??
-       customSources()[openRecord.exerciseId] ??
-       '')
-    : ''
+  const source = openRecord ? pageSourceOf(openRecord.exerciseId, openRecord.sectionIndex) : ''
+  /** 文章题才有分页概念，界面上如实标出是第几页 */
+  const sourceIsPage = openRecord ? openRecord.mode === 'article' : false
 
   /*
    * 左右两屏的边界也能拖（与练习页同一套 useSplitDrag）。
@@ -102,6 +101,7 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
           mode: openRecord.mode,
           direction: openRecord.direction,
           topic: openRecord.topic,
+          sectionIndex: openRecord.sectionIndex,
         },
       })
     : null
@@ -214,7 +214,14 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
             <div className="split-row split-row-top">
             <section className="pane pane-source">
               <header className="pane-head">
-                <h2>原文</h2>
+                <h2>原文{sourceIsPage && openRecord ? ` · 第 ${openRecord.sectionIndex + 1} 页` : ''}</h2>
+                {sourceIsPage && openRecord && (
+                  <div className="head-meta">
+                    <span className="chip" title="文章题按页练、按页批，一条记录就是一页；这里显示的就是当时那一页">
+                      只显示当时这一段
+                    </span>
+                  </div>
+                )}
               </header>
               <div className="pane-body">
                 <p className="source-text">{source || '（未保存题干）'}</p>

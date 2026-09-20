@@ -55,6 +55,13 @@ export interface Favorite {
   mode: Mode
   direction: Direction
   topic: string
+  /**
+   * 这一处当时在第几页（文章题用；其它题型恒为 0）。
+   *
+   * 有了它，收藏页才能显示「这一处是从**哪一段**里来的」——
+   * 用户要求「收藏模式下，原文应该是**当前一段**的原文，而不是整篇文章」。
+   */
+  sectionIndex: number
 }
 
 /**
@@ -153,7 +160,7 @@ export function favoriteOf(input: {
   }
   answer: string
   span: { start: number; end: number }
-  context: { exerciseId: string; mode: Mode; direction: Direction; topic: string }
+  context: { exerciseId: string; mode: Mode; direction: Direction; topic: string; sectionIndex: number }
   now?: Date
 }): Favorite {
   const createdAt = (input.now ?? new Date()).toISOString()
@@ -180,6 +187,7 @@ export function favoriteOf(input: {
     mode: input.context.mode,
     direction: input.context.direction,
     topic: input.context.topic,
+    sectionIndex: input.context.sectionIndex,
   }
 }
 
@@ -190,16 +198,23 @@ export function loadFavorites(): Favorite[] {
     if (!raw) return []
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.filter((item): item is Favorite => {
-      const favorite = item as Partial<Favorite> | null
-      return Boolean(favorite && typeof favorite.id === 'string' && typeof favorite.why === 'string')
-    })
+    return parsed
+      .filter((item): item is Favorite => {
+        const favorite = item as Partial<Favorite> | null
+        return Boolean(favorite && typeof favorite.id === 'string' && typeof favorite.why === 'string')
+      })
+      /*
+       * 补上页号：`sectionIndex` 是后加的字段，早先存下来的收藏里没有它。
+       * 老条目一律当作第 0 页——它多半本来就是单页题（句子题、术语题）。
+       */
+      .map((favorite) => ({
+        ...favorite,
+        sectionIndex: Number.isInteger(favorite.sectionIndex) ? favorite.sectionIndex : 0,
+      }))
   } catch {
     return []
   }
-}
-
-function persist(favorites: readonly Favorite[]): Favorite[] {
+}function persist(favorites: readonly Favorite[]): Favorite[] {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(favorites))
   } catch {

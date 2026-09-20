@@ -267,7 +267,7 @@ try {
   )
   check(modal.open === true, '弹窗里以卡片罗列文章')
   check(modal.hasDirectionSwitch === 2, '弹窗里也能切方向（不必关掉再回那一行）')
-  check(modal.cards.length === 3, `该领域该方向下有 3 张卡片（实际 ${modal.cards.length}）`)
+  check(modal.cards.length === 6, `该领域该方向下有 6 张卡片（每个领域 6+6 篇，实际 ${modal.cards.length}）`)
   check(
     modal.cards.every((c) => c.title.length > 5),
     '每张卡片都有标题',
@@ -278,7 +278,17 @@ try {
     '卡片上显示了来源与篇幅',
     modal.cards[0]?.meta ?? '',
   )
+  /*
+   * 文章库现在是**整篇全文**，练习时按 100–200 一页切（用户要求）。
+   * 卡片上要如实告诉用户"这一篇有多长、会切成几页"，因此 meta 里必须有"共 N 页"。
+   */
+  check(
+    modal.cards.every((c) => /共\s*\d+\s*页/.test(c.meta)),
+    '卡片上说明了这一篇会切成几页',
+    modal.cards[0]?.meta ?? '',
+  )
   console.log(`      示例卡片：${modal.cards[0]?.title ?? ''}`)
+  console.log(`      卡片元信息：${modal.cards[0]?.meta ?? ''}`)
 
   console.log('\n=== 4. 点一张卡片即开始练 ===')
   await cdp.evaluate("document.querySelectorAll('.article-card')[1].click()")
@@ -327,7 +337,7 @@ try {
        units: [...document.querySelectorAll('.article-card-units')].map((s) => s.textContent.trim()),
      })`,
   )
-  check(zhModal.cards.length === 3, `中译英方向也有 3 张卡片（实际 ${zhModal.cards.length}）`)
+  check(zhModal.cards.length === 6, `中译英方向也有 6 张卡片（实际 ${zhModal.cards.length}）`)
   check(
     zhModal.units.every((u) => /字/.test(u)),
     '中译英的篇幅按「字」计（不是词）',
@@ -337,7 +347,109 @@ try {
   await cdp.evaluate("document.querySelector('.raw-modal-close')?.click()")
   await sleep(300)
 
-  console.log('\n=== 7. 页面错误 ===')
+  /*
+   * ── 进度：练完的排到最后、下次打开从没批完的那一段继续 ──
+   *
+   * 两条要求都建立在"哪几页批过"这份进度上（见 components/article-progress.ts）：
+   *   ① 整篇练完的文章，"换一换"与选文章列表都把它**留到最后**，打开网页也不主动显示它；
+   *   ② 只练了一部分时，下次打开**从没有翻译完成的那一段继续**。
+   * 这里把进度写进 localStorage 再重新加载，等于模拟"用户上次练过、今天又打开"。
+   */
+  console.log('\n=== 7. 没练完的从那一页继续 ===')
+  const current = await cdp.evaluate(
+    `(() => {
+       const hint = (document.querySelector('.section-nav .hint') || {}).textContent || '';
+       const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(hint);
+       return {
+         id: document.querySelector('.app')?.getAttribute('data-exercise-id') || '',
+         page: m ? Number(m[1]) : 1,
+         total: m ? Number(m[2]) : 1,
+       };
+     })()`,
+  )
+  check(current.id.length > 0 && current.total >= 2, `当前这一篇是多页的（${current.id} 共 ${current.total} 页）`)
+
+  const partial = Math.min(3, current.total - 1)
+  await cdp.evaluate(
+    `window.localStorage.setItem('translation-practice.article-progress.v1', JSON.stringify({
+       ${JSON.stringify(current.id)}: { graded: ${JSON.stringify(Array.from({ length: partial }, (_, i) => i))}, updatedAt: new Date().toISOString() },
+     }))`,
+  )
+  await cdp.send('Page.reload')
+  await sleep(2200)
+  const resumed = await cdp.evaluate(
+    `(() => {
+       const hint = (document.querySelector('.section-nav .hint') || {}).textContent || '';
+       const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(hint);
+       return {
+         id: document.querySelector('.app')?.getAttribute('data-exercise-id') || '',
+         page: m ? Number(m[1]) : 1,
+         chips: [...document.querySelectorAll('.pane-source .chip')].map((c) => c.textContent.trim()),
+         hasResult: !!document.querySelector('.annotated-lines'),
+       };
+     })()`,
+  )
+  check(resumed.id === current.id, '没练完的那一篇仍然主动打开（不会被赶走）', `${resumed.id} vs ${current.id}`)
+  check(
+    resumed.page === partial + 1,
+    `下次打开从没有批完的那一段继续：第 ${resumed.page} 页（已批 ${partial} 页）`,
+    JSON.stringify(resumed),
+  )
+  check(
+    resumed.chips.some((text) => text.includes(`已批 ${partial} 页`)),
+    '原文栏报出的是**这一篇**已批几页（进度落盘之后刷新还在）',
+    resumed.chips.join(' ｜ '),
+  )
+  check(resumed.hasResult === false, '接着做的那一页是待批改的（不会把上一页的结果搬过来）')
+
+  console.log('\n=== 8. 整篇练完：不主动显示它，列表里排到最后 ===')
+  await cdp.evaluate(
+    `window.localStorage.setItem('translation-practice.article-progress.v1', JSON.stringify({
+       ${JSON.stringify(current.id)}: {
+         graded: ${JSON.stringify(Array.from({ length: current.total }, (_, i) => i))},
+         updatedAt: new Date().toISOString(),
+       },
+     }))`,
+  )
+  await cdp.send('Page.reload')
+  await sleep(2200)
+  const afterDone = await cdp.evaluate(
+    `({
+       id: document.querySelector('.app')?.getAttribute('data-exercise-id') || '',
+       hint: (document.querySelector('.section-nav .hint') || {}).textContent || '',
+     })`,
+  )
+  check(afterDone.id !== current.id, `练完的那一篇不再主动显示（换成了 ${afterDone.id}）`, JSON.stringify(afterDone))
+  check(afterDone.id.length > 0, '换过去的那一篇照样能打开', afterDone.hint)
+
+  // 列表里：练完的排到最后，并且挂着「已完成」
+  await cdp.evaluate(
+    `[...document.querySelectorAll('.pane-source .pane-head .btn')].find((b) => b.textContent.includes('选择文章'))?.click()`,
+  )
+  await sleep(600)
+  const ordered = await cdp.evaluate(
+    `({
+       titles: [...document.querySelectorAll('.article-card-title')].map((t) => t.textContent.trim()),
+       doneAt: [...document.querySelectorAll('.article-card')].map((c, i) => (c.querySelector('.article-card-done') ? i : -1)).filter((i) => i >= 0),
+       doneLabels: [...document.querySelectorAll('.article-card-done')].map((d) => d.textContent.trim()),
+       cards: document.querySelectorAll('.article-card').length,
+     })`,
+  )
+  check(ordered.cards === 6, `这一格仍然是 6 篇（实际 ${ordered.cards}）`)
+  check(
+    ordered.doneAt.length === 1 && ordered.doneAt[0] === ordered.cards - 1,
+    '练完的那一篇排在**最后**（"以后换一换留到最后"）',
+    JSON.stringify(ordered.doneAt),
+  )
+  check(
+    ordered.doneLabels.length === 1 && ordered.doneLabels[0] === '已完成',
+    '最后那张卡片标着「已完成」',
+    JSON.stringify(ordered.doneLabels),
+  )
+  await cdp.evaluate("document.querySelector('.raw-modal-close')?.click()")
+  await sleep(300)
+
+  console.log('\n=== 9. 页面错误 ===')
   check(cdp.errors.length === 0, '全程没有页面异常', cdp.errors.join(' ｜ '))
 
   const failed = results.filter((r) => !r.ok).length

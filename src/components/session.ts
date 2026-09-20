@@ -156,9 +156,19 @@ export type SessionAction =
    */
   | { type: 'pageResultRestored'; exerciseId: string }
 
-/** 取某个题号的会话（没有就用空会话，调用方不需要判空）。 */
-export function sessionOf(state: ExerciseSessions, exerciseId: string): ExerciseSession {
-  return state.byExercise[exerciseId] ?? EMPTY_SESSION
+/**
+ * 取某个题号的会话（没有就用空会话，调用方不需要判空）。
+ *
+ * `initialSectionIndex` 只在**这道题还没有会话时**生效，用途是"下次打开从没批完的那一页继续"
+ * （页号来自落盘的进度，见 components/article-progress.ts）。
+ * 会话一旦真的建起来（用户翻页、打字、提交都会建），页号就归它自己管——
+ * 否则用户刚翻到第 1 页，下一次渲染又被弹回进度里那一页。
+ */
+export function sessionOf(state: ExerciseSessions, exerciseId: string, initialSectionIndex = 0): ExerciseSession {
+  const existing = state.byExercise[exerciseId]
+  if (existing) return existing
+  if (initialSectionIndex <= 0) return EMPTY_SESSION
+  return { ...EMPTY_SESSION, sectionIndex: initialSectionIndex }
 }
 
 /** 某一页的批改结果；没批过就是 undefined。 */

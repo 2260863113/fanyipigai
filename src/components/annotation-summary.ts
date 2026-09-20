@@ -157,7 +157,7 @@ export function favoriteFor(input: {
   selection: Selection | null
   validated: ValidatedCorrection
   answer: string
-  context: { exerciseId: string; mode: Mode; direction: Direction; topic: string }
+  context: { exerciseId: string; mode: Mode; direction: Direction; topic: string; sectionIndex: number }
   now?: Date
 }): Favorite | null {
   const summary = summarize(input.validated, input.answer, input.selection)

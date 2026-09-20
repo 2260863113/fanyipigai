@@ -549,6 +549,23 @@ button {
   color: #b06a00;
 }
 
+/*
+ * 「已完成」：整篇（每一页）都批过了。
+ * 它排在列表最后、也不再被当作打开网页时的落点，因此这里只是**如实告知**，
+ * 不是禁止——点开照样能再练一遍。
+ */
+.article-card-done {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: #4a8f5f;
+  background: var(--mark-green-bg);
+  vertical-align: 1px;
+}
+
 /* ── 四栏 2×2：左上原文 / 右上译文 / 左下计分 / 右下批注 ──── */
 
 /*
@@ -1856,6 +1873,25 @@ button {
   font-family: var(--sans);
   font-size: 11.5px;
   color: var(--ink-faint);
+}
+
+/*
+ * 收藏里那一条「原文·这一段」。
+ *
+ * 用户要求："收藏模式下，原文应该是**当前一段**的原文，而不是整篇文章。"
+ * 因此这里贴的是这一处所在的那一页（文章题按页号取），不是整篇；
+ * 它的存在感要比「改前 / 改后」弱一档——收藏的主角仍然是那一处改动。
+ */
+.fav-source {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-faint);
+  border-left: 2px solid var(--line);
+  padding-left: 8px;
+  overflow-wrap: break-word;
 }
 
 .fav-hi {

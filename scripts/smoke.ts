@@ -610,6 +610,146 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   }
 
   /*
+   * 文章**分页**：用户给的三条数字（每页 100–200、不足 100 与下一段并、超过 300 就切）。
+   *
+   * 为什么值得单测：分页决定了"用户一次看到多少原文"，而它的三条规则会互相打架
+   * （并进来会超上限、切开会把一句话切成两半、尾巴只剩两行）。这里有两条硬约束：
+   * **任何一页都不超过 300**、**最后一页不是小尾巴**——整库 96 篇都靠它们把关
+   * （见 scripts/check-articles.mjs），这里用小样本把边界固定下来。
+   */
+  console.log('\n[文章分页] 每页 100–200，不足 100 并下一段，超过 300 按句切开')
+  try {
+    const { countUnits, paginateArticle, PAGE_RULE } = await import('../src/domain/sections')
+    const { articleById, articlesOf } = await import('../src/domain/articles')
+
+    check(countUnits('The report said the economy grew.', 'en-to-zh') === 6, '英译中按词数计（标点不算词）')
+    check(countUnits('绿水青山就是金山银山。GDP 增长 5%。', 'zh-to-en') === 12, '中译英按汉字数计（标点、数字、字母都不算）')
+
+    // 三段短段落（各 30 字左右）→ 并成一页（用户的"不足一百字就并下一段"）
+    const short = Array.from({ length: 3 }, () => '生态文明的说明文字占位符大约三十个汉字凑一凑。').join('\n\n')
+    const shortPages = paginateArticle(short, 'zh-to-en')
+    check(
+      shortPages.length === 1,
+      `三段都不到 ${PAGE_RULE.min} 字 → 并成一页（实际 ${shortPages.length} 页）`,
+      JSON.stringify(shortPages.map((page) => countUnits(page.text, 'zh-to-en'))),
+    )
+
+    // 整篇的硬约束：任何一页不超过 300、最后一页不是小尾巴、首尾相接、text 与区间自洽
+    const article = articleById('art-economy-1') ?? articlesOf('economy', 'en-to-zh')[0]
+    check(Boolean(article), '文章库里取得到一篇文章')
+    if (article) {
+      const pages = paginateArticle(article.excerpt, article.direction)
+      const units = pages.map((page) => countUnits(page.text, article.direction))
+      check(pages.length >= 2, `这一篇切成了多页（${pages.length} 页：[${units.join(', ')}]）`)
+      check(
+        units.every((value) => value <= PAGE_RULE.splitAbove),
+        `没有一页超过绝对上限 ${PAGE_RULE.splitAbove}（实际 [${units.join(', ')}]）`,
+      )
+      check(
+        units[units.length - 1] !== undefined && (units[units.length - 1] ?? 0) >= PAGE_RULE.min,
+        `最后一页不是小尾巴（${units[units.length - 1]} 单位）`,
+      )
+      check(
+        pages.every((page) => page.text === article.excerpt.slice(page.start, page.end)),
+        '每一页的 text 与它的 start/end 自洽（批注序号换算靠这个）',
+      )
+      /*
+       * 页与页之间只允许隔**空白**（原文里的空行与缩进）。
+       * 段落本身是按空行切的，因此"上一段的结尾"到"下一段的开头"之间确实有一小段空白——
+       * 那不是丢内容：rebuildFromSections 会把这段空白补成空格，序号换算仍然对得上。
+       */
+      check(
+        pages.every((page, index) =>
+          index === 0 || /^\s*$/.test(article.excerpt.slice(pages[index - 1]?.end ?? 0, page.start)),
+        ),
+        '页与页之间只隔空白（没有正文掉在缝里）',
+      )
+      check(
+        pages
+          .map((page) => page.text.replace(/\s+/g, ' ').trim())
+          .join(' ') === article.excerpt.replace(/\s+/g, ' ').trim(),
+        '所有页拼起来（空白归一之后）正好是整篇原文，一个字都不丢',
+        `${pages.length} 页`,
+      )
+    }
+
+    // 超长段落：按句子切开，因此切点落在句末标点上
+    const zhLong = (sentences: number): string =>
+      Array.from({ length: sentences }, (_, index) => `这是第${index + 1}句话用来占位置说明情况。`).join('')
+    const long = zhLong(30) + '\n\n' + zhLong(30)
+    const longPages = paginateArticle(long, 'zh-to-en')
+    check(
+      longPages.every((page) => countUnits(page.text, 'zh-to-en') <= PAGE_RULE.splitAbove),
+      `超长段落切完之后仍然没有超过上限（[${longPages.map((page) => countUnits(page.text, 'zh-to-en')).join(', ')}]）`,
+    )
+    check(
+      longPages.slice(0, -1).every((page) => /[。！？；，]$/.test(page.text.trim())),
+      '切点落在句末标点上（不会把一句话切成两半）',
+      JSON.stringify(longPages.slice(0, -1).map((page) => page.text.trim().slice(-8))),
+    )
+  } catch (error) {
+    check(false, '分页可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 文章进度：哪几页批过。两条用户要求全靠它——
+   * "下次打开从没批完的那一段继续"、"练完的文章不主动显示、换一换留到最后"。
+   */
+  console.log('\n[文章进度] 记下批过哪几页，据此续做与排序')
+  try {
+    const { clearGraded, firstUngraded, gradedCount, isCompleted, markGraded, orderForPicker } = await import(
+      '../src/components/article-progress'
+    )
+    const { pageSourceOf, pageCountOf } = await import('../src/domain/exercise-source')
+    const { articleById } = await import('../src/domain/articles')
+
+    let map = {}
+    check(isCompleted(map, 'x', 3) === false && firstUngraded(map, 'x', 3) === 0, '没练过：不算完成，从第 0 页开始')
+    map = markGraded(map, 'x', 2)
+    map = markGraded(map, 'x', 0)
+    check(gradedCount(map, 'x', 3) === 2, `批过两页就报两页（实际 ${gradedCount(map, 'x', 3)}）`)
+    check(firstUngraded(map, 'x', 3) === 1, `从没批完的那一页继续：第 ${firstUngraded(map, 'x', 3)} 页`)
+    check(isCompleted(map, 'x', 3) === false, '还差一页就不算练完')
+    map = markGraded(map, 'x', 1)
+    check(isCompleted(map, 'x', 3) === true, '三页都批过 = 练完了')
+    map = clearGraded(map, 'x', 1)
+    check(isCompleted(map, 'x', 3) === false && firstUngraded(map, 'x', 3) === 1, '「返回编辑」把那一页撤回后，它又成了"没做完的那一段"')
+    check(
+      JSON.stringify(map) === JSON.stringify(markGraded(map, 'x', 2)),
+      '同一页重复提交不会记两笔',
+    )
+
+    const articleA = articleById('art-economy-1')
+    const articleB = articleById('art-economy-2')
+    if (articleA && articleB) {
+      const totalA = pageCountOf(articleA.id)
+      let done = {}
+      for (let index = 0; index < totalA; index += 1) done = markGraded(done, articleA.id, index)
+      const ordered = orderForPicker([articleA, articleB], done, (item) => pageCountOf(item.id))
+      check(ordered[0]?.id === articleB.id, `练完的排到最后（第一张是 ${ordered[0]?.id}）`)
+      check(ordered[ordered.length - 1]?.id === articleA.id, '练完的那一篇落在末尾')
+      check(
+        isCompleted(done, articleA.id, totalA) && !isCompleted(done, articleB.id, pageCountOf(articleB.id)),
+        '一篇练完、另一篇没练完（界面据此决定打开哪一篇）',
+      )
+    }
+
+    // 记录页/收藏页的"原文"：文章题取**那一页**，句子题取那一句
+    const page0 = pageSourceOf('art-economy-1', 0)
+    const page1 = pageSourceOf('art-economy-1', 1)
+    const whole = articleA?.excerpt ?? ''
+    check(page0.length > 100 && whole.length > page0.length, `文章题取到的是"那一页"而不是整篇（第 1 页 ${page0.length} 字 ／ 全文 ${whole.length} 字）`)
+    check(page1.length > 100 && page1 !== page0, `第 2 页与第 1 页不是同一段（${page1.length} 字）`)
+    check(
+      pageSourceOf('sentence-economy-1', 0).length > 0 && pageSourceOf('sentence-economy-1', 0).length < 400,
+      '句子题取到的是那一句本身（没有分页可言）',
+    )
+    check(pageSourceOf('不存在的题号', 0) === '', '认不出来的题号返回空串，不瞎猜')
+  } catch (error) {
+    check(false, '进度可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
    * 标色遵循**最小匹配**：修改前后相同的前缀 / 后缀 / 中间某一段**都不标色**，
    * 也不算进"修改后的内容"里（用户要求）。
    *
@@ -830,12 +970,16 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
      * 逐页批改的**多页**那一半：上面那道题只有一页，翻页这件事根本没被走到。
      * 自己贴一篇三段原文来跑——它按自然段切、自动判成文章题，
      * 于是「下一页」会自动把这一页交出去、翻回去只是看结果。
+     *
+     * ⚠️ 三段都必须**够长**（各 100 字以上）：分页规则是"不足 100 字就与下一段并成一页"
+     * （见 domain/sections.ts 的 paginateArticle），段落太短的话整篇会被并成**一页**，
+     * 翻页这件事就一步都走不到了（这条断言实际这么红过一次）。
      */
     console.log('\n[界面渲染 · 逐页批改] 一篇多段原文：填一页 / 交一页 / 翻一页')
     const multiPageText = [
-      '生态文明建设是一场涉及生产方式、生活方式、思维方式和价值观念的深刻变革，需要全社会共同行动，久久为功。',
-      '我们把绿色发展摆在更加突出的位置，推动产业结构和能源结构加快调整，让良好生态环境成为高质量发展的支撑点。',
-      '下一步将健全生态保护补偿机制，完善相关法律法规，让保护者受益、使用者付费、破坏者赔偿真正落到实处。',
+      '生态文明建设是一场涉及生产方式、生活方式、思维方式和价值观念的深刻变革，需要全社会共同行动、久久为功。党的十八大以来，我们把绿色发展摆在更加突出的位置，推动产业结构和能源结构加快调整，让良好生态环境成为经济社会高质量发展的支撑点，也让绿色成为新时代中国发展最鲜明的底色。',
+      '在具体实践中，各地坚持山水林田湖草沙一体化保护和系统治理，统筹推进重要生态系统保护和修复重大工程，持续加强生物多样性保护，坚决打好污染防治攻坚战。这些年空气质量与地表水质量连年改善，长江黄河干流水质稳定达标，人民群众对生态环境的获得感明显增强。',
+      '下一步将健全生态保护补偿机制，完善相关法律法规，让保护者受益、使用者付费、破坏者赔偿真正落到实处。同时把绿色低碳理念融入生产生活的方方面面，推动形成人人、事事、时时崇尚生态文明的社会新风尚，让美丽中国建设成果更多更公平地惠及全体人民。',
     ].join('\n\n')
     /*
      * 多段原文从**界面**贴进去（走「自定义」那一栏的贴题流程）：

@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
 import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
+import { pageSourceOf } from '../domain/exercise-source'
 import type { Favorite } from '../domain/favorites'
 
 interface Props {
@@ -86,6 +87,18 @@ export function FavoritesView({ favorites, onRemove, onClear }: Props) {
                     ×
                   </button>
                 </div>
+
+                {/*
+                  这一处是从**哪一段**原文里来的（用户要求："收藏模式下，原文应该是当前一段的
+                  原文，而不是整篇文章"）。文章题按记录里的页号取那一页；其它题型就是那一段本身。
+                  取不到就整行不显示——不要拿整篇文章来充数。
+                */}
+                {pageSourceOf(favorite.exerciseId, favorite.sectionIndex) && (
+                  <p className="fav-source">
+                    <span className="fav-label">{favorite.mode === 'article' ? '原文·这一段' : '原文'}</span>
+                    {pageSourceOf(favorite.exerciseId, favorite.sectionIndex)}
+                  </p>
+                )}
 
                 {favorite.sentenceBefore && (
                   <p className="fav-sentence">

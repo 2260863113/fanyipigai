@@ -1,37 +1,38 @@
 /**
  * 选文章的弹窗：把某个「领域 × 方向」下的文章以**卡片**罗列，点一张即开始练。
  *
- * 只显示标题 + 来源 + 篇幅三样：
+ * 卡片上三样：
  *   - 标题让你认出是哪一篇；
- *   - 来源让"这是哪家媒体"一目了然（文章库只收中国官方对外媒体，见 ADR 0007）；
- *   - 篇幅（英译中计词数、中译英计汉字数）让你知道够不够赛制要求
- *     （英译汉 250–350 词、汉译英 200–300 字）。
+ *   - 来源让"这是哪家媒体"一目了然（文章库只收中国官方媒体，见 ADR 0007）；
+ *   - **全文篇幅 + 一共几页**——文章库现在是**整篇全文**（不再截成赛制篇幅的选段），
+ *     练习时按 100–200 一页切（见 domain/sections.ts），因此"共几页"才是该告诉用户的事。
  * 不在卡片上放原文摘要：那会把卡片撑得很高，而"要不要练这一篇"看标题与来源就够定了。
+ *
+ * ## 顺序：没练完的在前面，练完的排到最后
+ *
+ * 用户要求「整篇翻译完并批改的文章，以后『换一换』留到最后」。
+ * 选文章列表与「换一换」走的是同一个顺序函数（`orderForPicker`），因此两处一致；
+ * 练完的那些还会挂一个「已完成」的标记，点开也仍然能再练一遍。
  */
 
 import type { JSX } from 'react'
 import { Modal } from './Modal'
 import { articlesOf, hasArticles, labelOfDomain, type ArticleExcerpt, type ArticleDomain } from '../domain/articles'
+import { PAGE_RULE } from '../domain/sections'
+import { pageCountOf } from '../domain/exercise-source'
 import { DIRECTION_LABEL, type Direction } from '../domain/types'
+import { isCompleted, orderForPicker, type ProgressMap } from './article-progress'
 
-/** 篇幅落在赛制区间内吗。区间由 API 方向决定：英译汉计词、汉译英计字。 */
-function inBand(item: ArticleExcerpt): boolean {
-  const [min, max] = item.direction === 'en-to-zh' ? [250, 350] : [200, 300]
-  return item.units >= min && item.units <= max
-}
-
-function bandHint(item: ArticleExcerpt): string {
-  const [min, max] = item.direction === 'en-to-zh' ? [250, 350] : [200, 300]
+function unitsHint(item: ArticleExcerpt): string {
   const unit = item.direction === 'en-to-zh' ? '词' : '字'
-  return inBand(item)
-    ? `${item.units} ${unit}（符合赛制 ${min}–${max} ${unit}）`
-    : `${item.units} ${unit}（赛制要求 ${min}–${max} ${unit}）`
+  return `全文 ${item.units} ${unit} · 共 ${pageCountOf(item.id)} 页（每页 ${PAGE_RULE.min}–${PAGE_RULE.max} ${unit}）`
 }
 
 export function ArticlePickerModal({
   domain,
   direction,
   activeArticleId,
+  progress,
   onSwitchDirection,
   onPick,
   onClose,
@@ -40,12 +41,14 @@ export function ArticlePickerModal({
   direction: Direction
   /** 当前正在练的那一篇，用于在卡片上标出来 */
   activeArticleId: string | null
+  /** 文章进度（哪几页批过），用来标出"已完成"并把它排到最后 */
+  progress: ProgressMap
   /** 切方向（只在该方向有文章时可用） */
   onSwitchDirection: (direction: Direction) => void
   onPick: (article: ArticleExcerpt) => void
   onClose: () => void
 }): JSX.Element {
-  const articles = articlesOf(domain, direction)
+  const articles = orderForPicker(articlesOf(domain, direction), progress, (item) => pageCountOf(item.id))
   const directions: Direction[] = ['zh-to-en', 'en-to-zh']
 
   return (
@@ -87,23 +90,28 @@ export function ArticlePickerModal({
         </p>
       ) : (
         <ul className="article-cards">
-          {articles.map((item) => (
-            <li key={item.id}>
-              <button
-                type="button"
-                className={item.id === activeArticleId ? 'article-card article-card-active' : 'article-card'}
-                onClick={() => onPick(item)}
-              >
-                <span className="article-card-title">{item.title}</span>
-                <span className="article-card-meta">
-                  <span className="article-card-source">{item.source}</span>
-                  <span className={inBand(item) ? 'article-card-units' : 'article-card-units article-card-units-off'}>
-                    {bandHint(item)}
+          {articles.map((item) => {
+            const done = isCompleted(progress, item.id, pageCountOf(item.id))
+            return (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  className={item.id === activeArticleId ? 'article-card article-card-active' : 'article-card'}
+                  onClick={() => onPick(item)}
+                >
+                  <span className="article-card-title">
+                    {item.title}
+                    {/* 练完的排到最后，并且明说是练完的——不然用户会以为它被弄丢了 */}
+                    {done && <span className="article-card-done">已完成</span>}
                   </span>
-                </span>
-              </button>
-            </li>
-          ))}
+                  <span className="article-card-meta">
+                    <span className="article-card-source">{item.source}</span>
+                    <span className="article-card-units">{unitsHint(item)}</span>
+                  </span>
+                </button>
+              </li>
+            )
+          })}
         </ul>
       )}
     </Modal>
