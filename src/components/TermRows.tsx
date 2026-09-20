@@ -1,8 +1,10 @@
 /**
- * 术语题：上五栏原文、下五栏作答，一次译一组。
+ * 术语题：**五个等分的输入框**，一行一条。
  *
- * 用户的要求就是「原文分五栏、一栏一个术语、译文区也是五栏、一次在每一栏里各译一个」，
- * 因此这里的布局是一个**两列的表格**（左原文、右作答），五行一组。
+ * 版式是用户指定的："五个待翻译的术语用分割线隔开，即上下把区域分为五等份。
+ * 输入框也是分成五个输入框，也是用分割线分割，**右侧输入栏不需要再出现原文**"。
+ * 因此这里只有一列（输入框），与左边原文栏那五等份**用同一套等分与分割线**，
+ * 两栏的横线对得上，一眼能看出哪个框对应哪条术语。
  *
  * 与其它题型的两点不同：
  *   1. **没有整段作答文本**。别的题型作答是一篇文章/一段话，可以在上面画勾画；
@@ -40,36 +42,22 @@ export function TermRows({
 
   return (
     <div className="term-rows">
-      <div className="term-rows-head">
-        <span className="term-col-label">原文</span>
-        <span className="term-col-label">你的译文</span>
-        {verdicts && <span className="term-col-verdict">结果</span>}
-      </div>
-
       <ol className="term-list">
         {terms.map((term, row) => {
           const verdict = verdicts?.[row]
           const state = verdict ? (verdict.correct ? ' term-row-ok' : ' term-row-bad') : ''
           return (
             <li key={`${term.zh}-${row}`} className={`term-row${state}`}>
-              <span className="term-source" title={term.zh}>
-                {term.zh}
-                {!term.verified && (
-                  <span className="term-unverified" title="这一条的译法尚未人工核对，请以官方文件为准">
-                    译法待核对
-                  </span>
-                )}
-              </span>
               <input
                 type="text"
                 className="term-input"
                 value={answers[row] ?? ''}
-                placeholder="在这里写这一条的译文"
+                placeholder={`第 ${row + 1} 条的译文`}
                 onChange={(event) => onChange(row, event.target.value)}
                 // 判分之后锁住：要改就得先按「重新作答」（与文章模式的只读规矩一致）
                 disabled={disabled}
                 spellCheck={false}
-                aria-label={`第 ${row + 1} 条术语的译文`}
+                aria-label={`第 ${row + 1} 条术语的译文（${term.zh}）`}
               />
               {verdicts && (
                 <span className={verdict?.correct ? 'term-mark term-mark-ok' : 'term-mark term-mark-bad'}>

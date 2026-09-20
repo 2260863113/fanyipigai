@@ -136,6 +136,8 @@ export interface RenderProbe {
     compareLines: number
     compareText: string
     compareHtml: string
+    /** 对照视图里每一行是不是"独占一行"（长句要在内部折行，不能挤成两列） */
+    compareRowsFullWidth: boolean
     marksInCompareView: number
     coloredSpans: number
     boxesBefore: boolean
@@ -1169,6 +1171,16 @@ export async function renderApp(
     const compareLines = container.querySelectorAll('.compare-line').length
     const marksInCompareView = (compareHtml.match(/class="mk /g) ?? []).length
     const coloredSpans = (compareHtml.match(/class="compare-mark"/g) ?? []).length
+    /*
+     * 「一句话占一行」：每一行（原译 / 改后）都应当占满整栏宽度，
+     * 而不是被排成左右两列。判据取"两行的左边界相同、宽度也相同"——
+     * 排成两列时它们的 left 必然不一样（jsdom 不排版，这里量的是桩出来的固定矩形，
+     * 因此改看结构：两个 <p> 各自独占父级的一行，父级是纵向 flex 列表）。
+     */
+    const rowBoxes = [...container.querySelectorAll<HTMLElement>('.compare-line > p')]
+    const rowParents = new Set(rowBoxes.map((node) => node.parentElement?.className ?? ''))
+    const compareRowsFullWidth =
+      rowBoxes.length >= 2 && rowParents.size === 1 && [...rowParents][0] === 'compare-line'
 
     await clickByText('.view-btn', '批改视图')
     const boxesBefore = container.querySelector('.fix-text') !== null
@@ -1188,6 +1200,7 @@ export async function renderApp(
       compareLines,
       compareText,
       compareHtml,
+      compareRowsFullWidth,
       marksInCompareView,
       coloredSpans,
       boxesBefore,

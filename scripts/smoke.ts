@@ -165,6 +165,25 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       sentenceAround('It costs 3.5 euros in total. Then we left.', 10, 13) === 'It costs 3.5 euros in total.',
       '小数点不会被切碎',
     )
+    /*
+     * 逗号也算一句的结尾（用户要求"相当于按 , 。 " 来分"）。
+     * 因此收藏里的"那一截"是**逗号之间的一小段**，而不是语法意义上的完整句子。
+     */
+    {
+      const comma = 'A decade of work, which began in 2016, has turned the coast into a park.'
+      const pieces = splitSentenceSpans(comma).map((span) => comma.slice(span.from, span.to))
+      check(pieces.length === 3, `逗号也断句（实际 ${pieces.length} 段：${JSON.stringify(pieces)}）`)
+      check(pieces.join('') === comma, '按逗号切出来仍然是首尾相接、不重不漏', JSON.stringify(pieces))
+      const inSecond = sentenceAround(comma, comma.indexOf('began'), comma.indexOf('began') + 5)
+      check(
+        inSecond.includes('began') && !inSecond.includes('A decade'),
+        `落到第二段时只取那一小截（实际：${JSON.stringify(inSecond)}）`,
+        inSecond,
+      )
+      const zh = '过去十年，中国新增光伏装机超过世界其他地区，这一变化压低了不少成本。'
+      const zhPieces = splitSentenceSpans(zh).map((span) => zh.slice(span.from, span.to))
+      check(zhPieces.length === 3, `中文逗号也断句（实际 ${zhPieces.length} 段）`, JSON.stringify(zhPieces))
+    }
     check(
       sentenceAround('He said "stop." Then we left.', 9, 17).includes('stop'),
       '引号里的整句仍然是自足的一句',
@@ -1170,6 +1189,24 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(Boolean(views), '视图探针跑通了')
     if (views) {
       check(views.compareLines >= 1, `对照视图按句拆开（${views.compareLines} 句）`)
+      /*
+       * 版式（用户要求）：一句译文、一句修改后译文**交替排版，各占一行**。
+       * 因此每一组里应当是「原译」标签行 + 「改后」标签行，两者上下相邻、都占整行。
+       */
+      check(
+        /compare-label[^>]*>原译/.test(views.compareHtml) && /compare-label[^>]*>改后/.test(views.compareHtml),
+        '对照视图里「原译 / 改后」两句都带行首标签，交替排版',
+      )
+      const rowsInOrder = [...views.compareHtml.matchAll(/class="compare-(original|corrected)"/g)].map((match) => match[1])
+      check(
+        rowsInOrder.length >= 2 && rowsInOrder.every((kind, index) => (index % 2 === 0 ? kind === 'original' : kind === 'corrected')),
+        `每一组都是"先原译、后改后"两行（实际顺序：${rowsInOrder.join(' → ')}）`,
+        rowsInOrder.join(' → '),
+      )
+      check(
+        views.compareRowsFullWidth,
+        '那两行各自独占一行（同属一个纵向列表，不是排成左右两列）',
+      )
       check(views.marksInCompareView === 0, '对照视图里没有任何勾画（不划线、不填补）')
       check(views.coloredSpans >= 1, `对照视图保留了颜色区分（${views.coloredSpans} 处着色）`)
       check(

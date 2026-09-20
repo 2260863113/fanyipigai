@@ -9,6 +9,7 @@
 import type { JSX } from 'react'
 import { KIND_LABEL, type Exercise, type Mode } from '../domain/types'
 import type { Section } from '../domain/sections'
+import type { Term } from '../domain/terms'
 
 export function SourcePane({
   exercise,
@@ -29,6 +30,9 @@ export function SourcePane({
   onRotate,
   onOpenGenerator,
   onSectionChange,
+  onPickArticle,
+  onNextSentence,
+  terms = [],
 }: {
   exercise: Exercise
   mode: Mode
@@ -53,12 +57,48 @@ export function SourcePane({
   onRotate: () => void
   onOpenGenerator: () => void
   onSectionChange: (index: number) => void
+  /** 有这一项就显示「选择文章」（文章栏用），放在标题栏右侧靠左 */
+  onPickArticle?: () => void
+  /** 有这一项就显示「换一句」（句子栏用），与「选择文章」同一个位置 */
+  onNextSentence?: () => void
+  /**
+   * 术语题的条目（一组五条）。
+   *
+   * 有它就把原文栏画成"五等份、每份一条"（用户要求的术语题版式），
+   * 而不是一块整段文本——术语题本来就没有"一整段原文"。
+   */
+  terms?: readonly Term[]
 }): JSX.Element {
   return (
     <section className="pane pane-source">
       <header className="pane-head">
         <h2>原文</h2>
         <div className="head-meta">
+          {/*
+            「选择文章」与「换一句」放在**原文标题栏右侧、靠左**（用户要求）。
+            它们是"换这一篇原文"的动作，摆在原文栏才对得上；而且这个位置紧挨着标题，
+            视觉上是这一栏的头一组按钮，与右边的「换一换 / AI 出题」自然分开。
+          */}
+          {onPickArticle && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={onPickArticle}
+              title="按「领域 × 方向」以卡片罗列文章，选一篇来练"
+            >
+              选择文章
+            </button>
+          )}
+          {onNextSentence && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={onNextSentence}
+              title="在该领域的句子里往下走一句"
+            >
+              换一句
+            </button>
+          )}
           {isCustom ? (
             <button
               type="button"
@@ -111,9 +151,33 @@ export function SourcePane({
         </div>
       </header>
       <div className="pane-body">
-        <p className={mode === 'term' ? 'source-text source-term' : 'source-text'}>
-          {multiSection ? (currentSection?.text ?? currentSource) : currentSource}
-        </p>
+        {/*
+          术语题：原文栏里把五条术语**一行一条、等分成五份**（用户要求
+          "五个待翻译的术语用分割线隔开，即上下把区域分为五等份"）。
+
+          术语题没有"一段原文"可言——它一次给五条短语。因此这里不画那一整块文本，
+          而是列成五等份，每份一条；右边的作答栏也用同一套等分与分割线，
+          两栏的横线因此**对得上**，一眼能看出哪个输入框对应哪条术语。
+        */}
+        {mode === 'term' ? (
+          <ol className="term-source-list">
+            {terms.map((term, index) => (
+              <li key={`${term.zh}-${index}`} className="term-source-row">
+                <span className="term-source-index">{index + 1}</span>
+                <span className="term-source-text">
+                  {term.zh}
+                  {!term.verified && (
+                    <span className="term-unverified" title="这一条的译法尚未人工核对，请以官方文件为准">
+                      译法待核对
+                    </span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="source-text">{multiSection ? (currentSection?.text ?? currentSource) : currentSource}</p>
+        )}
         {/* 自己贴的题没有参考译文，那一栏就别摆个空壳子 */}
         {currentReference ? (
           <details className="reference">

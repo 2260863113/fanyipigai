@@ -154,20 +154,70 @@ try {
   )
   await sleep(700)
   const pane = await cdp.evaluate(
-    `({
-       activeTab: document.querySelector('.mode-tab-active')?.textContent?.trim() ?? null,
-       rows: document.querySelectorAll('.term-row').length,
-       sources: [...document.querySelectorAll('.term-source')].map((s) => s.textContent.trim()),
-       inputs: document.querySelectorAll('.term-input').length,
-       hasSubmit: [...document.querySelectorAll('.btn-primary')].some((b) => b.textContent.includes('提交批改')),
-       hasChip: (document.body.innerText || '').includes('本地判分'),
-       noAnnotated: !document.querySelector('.annotated'),
-     })`,
+    `(() => {
+       const rows = [...document.querySelectorAll('.term-row')];
+       const sourceRows = [...document.querySelectorAll('.term-source-row')];
+       return {
+         activeTab: document.querySelector('.mode-tab-active')?.textContent?.trim() ?? null,
+         rows: rows.length,
+         sources: sourceRows.map((s) => s.textContent.trim()),
+         inputs: document.querySelectorAll('.term-input').length,
+         hasSubmit: [...document.querySelectorAll('.btn-primary')].some((b) => b.textContent.includes('提交批改')),
+         hasChip: (document.body.innerText || '').includes('本地判分'),
+         noAnnotated: !document.querySelector('.annotated'),
+         /*
+          * 版式（用户要求）：五条术语在**原文栏**里五等分、用分割线隔开；
+          * 作答栏只有输入框、**不再出现原文**；两栏的横线对得上。
+          */
+         原文栏五等分: (() => {
+           const heights = sourceRows.map((r) => Math.round(r.getBoundingClientRect().height));
+           if (heights.length !== 5) return { 行数: heights.length };
+           const min = Math.min(...heights);
+           const max = Math.max(...heights);
+           return { 行数: 5, 最小: min, 最大: max, 等分: max - min <= 2 };
+         })(),
+         分割线: (() => {
+           const withLine = (selector) =>
+             [...document.querySelectorAll(selector)].filter((row) => {
+               const top = getComputedStyle(row).borderTopWidth;
+               return parseFloat(top) > 0;
+             }).length;
+           const sourceLines = withLine('.term-source-row');
+           const answerLines = withLine('.term-row');
+           return {
+             原文有线的行: sourceLines,
+             作答有线的行: answerLines,
+             原文五条之间四条线: sourceLines === 4,
+             作答五条之间四条线: answerLines === 4,
+           };
+         })(),
+         作答栏里没有原文: (() => {
+           const paneBody = document.querySelector('.pane-answer .pane-body');
+           const box = document.querySelector('.pane-answer .term-rows');
+           if (!paneBody || !box) return { 说明: '找不到作答栏' };
+           const sources = sourceRows.map((s) => (s.querySelector('.term-source-text')?.textContent || '').trim()).filter(Boolean);
+           const bodyText = paneBody.innerText || '';
+           return { 命中: sources.filter((s) => bodyText.includes(s)) };
+         })(),
+       };
+     })()`,
   )
   check(pane.activeTab === '术语', `切到术语栏（当前 ${pane.activeTab}）`)
-  check(pane.rows === 5, `原文是 5 行（实际 ${pane.rows}）`)
+  check(pane.rows === 5, `作答是 5 行（实际 ${pane.rows}）`)
   check(pane.inputs === 5, `作答也是 5 个框（实际 ${pane.inputs}）`)
-  check(pane.sources.every((s) => s.length > 0), '每行都有术语原文', pane.sources.join(' / '))
+  check(pane.sources.length === 5 && pane.sources.every((s) => s.length > 0), '原文栏里五行都有术语', pane.sources.join(' / '))
+  check(
+    pane.原文栏五等分?.等分 === true,
+    `原文栏上下五等分（行高 ${pane.原文栏五等分?.最小}–${pane.原文栏五等分?.最大}px）`,
+    JSON.stringify(pane.原文栏五等分),
+  )
+  check(pane.分割线?.原文五条之间四条线 === true, `原文五条之间有 4 条分割线（实际 ${pane.分割线?.原文有线的行}）`)
+  check(pane.分割线?.作答五条之间四条线 === true, `作答五条之间也有 4 条分割线（实际 ${pane.分割线?.作答有线的行}）`)
+  check(
+    (pane.作答栏里没有原文?.命中 ?? []).length === 0,
+    '右侧作答栏里不再出现原文（只有输入框）',
+    JSON.stringify(pane.作答栏里没有原文),
+  )
   check(pane.hasSubmit === true, '有「提交批改」按钮')
   check(pane.hasChip === true, '标明了「本地判分」（不交给 AI）')
   check(pane.noAnnotated === true, '术语题不渲染整段勾画（没有可勾画的整段文字）')

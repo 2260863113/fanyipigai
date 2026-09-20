@@ -922,7 +922,6 @@ export function App(): JSX.Element {
                 // 用户点领域是为了挑文章，所以顺手把选文章的弹窗打开（方向切换不打开）
                 if (next.domain !== articleSelection.domain) setArticlePickerOpen(true)
               }}
-              onPickArticle={() => setArticlePickerOpen(true)}
             />
           )}
 
@@ -930,6 +929,7 @@ export function App(): JSX.Element {
             句子栏只要**领域**：题目从该领域的文章里自动切句（见 sentence-exercise.ts）。
             刻意不给"选文章"与"方向"——用户的要求就是句子题只能选领域；
             方向由句子本身是中文还是英文决定，不需要人来选。
+            「换一句」也不在这一行：它挪到了「原文」标题栏右侧（与文章栏的「选择文章」同一个位置）。
           */}
           {tab === 'sentence' && (
             <DomainBar
@@ -940,12 +940,6 @@ export function App(): JSX.Element {
                 saveSelection(next)
                 // 换领域后换一道该领域的句子题，免得停在上个领域的那句上让人以为没生效
                 selectExercise(sentenceExerciseId(domain, 1))
-              }}
-              onNext={() => {
-                // 「换一句」：序号加一，在该领域的句子里往下走
-                const parsed = parseSentenceExerciseId(exercise.id)
-                const base = parsed?.domain === articleSelection.domain ? parsed.index : 1
-                selectExercise(sentenceExerciseId(articleSelection.domain, base + 1))
               }}
             />
           )}
@@ -968,6 +962,18 @@ export function App(): JSX.Element {
               currentSource={currentSource}
               currentReference={currentReference}
               onSectionChange={(next) => void goToSection(next)}
+              {...(isTermExercise ? { terms: activeTerms } : null)}
+              {...(tab === 'article' ? { onPickArticle: () => setArticlePickerOpen(true) } : null)}
+              {...(tab === 'sentence'
+                ? {
+                    onNextSentence: () => {
+                      // 「换一句」：序号加一，在该领域的句子里往下走
+                      const parsed = parseSentenceExerciseId(exercise.id)
+                      const base = parsed?.domain === articleSelection.domain ? parsed.index : 1
+                      selectExercise(sentenceExerciseId(articleSelection.domain, base + 1))
+                    },
+                  }
+                : null)}
               onRepaste={openPaste}
               onRotate={rotateSource}
               onOpenGenerator={openGenerator}

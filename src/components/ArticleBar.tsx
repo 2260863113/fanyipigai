@@ -26,11 +26,9 @@ export interface ArticleSelection {
 export function ArticleBar({
   selection,
   onChange,
-  onPickArticle,
 }: {
   selection: ArticleSelection
   onChange: (next: ArticleSelection) => void
-  onPickArticle: () => void
 }): JSX.Element {
   const [domainOpen, setDomainOpen] = useState(false)
   const domainRef = useRef<HTMLDivElement | null>(null)
@@ -120,11 +118,11 @@ export function ArticleBar({
         })}
       </div>
 
-      <div className="article-bar-right">
-        <button type="button" className="btn btn-primary" onClick={onPickArticle}>
-          选择文章
-        </button>
-      </div>
+      {/*
+        「选择文章」**不在这里**了：用户要求它挪到左边「原文」标题栏的右侧（靠左）。
+        这一行只留"领域 + 方向"两个控件——它们决定的是**范围**，
+        而"换哪一篇"是原文栏自己的事。
+      */}
     </div>
   )
 }

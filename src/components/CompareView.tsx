@@ -59,7 +59,13 @@ export function CompareView({
     <ol className="compare-list">
       {lines.map((line, index) => (
         <li className={line.changed ? 'compare-line' : 'compare-line compare-line-same'} key={`line-${index}`}>
+          {/*
+            两句一组、上下交替（用户要求："一句译文，一句修改后译文交替排版，一句话占一行"）。
+            行首给一个小标签，一眼分得清这一行是"你写的"还是"改成什么"。
+            两行都允许在内部自动折行（长句子不会被截断、也不会横向溢出）。
+          */}
           <p className="compare-original">
+            <span className="compare-label">原译</span>
             {line.originalSpans.map((part, partIndex) =>
               part.color ? (
                 <span
@@ -76,6 +82,7 @@ export function CompareView({
             )}
           </p>
           <p className="compare-corrected">
+            <span className="compare-label compare-label-after">改后</span>
             {line.corrected.map((part, partIndex) =>
               part.color ? (
                 <span

@@ -152,28 +152,63 @@ button {
   color: #8a5200;
 }
 
-/* ── 术语题：上五栏原文、下五栏作答 ───────────────────
-   一次一组 5 条，左原文右作答、一行一条。批改完全本地（见 domain/term-exercise.ts），
-   所以判分结果是逐条的 ✓/✗ 与右下角的逐条标准译法，而不是译文上的勾画。 */
+/* ── 术语题：五条术语五等分，一行一条、分割线隔开 ───────────
+   用户指定的版式："五个待翻译的术语用分割线隔开，即上下把区域分为五等份。
+   输入框也是分成五个输入框，也是用分割线分割，右侧输入栏不需要再出现原文"。
+
+   两栏（左原文、右作答）用**同一套等分**：都是 flex 列 + 每行 flex: 1 + 行间一条上边框，
+   因此两边的横线对得上，一眼能看出哪个输入框对应哪条术语。
+   行高各占 1fr，所以"上下五等份"是真的等分，而不是五行各按内容高度。
+   ⚠️ 改这里要连 .term-source-list 一起改，否则两栏的线会错位。 */
 
 .term-rows {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* 撑满整栏：五等分要有"整栏的高度"才谈得上等分 */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.term-rows-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 2.2em;
+/* 左栏那五条术语：与右栏一一对应 */
+.term-source-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.term-source-row {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
   gap: 10px;
-  padding: 0 2px 4px;
-  border-bottom: 1px solid var(--line);
+  padding: 6px 2px;
+  /* 分割线画在**行与行之间**：第一条不加，因此五份之间正好四条线 */
+  border-top: 1px solid var(--line);
 }
 
-.term-col-label,
-.term-col-verdict {
+.term-source-row:first-child {
+  border-top: none;
+}
+
+.term-source-index {
+  flex: none;
+  width: 1.4em;
+  text-align: right;
   font-size: 12px;
   color: var(--ink-faint);
+}
+
+.term-source-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  word-break: break-word;
 }
 
 .term-list {
@@ -182,21 +217,23 @@ button {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  /* 与左栏同一套等分：五等份、行间一条分割线 */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .term-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 2.2em;
-  gap: 10px;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
   align-items: center;
+  gap: 10px;
+  padding: 6px 2px;
+  border-top: 1px solid var(--line);
 }
 
-.term-source {
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--ink);
-  word-break: break-word;
+.term-row:first-child {
+  border-top: none;
 }
 
 /* 译法未人工核对时标出来——不假装它是权威答案 */
@@ -666,6 +703,19 @@ button {
   padding: 14px;
   display: flex;
   flex-direction: column;
+  /*
+   * 四栏都能滚，但**不显示侧边滚动条**（用户要求："原文和译文都不出现侧边滑动条，
+   * 直接滚轮操作"）。滚轮、触控板、键盘翻页照旧可用，只是不画那根条。
+   *
+   * 两种写法都要写：`scrollbar-width` 是标准属性（Firefox 与较新的 Chromium），
+   * `::-webkit-scrollbar` 兜住仍只认它的 Chromium/Safari。只写一个会有浏览器漏网。
+   */
+  scrollbar-width: none;
+}
+
+.pane-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .pane-body > * + * {
@@ -710,6 +760,13 @@ button {
   padding: 18px;
   display: flex;
   flex-direction: column;
+  /* 同上：能滚但不画滚动条 */
+  scrollbar-width: none;
+}
+
+.screen-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .screen-body > * + * {
@@ -2024,20 +2081,44 @@ button {
   opacity: 0.72;
 }
 
-.compare-original {
+/*
+ * 「一句译文、一句修改后译文」**各占一行、上下交替**（用户要求）。
+ * 两句都允许在内部自动折行——长句子不会被截断，也不会把栏撑宽。
+ */
+.compare-original,
+.compare-corrected {
   margin: 0;
   font-family: var(--serif);
+  line-height: 1.75;
+  /* 行内文字按普通规则折行；词内部不拆 */
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.compare-original {
   font-size: 16px;
-  line-height: 1.7;
   color: var(--ink-faint);
 }
 
 .compare-corrected {
-  margin: 2px 0 0;
-  font-family: var(--serif);
+  margin-top: 4px;
   font-size: 17px;
-  line-height: 1.7;
   color: var(--ink);
+}
+
+/* 行首那个小标签（原译 / 改后）：不占正文宽度，只帮人分清这两行是什么 */
+.compare-label {
+  display: inline-block;
+  min-width: 2.6em;
+  margin-right: 6px;
+  font-family: var(--sans);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+.compare-label-after {
+  color: var(--accent);
 }
 
 /*

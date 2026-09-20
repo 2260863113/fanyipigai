@@ -159,7 +159,18 @@ try {
        dirButtons: [...document.querySelectorAll('.dir-btn')].map((b) => b.textContent.trim()),
        dirActive: document.querySelector('.dir-btn-active')?.textContent?.trim() ?? null,
        dirDisabled: [...document.querySelectorAll('.dir-btn')].map((b) => b.disabled),
-       hasPickButton: [...document.querySelectorAll('.article-bar .btn')].some((b) => b.textContent.includes('选择文章')),
+       hasPickButton: [...document.querySelectorAll('.btn')].some((b) => b.textContent.includes('选择文章')),
+       /*
+        用户要求「选择文章」放在**原文标题栏的右侧、靠左**（与「换一换 / AI 出题」同一行，
+        但排在它们前面），而不是原来那一行；这里连位置一起验。
+       */
+       pickInSourceHead: (() => {
+         const head = document.querySelector('.pane-source .pane-head');
+         const btn = [...(head ? head.querySelectorAll('.btn') : [])].find((b) => b.textContent.includes('选择文章'));
+         if (!btn) return { 在原文标题栏: false };
+         const buttons = [...head.querySelectorAll('.btn')].map((b) => b.textContent.trim());
+         return { 在原文标题栏: true, 该栏按钮顺序: buttons };
+       })(),
        topbarHasSettings: [...document.querySelectorAll('.topbar .btn')].some((b) => b.textContent.trim() === '设置'),
        noOldCaseStrip: !document.querySelector('.case-strip'),
        noOldCaseTabs: document.querySelectorAll('.case-tab').length === 0,
@@ -175,6 +186,16 @@ try {
     JSON.stringify(bar.dirDisabled),
   )
   check(bar.hasPickButton === true, '有「选择文章」入口')
+  check(
+    bar.pickInSourceHead?.在原文标题栏 === true,
+    '「选择文章」在**原文标题栏**里（不是原来那一行）',
+    JSON.stringify(bar.pickInSourceHead),
+  )
+  check(
+    (bar.pickInSourceHead?.该栏按钮顺序 ?? [])[0] === '选择文章',
+    '它排在原文标题栏里最靠左的位置（在「换一换 / AI 出题」前面）',
+    JSON.stringify(bar.pickInSourceHead?.该栏按钮顺序),
+  )
   check(bar.topbarHasSettings === true, '「设置」仍在顶栏（每一栏都够得着）')
   check(bar.noOldCaseStrip === true && bar.noOldCaseTabs === true, '旧的一排题目按钮已彻底移除')
 
@@ -297,7 +318,7 @@ try {
 
   console.log('\n=== 6. 中译英方向也能选文章 ===')
   await cdp.evaluate(
-    `[...document.querySelectorAll('.article-bar .btn')].find((b) => b.textContent.includes('选择文章')).click()`,
+    `[...document.querySelectorAll('.pane-source .pane-head .btn')].find((b) => b.textContent.includes('选择文章')).click()`,
   )
   await sleep(600)
   const zhModal = await cdp.evaluate(

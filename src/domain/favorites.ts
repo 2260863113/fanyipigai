@@ -59,10 +59,18 @@ export interface Favorite {
  *
  * ⚠️ 这里**同时收了 `“` 与 `”`**（以及 ASCII 的 `"`），看起来违反常识，但有必要：
  * 用户报的原例正是 `… fds .“ sdf  fds .”someone says.`——句末那个点号后面跟的是
- * **左引号** `“`（他自己敲的时候左右不分）。若只认右引号，这个句子就切不开。
- * 一句话里"句点紧跟引号"本身就是很强的收句信号，方向不对也仍然该切。
+ * **左引号** `“`（他敲的时候左右不分）。若只认右引号，这个句子就切不开。
+ * 一句话里"标点紧跟引号"本身就是很强的收句信号，方向不对也仍然该切。
  */
 const TRAILING = /["'“”‘’）)】]/
+/**
+ * 句末标点。
+ *
+ * **逗号也算**（用户要求："收藏分句也把逗号算进去，相当于收藏的句子按 `,` `。` `"` 来分"）。
+ * 中文的顿号、分号同理——收藏要的是"这一处所在的**那一小截**"，而不是语法意义上的完整句子：
+ * 一整句里只有半截被改过时，把整句抄进收藏反而让人找不到重点。
+ */
+const END_PUNCT = /[,，。！？!?…；;、\n]/
 
 /** 一个句子的区间（`from` 含、`to` 不含）。 */
 export interface SentenceSpan {
@@ -75,11 +83,11 @@ export interface SentenceSpan {
  *
  * ## 句末的判据
  *
- * - `。！？!?…` 与换行：本身就是句末；
+ * - `,，。！？!?…；;、` 与换行：本身就是句末（**逗号也算**，见 END_PUNCT 的说明）；
  * - `.`：要"收得住"才算句末。两种算，一种不算：
  *   1. 点号后面是空白或结尾（`… total. Then…`）→ 算；
  *   2. 点号后面**紧跟一个收尾引号**（`… fds ."` / `… fds .”`）→ 算。
- *      **这就是用户报的那一条**：句子以引号收尾时，引号后面往往没有空格，
+ *      **这就是用户报过的那一条**：句子以引号收尾时，引号后面往往没有空格，
  *      不认它就会把三句粘成一句；
  *   3. 点号后面紧跟数字（`3.5`）→ 不算（小数点）。
  *
@@ -90,17 +98,17 @@ export interface SentenceSpan {
  * 引号留在前一句里，下一句从 `someone` 开始，两边接得严丝合缝。
  *
  * ⚠️ 已知取舍：`e.g.` 这类缩写后面跟空格（或跟引号）看起来就是一个句末，会被切开。
- * 要做对得引一张缩写表；而收藏里的一整句多切一刀只是少给一点上下文，不值得。
+ * 要做对得引一张缩写表；而收藏里的一截多切一刀只是少给一点上下文，不值得。
  */
 export function splitSentenceSpans(text: string): SentenceSpan[] {
-  /** 点号后面紧跟收尾引号 → 这一句到此为止 */
+  /** 标点后面紧跟收尾引号 → 这一句到此为止 */
   const quoteCloses = (index: number): boolean => {
     const after = text[index + 1]
     return after !== undefined && TRAILING.test(after)
   }
   const endsAt = (index: number): boolean => {
     const char = text[index] ?? ''
-    if (/[。！？!?…\n]/.test(char)) return true
+    if (END_PUNCT.test(char)) return true
     if (char !== '.') return false
     const after = text[index + 1]
     if (after !== undefined && /[0-9]/.test(after)) return false // 3.5
@@ -113,7 +121,7 @@ export function splitSentenceSpans(text: string): SentenceSpan[] {
     if (!endsAt(index)) continue
     let end = index + 1
     /*
-     * 句末标点后面的收尾引号属于这一句。ASCII 的 `"` 只在这个位置收（紧跟点号），
+     * 句末标点后面的收尾引号属于这一句。ASCII 的 `"` 只在这个位置收（紧跟标点），
      * 别处它可能是**开启**引号——`" sdf` 开头那个就是，不能被上一句抢走。
      */
     if (quoteCloses(index)) {

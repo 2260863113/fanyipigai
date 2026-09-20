@@ -16,12 +16,9 @@ import { ARTICLE_DOMAINS, labelOfDomain, type ArticleDomain } from '../domain/ar
 export function DomainBar({
   domain,
   onChange,
-  onNext,
 }: {
   domain: ArticleDomain
   onChange: (domain: ArticleDomain) => void
-  /** 换一句：在该领域的句子里往下走一条 */
-  onNext: () => void
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
@@ -84,16 +81,10 @@ export function DomainBar({
         )}
       </div>
 
-      <div className="article-bar-right">
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={onNext}
-          title="从该领域的文章里再挑一句"
-        >
-          换一句
-        </button>
-      </div>
+      {/*
+        「换一句」**不在这里**了：用户要求它挪到「选择文章」原来的位置——
+        也就是左边「原文」标题栏的右侧（靠左）。这一行只留领域下拉。
+      */}
     </div>
   )
 }

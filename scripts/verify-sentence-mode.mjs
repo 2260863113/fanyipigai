@@ -161,7 +161,15 @@ try {
        domain: document.querySelector('.domain-trigger-value')?.textContent?.trim() ?? null,
        hasPickArticle: [...document.querySelectorAll('.article-bar .btn')].some((b) => b.textContent.includes('选择文章')),
        hasDirection: document.querySelectorAll('.dir-btn').length,
-       hasNext: [...document.querySelectorAll('.article-bar .btn')].some((b) => b.textContent.includes('换一句')),
+       hasNext: [...document.querySelectorAll('.pane-source .pane-head .btn')].some((b) => b.textContent.includes('换一句')),
+       /*
+         「换一句」应当在**原文标题栏**里（用户要求：与文章栏的「选择文章」同一个位置）。
+       */
+       nextInSourceHead: (() => {
+         const head = document.querySelector('.pane-source .pane-head');
+         const btn = [...(head ? head.querySelectorAll('.btn') : [])].find((b) => b.textContent.includes('换一句'));
+         return { 在原文标题栏: Boolean(btn), 该栏按钮: [...(head ? head.querySelectorAll('.btn') : [])].map((b) => b.textContent.trim()) };
+       })(),
        source: (document.querySelector('.pane-source .source-text')?.textContent ?? '').trim(),
        hasInput: !!document.querySelector('.answer-input'),
      })`,
@@ -170,6 +178,11 @@ try {
   check(bar.hasPickArticle === false, '句子栏**没有**「选择文章」按钮（按要求不能选文章）')
   check(bar.hasDirection === 0, '句子栏没有方向切换（方向由句子本身决定）')
   check(bar.hasNext === true, '有「换一句」')
+  check(
+    bar.nextInSourceHead?.在原文标题栏 === true,
+    '「换一句」在**原文标题栏**里（与文章栏的「选择文章」同一个位置）',
+    JSON.stringify(bar.nextInSourceHead),
+  )
   check(bar.source.length > 0, '原文栏给出了一句句子', bar.source.slice(0, 60))
   check(bar.hasInput === true, '可以作答')
   console.log(`      当前句子：${bar.source.slice(0, 70)}`)
@@ -186,7 +199,7 @@ try {
   console.log('\n=== 4. 「换一句」换到另一句 ===')
   const first = bar.source
   await cdp.evaluate(
-    "[...document.querySelectorAll('.article-bar .btn')].find((b) => b.textContent.includes('换一句')).click()",
+    "[...document.querySelectorAll('.pane-source .pane-head .btn')].find((b) => b.textContent.includes('换一句')).click()",
   )
   await sleep(700)
   const second = await cdp.evaluate("(document.querySelector('.pane-source .source-text')?.textContent ?? '').trim()")
