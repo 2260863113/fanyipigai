@@ -313,16 +313,34 @@ export const DIRECTION_LABEL: Record<Direction, string> = {
  * 「练习记录」不是题型，而是所有题型的记录汇总页，因此单独放在最后。
  * 「自定义」也不是题型：它是用户自己贴一篇原文进来练的入口（见 domain/custom.ts）。
  * 「收藏」同样不是题型：它是用户自己挑出来的那些句子（见 domain/favorites.ts）。
+ *
+ * `hidden` 表示**不在导航栏出现**。目前只有「段落」：
+ * 文章题本来就把文章按自然段切、逐段作答，另开一个「段落」栏与它重复，
+ * 因此从导航里撤掉。**类型、内置题目与相关代码都留着**（用户选的是"只从导航隐藏"），
+ * 以后想恢复只需把这个标记去掉，不必重写。
  */
-export const MODE_TABS: ReadonlyArray<{ mode: Mode | 'records' | 'custom' | 'favorites'; label: string; hint: string }> = [
+export const MODE_TABS: ReadonlyArray<{
+  mode: Mode | 'records' | 'custom' | 'favorites'
+  label: string
+  hint: string
+  hidden?: boolean
+}> = [
   { mode: 'article', label: '文章', hint: '整篇语篇翻译，英译汉 250–350 词，汉译英 200–300 字' },
-  { mode: 'paragraph', label: '段落', hint: '段落翻译，考查句间衔接与语篇连贯' },
+  {
+    mode: 'paragraph',
+    label: '段落',
+    hint: '段落翻译，考查句间衔接与语篇连贯',
+    hidden: true,
+  },
   { mode: 'sentence', label: '句子', hint: '单句翻译，改错最直观，适合打磨细节' },
   { mode: 'term', label: '术语', hint: '关键术语与中华思想文化术语，按官方标准译法判定' },
   { mode: 'custom', label: '自定义', hint: '自己贴一篇原文来练，不用等我们出题（只贴原文即可）' },
   { mode: 'favorites', label: '收藏', hint: '做题时点「收藏」存下来的那些句子，回来复习用' },
   { mode: 'records', label: '练习记录', hint: '查看全部练习记录与当时的完整批改' },
 ]
+
+/** 导航栏上真正显示的那几项（过滤掉 hidden 的）。 */
+export const VISIBLE_MODE_TABS = MODE_TABS.filter((item) => !item.hidden)
 
 /** 每类题型的评价单位。文章题按段调用 API，因此单位是"段落"。 */
 export const UNIT_LABEL: Record<Mode, string> = {

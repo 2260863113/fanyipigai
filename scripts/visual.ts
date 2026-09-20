@@ -264,11 +264,17 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                  await sleep(400);
                }
                if (caseName) {
+                 /*
+                  * 题目切换条现在只在「文章」栏有（文章库供题时按题号切），
+                  * 句子栏/术语栏没有它。因此**找不到就跳过**，不要当成失败——
+                  * 那些栏的题目由"切题型"这一步就定下来了。
+                  */
                  const item = [...document.querySelectorAll('.case-tab')]
                    .find((b) => b.textContent.includes(caseName));
-                 if (!item) return '找不到题目：' + caseName;
-                 item.click();
-                 await sleep(400);
+                 if (item) {
+                   item.click();
+                   await sleep(400);
+                 }
                }
                return 'ok';
              })()`,
@@ -280,7 +286,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
           // 真的把示例作答打进输入框再点提交，这样截到的是真实交互后的界面。
           // 必须用原生 setter + input 事件，React 才会收到这次受控更新。
           // 分段题要求每段都写完才允许提交，因此这里逐段填入。
-          const sections = answerSectionsByExercise.get(shot.exerciseId ?? DEFAULT_EXERCISE_ID) ?? []
+          const fixtureSections = answerSectionsByExercise.get(shot.exerciseId ?? DEFAULT_EXERCISE_ID) ?? []
           const outcome = await cdp.evaluate(
             `(async () => {
                const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -289,7 +295,28 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                  setter.call(el, value);
                  el.dispatchEvent(new Event('input', { bubbles: true }));
                };
-               const sections = ${JSON.stringify(sections)};
+               /*
+                * 优先用"题目编号 → 示例作答"表里的那段；表里没有（文章库/句子库供题的栏，
+                * 它们没有示例作答）就把**屏幕上的原文**当作答打进去。
+                * 这样提交流程照样走完，截图反映的是真实交互后的界面。
+                */
+               const fromFixture = ${JSON.stringify(fixtureSections)};
+               /*
+                * 要送哪一段作答：
+                *   - 屏幕上**有分段导航**（文章题那种逐段作答）→ 用表里的示例作答逐段填；
+                *   - 表里有示例、屏幕上是单段题 → 也送**表里的示例作答**，
+                *     这样接口桩能认出它是哪道内置示例，从而回一批批注，
+                *     截图才点得到勾画（否则回的是"没有批注"的空结果，02-result 无点可点）；
+                *   - 表里没有（文章库/句子库供题）→ 只好把屏幕原文当作答。
+                */
+               const onScreen = (document.querySelector('.pane-source .source-text')?.textContent ?? '').trim();
+               const hasSectionNav = !!document.querySelector('.section-nav');
+               const sections = fromFixture.length === 0
+                 ? [onScreen]
+                 : hasSectionNav
+                   ? fromFixture
+                   : [fromFixture.join('\\n\\n')];
+               if (!sections[0]) return '原文栏是空的，拿不到可填的作答';
                for (let i = 0; i < sections.length; i++) {
                  if (i > 0) {
                    const next = [...document.querySelectorAll('.section-nav .btn')]
@@ -303,7 +330,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                  setValue(ta, sections[i]);
                  await sleep(250);
                }
-               const btn = document.querySelector('.btn-primary');
+               const btn = document.querySelector('.pane-answer .btn-primary');
                if (!btn) return '找不到提交按钮';
                if (btn.disabled) return '提交按钮是禁用的（共 ' + sections.length + ' 段）';
                btn.click();

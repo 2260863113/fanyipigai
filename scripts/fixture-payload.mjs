@@ -26,8 +26,15 @@ export async function buildFixturePayload(root, exerciseId) {
     `import { validateCorrection } from ${JSON.stringify(path.join(root, 'src', 'domain', 'validate.ts'))}`,
     `import { toAiShape } from ${JSON.stringify(path.join(root, 'src', 'domain', 'parse.ts'))}`,
     `const wanted = ${JSON.stringify(exerciseId ?? null)}`,
-    `const testCase = wanted ? MOCK_CASES.find((c) => c.exercise.id === wanted) : MOCK_CASES[0]`,
-    `if (!testCase) throw new Error('找不到题目：' + wanted)`,
+    /*
+     * 只有**内置题库**（MOCK_CASES）里的题号才有"示例作答 → 假批改"这回事。
+     * 文章库 / 句子库 / 术语库供题的栏，题号不在题库里，这里**退回题库第一道**而不是抛错：
+     * 接口桩的响应内容本来就不代表真实批改，用它当兜底足够了；
+     * 抛错则会让整张截图流程挂掉（实测：句子栏改成文章库供题后，
+     * 截图脚本因为"找不到题目：sentence-economy-1"整条失败）。
+     */
+    `const testCase = (wanted ? MOCK_CASES.find((c) => c.exercise.id === wanted) : null) ?? MOCK_CASES[0]`,
+    `if (!testCase) throw new Error('题库为空')`,
     `export const answer = testCase.sampleAnswer`,
     `const correction = fixtureCorrectionFor(testCase.exercise.id, answer)`,
     `if (!correction) throw new Error('内置示例与作答对不上，无法构造假批改')`,

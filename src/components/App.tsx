@@ -43,6 +43,13 @@ import { TopBar } from './TopBar'
 import { ArticleBar } from './ArticleBar'
 import { ArticlePickerModal } from './ArticlePickerModal'
 import { TermRows } from './TermRows'
+import { DomainBar } from './DomainBar'
+import {
+  exerciseOfSentence,
+  parseSentenceExerciseId,
+  sentenceExerciseId,
+  sentenceForExerciseId,
+} from '../domain/sentence-exercise'
 import { articleById, ARTICLE_EXCERPTS, articlesOf } from '../domain/articles'
 import { exerciseOfArticle } from '../domain/article-exercise'
 import { exerciseOfTerms, correctionFromVerdicts, judgeTerms, termExerciseId, termsForExerciseId } from '../domain/term-exercise'
@@ -137,6 +144,10 @@ export function App(): JSX.Element {
    */
   const activeTerms = useMemo(() => termsForExerciseId(exerciseId), [exerciseId])
   const isTermExercise = activeTerms.length > 0
+  /**
+   * 当前是不是**句子库**里的一道句子题（从该领域文章里切出来的单句）。
+   */
+  const activeSentence = useMemo(() => sentenceForExerciseId(exerciseId), [exerciseId])
   const exercise: Exercise =
     isCustom && customExercise
       ? customExercise
@@ -144,7 +155,9 @@ export function App(): JSX.Element {
         ? exerciseOfArticle(activeArticle)
         : isTermExercise
           ? exerciseOfTerms(exerciseId, activeTerms)
-          : activeCase.exercise
+          : activeSentence
+            ? exerciseOfSentence(exerciseId, activeSentence)
+            : activeCase.exercise
   const mode = exercise.mode
   /** 这道题自己的会话状态（作答、结果、看哪一面、第几份原文、AI 生成的题池） */
   const session = sessionOf(sessions, exercise.id)
@@ -302,6 +315,14 @@ export function App(): JSX.Element {
      */
     if (nextTab === 'term') {
       selectExercise(termExerciseId(articleSelection.domain, 1))
+      return
+    }
+    /*
+     * 句子栏也由**文章库**供题：进去就落到上次那个领域的第一句。
+     * （内置的句子题数据仍在 mock.ts 里，只是不再从界面进入——与「段落」栏同样处理。）
+     */
+    if (nextTab === 'sentence') {
+      selectExercise(sentenceExerciseId(articleSelection.domain, 1))
       return
     }
     // 切题型只换"当前在看哪道题"，不清空任何一道题的作答与结果
@@ -632,8 +653,8 @@ export function App(): JSX.Element {
       ) : (
         <>
           {/*
-            文章库那一行只在「文章」栏出现：领域与方向是**文章库**的组织方式，
-            段落/句子/术语栏仍然用内置题库，摆一个点了没用的下拉反而更乱。
+            文章栏：领域下拉 · 选择文章 · 方向切换（见 ArticleBar）。
+            句子栏只用领域（见 DomainBar）；术语栏由术语库供题、不需要这一行控件。
           */}
           {tab === 'article' && (
             <ArticleBar
@@ -648,6 +669,30 @@ export function App(): JSX.Element {
                 if (next.domain !== articleSelection.domain) setArticlePickerOpen(true)
               }}
               onPickArticle={() => setArticlePickerOpen(true)}
+            />
+          )}
+
+          {/*
+            句子栏只要**领域**：题目从该领域的文章里自动切句（见 sentence-exercise.ts）。
+            刻意不给"选文章"与"方向"——用户的要求就是句子题只能选领域；
+            方向由句子本身是中文还是英文决定，不需要人来选。
+          */}
+          {tab === 'sentence' && (
+            <DomainBar
+              domain={articleSelection.domain}
+              onChange={(domain) => {
+                const next = { ...articleSelection, domain }
+                setArticleSelection(next)
+                saveSelection(next)
+                // 换领域后换一道该领域的句子题，免得停在上个领域的那句上让人以为没生效
+                selectExercise(sentenceExerciseId(domain, 1))
+              }}
+              onNext={() => {
+                // 「换一句」：序号加一，在该领域的句子里往下走
+                const parsed = parseSentenceExerciseId(exercise.id)
+                const base = parsed?.domain === articleSelection.domain ? parsed.index : 1
+                selectExercise(sentenceExerciseId(articleSelection.domain, base + 1))
+              }}
             />
           )}
 

@@ -6,7 +6,7 @@
  */
 
 import type { JSX, ReactNode } from 'react'
-import { MODE_TABS, type Mode } from '../domain/types'
+import { VISIBLE_MODE_TABS, type Mode } from '../domain/types'
 
 /** 顶栏导航的取值：四类题型 + 三个独立页面（它们不是题型）。 */
 export type NavTab = Mode | 'records' | 'custom' | 'favorites'
@@ -31,7 +31,7 @@ export function TopBar({
       </div>
 
       <nav className="mode-tabs" aria-label="题型与记录">
-        {MODE_TABS.map((item) => (
+        {VISIBLE_MODE_TABS.map((item) => (
           <button
             key={item.mode}
             type="button"

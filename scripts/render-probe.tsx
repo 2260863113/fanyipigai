@@ -258,16 +258,66 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number; lastBody:
       source?: string
     }
     const submitted = (body.answerSections ?? []).map((section) => section.text).join('\n\n')
-    const exercise =
+    /*
+     * 找到"提交的作答属于哪一道内置示例"。
+     *
+     * 只有配上**示例作答本身**，内置批改里的锚点才校验得过——批注的位置是按那段文字算出来的，
+     * 换一段文字去核对必然全部对不上（校验器如实拒掉，界面上一处标注都不显示）。
+     *
+     * 文章库 / 句子库那些题的作答是探针自动填的、不属于任何示例。这时**不编批注**，
+     * 直接回一份"没有错误、也没有亮点"的合法结果：界面照样走完提交 → 渲染 → 计分 → 记录，
+     * 结构断言（四栏、接口只调一次、记录页、设置）全部有效；
+     * 只是没有勾画可点，因此**不该**拿"有几处标注"这类内容断言去要求它。
+     */
+    const matched =
       MOCK_CASES.find((item) => item.sampleAnswer.trim() === submitted.trim()) ??
-      MOCK_CASES.find((item) => item.exercise.source === body.source) ??
-      MOCK_CASES[0]
-    if (!exercise) throw new Error('题库为空')
+      MOCK_CASES.find((item) => item.exercise.source === body.source)
 
-    const correction = fixtureCorrectionFor(exercise.exercise.id, submitted)
-    if (!correction) throw new Error('渲染测试：提交的作答对不上任何内置示例')
+    if (!matched) {
+      /*
+       * 作答不属于任何内置示例（文章库 / 句子库那些题，作答是探针自动填的）：
+       * 回一份**与提交文字自洽**的批改——从提交的作答里取一个片段当亮点。
+       *
+       * 为什么不能凭空编一批批注：批注的位置是锚点（区间 + 原文片段），
+       * 位置与提交文字对不上时校验器会如实拒掉，界面上一处都不显示，
+       * 于是"译文上有带批注的勾画"这类结构断言就废了。
+       * 取真实片段当亮点，位置与文字天然自洽，勾画与对照视图就有内容可渲染，
+       * 结构断言（四栏、接口只调一次、记录页、设置）全部有效。
+       */
+      const excerpt = submitted.trim().split(/\s+/).slice(0, 4).join(' ')
+      const anchorStart = excerpt ? submitted.indexOf(excerpt) : 0
+      const highlight = {
+        id: 'h1',
+        anchor: { start: Math.max(0, anchorStart), end: Math.max(0, anchorStart) + excerpt.length, snippet: excerpt },
+        comment: '渲染测试用的固定亮点（作答不属于任何内置示例时由此兜底）',
+      }
+      const checkedEmpty = validateCorrection([], [highlight], submitted)
+      const payload = {
+        ok: true,
+        attempts: 1,
+        sectionCount: (body.answerSections ?? []).length,
+        repaired: checkedEmpty.rejections.map((rejection) => `${rejection.id}：${rejection.message}`),
+        correction: { errors: [], highlights: [highlight] },
+        validated: {
+          errors: [],
+          highlights: checkedEmpty.highlights.map((entry) => ({ highlight: entry.highlight, span: entry.span })),
+          rejections: checkedEmpty.rejections,
+        },
+        raw: JSON.stringify({ errors: [], highlights: [highlight] }, null, 2),
+      }
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    const exercise = matched
+    const answerForFixture = exercise.sampleAnswer
+
+    const correction = fixtureCorrectionFor(exercise.exercise.id, answerForFixture)
+    if (!correction) throw new Error('渲染测试：取不到内置示例的批改结果')
     // 与真实接口保持严格同构：真实接口也会把位置校验的结果与 AI 原始返回一起带回来
-    const checked = validateCorrection(correction.errors, correction.highlights, submitted)
+    const checked = validateCorrection(correction.errors, correction.highlights, answerForFixture)
     const payload = {
       ok: true,
       attempts: 1,
@@ -311,6 +361,11 @@ export async function renderApp(
     seedCustom?: string
     /** 走一遍「自定义」贴题流程，并把这一段期间贴进去的原文填成这个 */
     checkCustom?: string
+    /**
+     * 目标题**不在内置题库里**时的题型（文章库 / 句子库 / 术语库供题的栏）。
+     * 指定了 exerciseId 又查不到内置示例时，用它决定切到哪一栏；不指定就按文章栏。
+     */
+    mode?: Mode
   } = {},
 ): Promise<RenderProbe> {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -410,11 +465,20 @@ export async function renderApp(
   //
   // 注意：默认题目是一篇分段文章，而文章模式要求每段都写完才允许提交，
   // 因此这里按段落逐段填入，而不是只填一段。
-  const sample = options.exerciseId
-    ? (MOCK_CASES.find((item) => item.exercise.id === options.exerciseId) ?? MOCK_CASES[0])
-    : MOCK_CASES[0]
-  if (!sample) throw new Error('题库为空')
-  const answerSections = splitSections(sample.sampleAnswer)
+  /*
+   * 目标题目与"要打进去的作答"。
+   *
+   * 题库里有示例作答的（MOCK_CASES）优先用示例——那样批改的是真实的错误样本，
+   * 勾画、对照视图这些断言才有内容可测。
+   *
+   * 但**「句子」栏现在由文章库供题**（从该领域文章里切的单句），内置句子题不再从界面可达；
+   * 「文章」栏同理。这类题没有示例作答，探针就把**屏幕上的原文本身**当作答打进去——
+   * 结构断言（提交后是否换成带批注的译文、四栏是否就位、接口是否只调一次）照样成立，
+   * 只是批改内容来自接口桩的固定响应，不代表真实错误样本。
+   */
+  const builtIn = MOCK_CASES.find((item) => item.exercise.id === options.exerciseId)
+  const targetMode = builtIn ? builtIn.exercise.mode : (options.mode ?? 'article')
+  const answerSections = builtIn ? splitSections(builtIn.sampleAnswer) : []
 
   /*
    * 切到目标题型（必要时再切题目）。
@@ -426,14 +490,21 @@ export async function renderApp(
    * （表现为"提交后调用了批改接口 0 次"）。本探针用的是题库示例作答，
    * 因此必须显式把自己切到那道题所在的题型。
    */
-  const targetMode = sample.exercise.mode
   const activeTabLabel = container.querySelector('.mode-tab.mode-tab-active')?.textContent?.trim()
   if (process.env.DSH_PROBE_DEBUG) {
     console.log(
       `[probe] 目标题型=${targetMode}(${MODE_TAB_LABEL[targetMode]}) 当前高亮=${activeTabLabel ?? '(无)'} ` +
-        `共 ${container.querySelectorAll('.mode-tab').length} 个题型标签`,
+        `共 ${container.querySelectorAll('.mode-tab').length} 个题型标签 内置题=${builtIn?.exercise.id ?? '(无)'}`,
     )
   }
+  /*
+   * 切到目标题型。
+   *
+   * 为什么**无条件**切（而不是"内置题就不切"）：界面的默认落点是文章栏，
+   * 若目标题属于别的栏，不切就会把作答打到文章栏那道题上——提交按钮一直是禁用的，
+   * 表现为"提交后调用了批改接口 0 次"（踩过两次）。
+   * 探针因此显式把自己切到目标题型，再（若目标是内置示例）靠题号切到那道题。
+   */
   const alreadyThere = activeTabLabel === MODE_TAB_LABEL[targetMode]
   if (!alreadyThere) {
     const modeTab = [...container.querySelectorAll<HTMLButtonElement>('.mode-tab')].find(
@@ -445,10 +516,10 @@ export async function renderApp(
       })
     }
   }
-  if (options.exerciseId) {
-    // 该题型下有多道题时靠题号切；文章库那类没有按钮的题干不在此列
+  if (options.exerciseId && builtIn) {
+    // 该题型下有多道题时靠题号切；文章库/句子库那类没有按钮的题干不在此列
     const caseTab = [...container.querySelectorAll<HTMLButtonElement>('.case-tab')].find((node) =>
-      node.textContent?.includes(sample.exercise.topic),
+      node.textContent?.includes(builtIn.exercise.topic),
     )
     if (caseTab) {
       await act(async () => {
@@ -477,7 +548,22 @@ export async function renderApp(
     })
   }
 
-  for (const [index, section] of answerSections.entries()) {
+  /*
+   * 没有内置示例作答（文章库/句子库供题的栏）时，把**屏幕上的原文**当作答打进去。
+   * 这样提交流程照样能跑通，结构断言（提交后换成带批注的译文、四栏就位、只调一次接口）
+   * 仍然有效；批改内容来自接口桩的固定响应，不代表真实错误样本。
+   */
+  const fallbackAnswer = (): string =>
+    (container.querySelector('.pane-source .source-text')?.textContent ?? '').trim()
+  const sectionsToFill: string[] = answerSections.length > 0 ? answerSections.map((s) => s.text) : [fallbackAnswer()]
+  if (process.env.DSH_PROBE_DEBUG) {
+    console.log(
+      `[probe] 内置题=${builtIn ? builtIn.exercise.id : '(无，用屏幕原文当作答)'} 段数=${sectionsToFill.length} ` +
+        `首段=${JSON.stringify(sectionsToFill[0]?.slice(0, 40))} 输入框=${!!container.querySelector('.answer-input')}`,
+    )
+  }
+
+  for (const [index, section] of sectionsToFill.entries()) {
     const before = navText()
     if (index > 0) {
       const next = [...container.querySelectorAll<HTMLButtonElement>('.section-nav .btn')].find((button) =>
@@ -489,7 +575,16 @@ export async function renderApp(
       })
     }
     const afterNav = navText()
-    await typeInto(section.text)
+    await typeInto(section)
+    if (process.env.DSH_PROBE_DEBUG && index === 0) {
+      const area = container.querySelector<HTMLTextAreaElement>('.answer-input')
+      const submit = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
+      console.log(
+        `[probe] 打完第一段：textarea.value=${JSON.stringify((area?.value ?? '').slice(0, 40))} ` +
+          `提交按钮=${submit ? (submit.disabled ? '禁用' : '可点') : '(找不到)'} ` +
+          `按钮文案=${JSON.stringify(submit?.textContent?.trim() ?? '')}`,
+      )
+    }
     // 注意：typedInto 要在**填完之后**读，否则记下的是上一次的残留
     const typedInto = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
     sectionNavTrace.push({ step: index, before, after: afterNav, typedInto })
@@ -542,7 +637,13 @@ export async function renderApp(
     }
   }
 
-  const submit = container.querySelector<HTMLButtonElement>('.btn-primary')
+  /*
+   * 必须用**限定到作答栏**的选择器，不能只写 `.btn-primary`：
+   * 顶栏/文章栏/句子栏里也有 primary 按钮（例如句子栏的「换一句」），
+   * 而它在 DOM 里排在作答栏**前面**，`querySelector` 会先命中它——
+   * 于是"点提交"实际点成了"换一句"，表现为"提交后调用了批改接口 0 次"（踩过）。
+   */
+  const submit = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
   if (!submit) throw new Error('找不到「提交批改」按钮')
   await act(async () => {
     submit.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
@@ -707,13 +808,13 @@ export async function renderApp(
 
     // 切到别的题型，再切回来
     await clickTab('术语')
-    await clickTab(MODE_TAB_LABEL[sample.exercise.mode] ?? '文章')
+    await clickTab(MODE_TAB_LABEL[targetMode] ?? '文章')
 
     const afterReturn = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
     survivedTabRoundTrip = { typed: afterTyping, afterReturn }
 
     // 再提交一次并把界面留在结果态，方便后面的断言（此时第一步已被切走，需要重新填满分段）
-    for (const [index, section] of answerSections.entries()) {
+    for (const [index, section] of sectionsToFill.entries()) {
       if (index > 0) {
         const next = [...container.querySelectorAll<HTMLButtonElement>('.section-nav .btn')].find((button) =>
           button.textContent?.includes('下一段'),
@@ -724,9 +825,9 @@ export async function renderApp(
           })
         }
       }
-      await typeInto(section.text)
+      await typeInto(section)
     }
-    const submitAgain = container.querySelector<HTMLButtonElement>('.btn-primary')
+    const submitAgain = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
     if (submitAgain && !submitAgain.disabled) {
       await act(async () => {
         submitAgain.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))

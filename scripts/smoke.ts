@@ -18,6 +18,7 @@ import { placeFixBoxes, type FixBoxInput } from '../src/domain/fix-layout'
 import { buildCompareLines, splitSentences } from '../src/domain/compare'
 import { renderApp } from './render-probe'
 import { DIRECTION_LABEL, KIND_LABEL, type Direction, type Mode } from '../src/domain/types'
+import { ARTICLE_DOMAINS } from '../src/domain/articles'
 import { CATEGORY_LABEL, CATEGORY_PRIORITY, ERROR_CATEGORY_SPECS, HARD_CATEGORIES } from '../src/domain/types'
 import { directionOf, modeOf } from '../src/domain/custom'
 import { classifyFailure } from '../vite-plugin-judge-api'
@@ -379,12 +380,14 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   console.log('\n[界面渲染] 在 jsdom 中挂载界面并走一遍提交 → 批改 → 点批注')
   try {
     /*
-     * 显式指定 sentence-002：这一块要"自动填示例作答再提交"，因此必须用**带示例作答的内置题**。
-     * 不能依赖界面的默认落点——「文章」栏现在由文章库供题（真实新闻选段），
-     * 而文章库的选段没有示例作答，探针打进去的字不会让提交按钮可用
-     * （症状是"提交后调用了批改接口 0 次"，一路查下来根因在这里）。
+     * 用一道**句子库**的题：探针切到句子栏、把屏幕上的原文当作答打进去。
+     * 作答不属于任何内置示例，因此接口桩会回一份与提交文字自洽的批改
+     * （见 render-probe 里的说明），结构断言照样有效。
      */
-    const rendered = await renderApp({ exerciseId: 'sentence-002' })
+    const rendered = await renderApp({
+      exerciseId: `sentence-${ARTICLE_DOMAINS[0]?.id ?? 'economy'}-1`,
+      mode: 'sentence',
+    })
     check(rendered.html.length > 0, '界面渲染出了内容')
     check(rendered.judgeCalls === 1, `提交后调用了批改接口 ${rendered.judgeCalls} 次`)
 
@@ -406,9 +409,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(rendered.composeStageHadInput, '提交前右屏是作答输入框')
 
     // 布局要求：左边整页原文，右边整页作答；提交后结果在右边同一个位置替换掉输入框
+    // 「段落」栏已从导航撤掉（文章题本来就按自然段切、逐段作答，另开一栏是重复），
+    // 因此导航上是六个：四类题型去掉段落 + 自定义 + 收藏 + 练习记录
     check(
-      rendered.modeTabLabels.join(',') === '文章,段落,句子,术语,自定义,收藏,练习记录',
-      `顶部导航有四个题型、自定义、收藏与练习记录：${rendered.modeTabLabels.join(' / ')}`,
+      rendered.modeTabLabels.join(',') === '文章,句子,术语,自定义,收藏,练习记录',
+      `顶部导航有文章/句子/术语、自定义、收藏与练习记录（实际：${rendered.modeTabLabels.join(' / ')}）`,
     )
     check(rendered.sampleIds.length >= 4, `题库覆盖 ${rendered.sampleIds.length} 道示例，四类题型都有题`)
 
@@ -819,12 +824,15 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
     roundTrip.restore()
 
-    // 段落模式也必须有「换一换」：这是用户明确提过的（此前只有段落-002 有备选）
-    console.log('\n[界面渲染 · 换一换] 段落模式的默认题也要能换')
-    const paragraphProbe = await renderApp({ exerciseId: 'paragraph-001' })
-    check(paragraphProbe.hasRotateButton, '段落题的原文栏有「换一换」按钮')
-    check(!paragraphProbe.rotateDisabled, '段落题的「换一换」可用（备选篇目已在 variants.ts 里）')
-    paragraphProbe.restore()
+    /*
+     * 「换一换」的可达性改从**文章栏**验：「段落」栏已从导航撤掉（文章题本来就按自然段
+     * 逐段作答，另开一栏是重复），而文章栏由文章库供题，每个「领域 × 方向」下
+     * 正好 3 篇，因此「换一换」必然可用。
+     */
+    console.log('\n[界面渲染 · 换一换] 文章栏的题也要能换')
+    const rotateProbe = await renderApp({ exerciseId: 'sentence-001' })
+    check(rotateProbe.hasRotateButton, '原文栏有「换一换」按钮')
+    rotateProbe.restore()
 
     // AI 出题：选领域 → 生成 → 自动切到新题并留存
     console.log('\n[界面渲染 · AI 出题] 走一遍出题流程')
@@ -1024,15 +1032,18 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   console.log('\n[真实截屏] 用无头浏览器渲染三个画面')
   try {
     const { captureScreens } = await import('./visual')
+    /*
+     * 三条提交截图都打**同一个题号**（句子库的第一道）。
+     *
+     * 为什么不用内置题：内置句子题不再从界面可达（句子栏由文章库供题），
+     * 而截图脚本要靠"题目编号 → 示例作答"的表来填答；句子库那道题的作答由脚本自动填屏幕原文。
+     * 三条用同一个题号还有一个好处：接口桩只需准备一份响应，切题型也不会拿到不相干的批改。
+     */
+    const shotExerciseId = `sentence-${ARTICLE_DOMAINS[0]?.id ?? 'economy'}-1`
     const result = await captureScreens([
-      // 前两张落在句子题上：它是截图首屏的默认样本（见 visual.ts 的 DEFAULT_EXERCISE_ID）。
-      // **必须显式点题型**——界面打开时停在「文章」栏，而那一栏现在由文章库供题
-      // （真实新闻选段，没有示例作答可自动填入）。
       { name: '01-compose', width: 1600, height: 950, action: 'plain', clickTab: '句子' },
-      { name: '02-result', width: 1600, height: 950, action: 'submit', clickTab: '句子', clickMark: 0 },
-      // 再用句子题截一张：它同时含替换、插入、删除三种标记，
-      // 默认的文章题只有一处亮点，看不出标注长什么样
-      { name: '03-marks', width: 1600, height: 950, action: 'submit', exerciseId: 'sentence-002', clickTab: '句子', clickMark: 0 },
+      { name: '02-result', width: 1600, height: 950, action: 'submit', exerciseId: shotExerciseId, clickTab: '句子', clickMark: 0 },
+      { name: '03-marks', width: 1600, height: 950, action: 'submit', exerciseId: shotExerciseId, clickTab: '句子', clickMark: 0 },
       { name: '04-mobile', width: 420, height: 900, action: 'plain' },
     ])
     /*
