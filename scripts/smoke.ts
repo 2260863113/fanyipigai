@@ -1008,7 +1008,22 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       check(panels.manualApplied, '拖动之后切换成手动比例（split-manual）')
       check(panels.canReturnToResult, '批过的页是只读的（没有输入框、也没有提交按钮），但给着「返回编辑」')
       check(panels.editorShown, '点「返回编辑」回到作答框，可以接着改')
-      check(panels.resultBack, '放开之后提交按钮变成手动的「提交批改（手动）」')
+      check(
+        panels.submitLabelAfterUnlock.trim() === '提交批改',
+        `还没动字时按钮是普通的「提交批改」（实际 ${JSON.stringify(panels.submitLabelAfterUnlock)}）`,
+      )
+      check(panels.canGoBackBeforeEdit, '还没动字时给着「查看上次批改」——退回修改后仍然能回到批改界面')
+      check(
+        panels.backToResult.有批注译文 && panels.backToResult.又是只读,
+        '点它就回到那份带批注的批改，而且这一页重新只读',
+        JSON.stringify(panels.backToResult),
+      )
+      check(
+        panels.backToResult.新增调用 === 0,
+        `回去看**不是**重新提交（多发 ${panels.backToResult.新增调用} 次请求）`,
+      )
+      check(panels.resultBack, '改过字之后按钮才变成手动的「提交批改（手动）」')
+      check(!panels.canGoBackAfterEdit, '改过字之后「查看上次批改」消失（批注已经对不上那段文字了）')
       check(
         panels.judgeCallsAfterReturn === 0,
         `改过又翻页，没有自动提交（多调用了 ${panels.judgeCallsAfterReturn} 次）`,

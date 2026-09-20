@@ -83,11 +83,21 @@ export interface ExerciseSession {
   /**
    * 批过之后又被放开来改的页号。
    *
-   * 「返回编辑」把结果作废、让这一页重新可写，同时记在这里。
-   * 它的用途只有一个：**改过的页不再自动提交**——结果已经被用户主动丢掉了，
-   * 再自动补一次等于偷偷花掉一次调用，而且用户可能根本没改完。
+   * 「返回编辑」把这一页打开了，同时记在这里。它的用途有两个：
+   *   - **改过的页不再自动提交**：结果已经被用户主动丢掉了，再自动交一次等于偷偷花掉一次调用；
+   *   - **在用户还没真正改字之前，那一份批改先留着**（见 openResults），
+   *     这样"退回去看一眼再回来"不必重新提交（批改要十几秒、结果还可能不一样）。
    */
   unlocked: number[]
+  /**
+   * 「返回编辑」时**暂存**下来的那份批改：页号 → 结果。
+   *
+   * 这是"退回修改后仍然可以返回到批改界面"这条要求的关键：
+   * 结果不能就地删掉——删了就没得回了；也不能就那么留着——留着这一页就不只读了。
+   * 因此打开这一页时把它挪到这里，等真正**动了一个字**（answerChanged）时再丢掉。
+   * 只要草稿与 `answer` 一字不差，随时可以点「查看上次批改」把它原样恢复。
+   */
+  openResults: Record<number, PageResult>
   /** 当前用的是第几份原文（0 是题目自带的，之后是备选与 AI 生成的） */
   variantIndex: number
   /** AI 现出的题；按题目留存，「换一换」还能翻回来 */
@@ -104,6 +114,7 @@ export const EMPTY_SESSION: ExerciseSession = {
   sectionIndex: 0,
   pages: {},
   unlocked: [],
+  openResults: {},
   variantIndex: 0,
   generated: [],
 }
@@ -126,12 +137,24 @@ export type SessionAction =
   /** 这一页批改完成：结果按页存下来，界面随之显示这一页的结果 */
   | { type: 'pageGraded'; exerciseId: string; sectionIndex: number; draft: JudgeDraft; answer: string }
   /**
-   * 「返回编辑」：作废**当前这一页**的结果，让它重新可写。
+   * 「返回编辑」：放开**当前这一页**，让它重新可写。
    *
    * 只清结果与"已放开"标记，**不动 drafts**——用户是回来改字的，草稿必须还在。
    * 同时把这一页记进 unlocked：之后无论怎么改，都不会在翻页时自动提交。
    */
   | { type: 'pageUnlocked'; exerciseId: string }
+  /**
+   * 反过来：「返回编辑」之后又点回那份批改（用户要求"退回修改后仍能回到批改界面"）。
+   *
+   * **保留结果**，只把这一页重新收回只读。于是：
+   *   - 结果还在 → 界面照旧显示带批注的译文（不必重新提交、不花一次调用）；
+   *   - 不在 unlocked 里 → 这一页重新只读（想再改就再按一次「返回编辑」）；
+   *   - drafts 一个字都没动 → 显示的批注与草稿仍然对得上。
+   *
+   * ⚠️ 之所以要求"一个字都没改"才给这个入口（见 App 里 canReturnToResult 的注释）：
+   * 草稿一旦改过，它就不是被批的那段文字了，把旧批注画上去会出现对不上的勾画。
+   */
+  | { type: 'pageResultRestored'; exerciseId: string }
 
 /** 取某个题号的会话（没有就用空会话，调用方不需要判空）。 */
 export function sessionOf(state: ExerciseSessions, exerciseId: string): ExerciseSession {
@@ -157,7 +180,7 @@ function withSession(state: ExerciseSessions, exerciseId: string, next: Exercise
  * 而且因为单元测试里是"先切页、再打字"，直到看了真实交互的日志才暴露）。
  */
 function clearedFor(session: ExerciseSession, patch: Partial<ExerciseSession>): ExerciseSession {
-  return { ...session, drafts: {}, sectionIndex: 0, pages: {}, unlocked: [], ...patch }
+  return { ...session, drafts: {}, sectionIndex: 0, pages: {}, unlocked: [], openResults: {}, ...patch }
 }
 
 export function sessionReducer(state: ExerciseSessions, action: SessionAction): ExerciseSessions {
@@ -177,25 +200,27 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
         }),
       )
 
-    case 'answerChanged':
+    case 'answerChanged': {
       /*
        * 改动作答**只写草稿**，不碰已提交的结果，也**不碰页号**
        * （人还在这一页上打字，把页号归零就是那个"每打一个字弹回第一页"的老 bug）。
        *
-       * 为什么不顺手把这一页的结果作废：结果本该只在用户明确说"我要改这一页"时作废，
-       * 而那句话就是「返回编辑」（pageUnlocked，已经在它里面作废了）。
-       * 这里再作废一次会连带毁掉"批过又改过"这个状态的判据——
-       * 那时用户就再也分不清自己是"没提交过"还是"改过了"，
-       * 而这两种情况一个要自动提交、一个绝不能自动提交。
-       *
-       * 写这一页之前它只会处在两种状态：还没批过（没有结果），或者已经被
-       * 「返回编辑」放开来（结果已在 pageUnlocked 里作废）。两种都不会让
-       * 界面上的译文与勾画对不上。
+       * 唯一会顺手做的事：把这一页**暂存的那份旧批改丢掉**（见 openResults）。
+       * 一旦真的改了字，草稿就不是被批的那段文字了，旧批注画上去必然对不上——
+       * 「查看上次批改」此刻也得跟着消失。判据由"草稿 vs 旧 answer"比较得出，
+       * 因此这里丢掉只是提前清理，不是判据本身。
        */
+      const openResults = { ...session.openResults }
+      if (openResults[session.sectionIndex]) {
+        const kept = openResults[session.sectionIndex]
+        if ((kept?.answer ?? '') !== action.text) delete openResults[session.sectionIndex]
+      }
       return withSession(state, action.exerciseId, {
         ...session,
         drafts: { ...session.drafts, [session.sectionIndex]: action.text },
+        openResults,
       })
+    }
 
     case 'answerAtChanged':
       return withSession(state, action.exerciseId, {
@@ -216,14 +241,43 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
       })
 
     case 'pageUnlocked': {
+      /*
+       * 「返回编辑」：把这一页打开来改，同时**把那份批改挪进暂存区**（openResults）。
+       *
+       * 挪而不是删，是为了"退回去看一眼再回来"不必重新提交（用户明确要求）。
+       * 挪而不是留，是因为这一页一旦可写，界面上就不能再画那份批注了——
+       * 只要他一动字，批注的位置就全对不上。
+       */
       const pages = { ...session.pages }
+      const mine = pages[session.sectionIndex]
       delete pages[session.sectionIndex]
+      const openResults = { ...session.openResults }
+      if (mine) openResults[session.sectionIndex] = mine
       return withSession(state, action.exerciseId, {
         ...session,
         pages,
+        openResults,
         unlocked: session.unlocked.includes(session.sectionIndex)
           ? session.unlocked
           : [...session.unlocked, session.sectionIndex],
+      })
+    }
+
+    case 'pageResultRestored': {
+      /*
+       * 反过来：点「查看上次批改」把暂存的那份恢复回这一页，并且**收回只读**。
+       * 调用方保证草稿与 `answer` 一字不差（否则那颗按钮根本不会出现），因此
+       * 恢复之后显示的批注与草稿仍然对得上。暂存区里那份用完就清了。
+       */
+      const restored = session.openResults[session.sectionIndex]
+      const pages = restored ? { ...session.pages, [session.sectionIndex]: restored } : session.pages
+      const openResults = { ...session.openResults }
+      delete openResults[session.sectionIndex]
+      return withSession(state, action.exerciseId, {
+        ...session,
+        pages,
+        openResults,
+        unlocked: session.unlocked.filter((index) => index !== session.sectionIndex),
       })
     }
   }

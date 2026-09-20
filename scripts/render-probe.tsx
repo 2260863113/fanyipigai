@@ -93,6 +93,14 @@ export interface RenderProbe {
     canReturnToResult: boolean
     resultBack: boolean
     judgeCallsAfterReturn: number
+    /** 刚按「返回编辑」时的提交按钮文案（还没动字，应当是普通的「提交批改」） */
+    submitLabelAfterUnlock: string
+    /** 刚按「返回编辑」时有没有「查看上次批改」（没动字时应当有） */
+    canGoBackBeforeEdit: boolean
+    /** 点「查看上次批改」的结果：回到带批注的批改、重新只读、而且不发请求 */
+    backToResult: { 有批注译文: boolean; 又是只读: boolean; 新增调用: number }
+    /** 改过字之后还有没有「查看上次批改」（应当没有：批注已经对不上了） */
+    canGoBackAfterEdit: boolean
   }
   /**
    * 逐页批改走一遍的观察：每翻一页记下这一页的状态、按钮文案、有没有输入框。
@@ -1213,14 +1221,49 @@ export async function renderApp(
       })
     }
     const editorShown = container.querySelector('.answer-input') !== null
-    // 放开之后是"已修改 · 待提交"：按钮变回可点的「提交批改（手动）」
+    /*
+     * 放开之后**还没改字**：按钮仍是普通的「提交批改」，而且多一颗「查看上次批改」
+     * ——那份批改被挪进了暂存区，用户可以在真正动字之前回去再看一眼（用户要求）。
+     */
     const submitLabelAfterUnlock =
       container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')?.textContent?.trim() ?? ''
+    const canGoBackBeforeEdit = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].some(
+      (node) => node.textContent?.trim() === '查看上次批改',
+    )
+    // 点回去：应当原样回到那份批改，而且**不发请求**
+    const callsBeforeGoBack = judgeFetch.calls()
+    const goBack = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
+      (node) => node.textContent?.trim() === '查看上次批改',
+    )
+    if (goBack) {
+      await act(async () => {
+        goBack.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+    }
+    const backToResult = {
+      有批注译文: container.querySelector('.pane-answer .annotated-lines') !== null,
+      又是只读: container.querySelector('.answer-input') === null,
+      新增调用: judgeFetch.calls() - callsBeforeGoBack,
+    }
+    // 再放开一次，接着走后面那些断言
+    const unlockAgain = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
+      (node) => node.textContent?.trim() === '返回编辑',
+    )
+    if (unlockAgain) {
+      await act(async () => {
+        unlockAgain.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+    }
     /*
-     * 改一个字之后**再翻一次页**：这一页已经批过又被放开，
+     * 改一个字之后再翻一次页：这一页已经批过又被放开，
      * 翻页绝不能自动提交（那正是"改完要自己按批改"那条规矩）。
      */
     await typeInto('（改了一下）')
+    const submitLabelAfterEdit =
+      container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')?.textContent?.trim() ?? ''
+    const canGoBackAfterEdit = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].some(
+      (node) => node.textContent?.trim() === '查看上次批改',
+    )
     await clickNav('prev')
     await clickNav('next')
     const judgeCallsAfterReturn = judgeFetch.calls()
@@ -1244,8 +1287,12 @@ export async function renderApp(
       manualApplied: container.querySelector('.split-manual') !== null,
       editorShown,
       canReturnToResult: readonlyBeforeUnlock && Boolean(unlock),
-      resultBack: submitLabelAfterUnlock.includes('手动'),
+      resultBack: submitLabelAfterEdit.includes('手动'),
       judgeCallsAfterReturn: judgeCallsAfterReturn - callsBeforeUnlock,
+      submitLabelAfterUnlock,
+      canGoBackBeforeEdit,
+      backToResult,
+      canGoBackAfterEdit,
     }
   }
 

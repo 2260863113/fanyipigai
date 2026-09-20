@@ -37,16 +37,29 @@ export interface ShownCorrection {
 }
 
 /**
+ * 批改视图的译文再疏一倍（用户要求："批改视图用户翻译的译文行间距加大一倍"）。
+ *
+ * 为什么单独乘在批改视图上、而不是直接把默认设置翻倍：
+ *   - 设置里那个滑杆是**全局行距**，用户可能已经按自己的习惯调过；
+ *   - 而"要更疏"这件事只针对**带勾画的批改视图**——那里每行上方还压着补写的正确写法，
+ *     行距宽一点才不挤。对照视图仍然是"一句对一句"，不动。
+ * 因此这里的口径是"在设置值的基础上再乘一倍"，用户随时还能用滑杆微调。
+ */
+const CORRECTION_LINE_HEIGHT = 2
+
+/**
  * 当前这一页在逐页批改里的状态。**按钮文案与翻页行为都由它推出来**，
  * 因此它的名称要与 reducer 里那几个动作对得上（见 session.ts）。
  */
 export type PageState =
   /** 还没批过 */
   | 'pending'
-  /** 批过了，结果就是这一段文字 */
+  /** 批过了，结果就是这一段文字（只读） */
   | 'graded'
-  /** 批过之后被「返回编辑」放开、文字又改过：不会再自动提交，要自己按「提交批改」 */
+  /** 批过之后被「返回编辑」放开，但**一个字都还没改**：可以点回去看那份批改，翻页也会自动提交 */
   | 'edited'
+  /** 放开之后**真的改过字**了：批注已对不上，不会再自动提交，只能自己按「提交批改（手动）」 */
+  | 'modified'
 
 export function AnswerPane({
   shown,
@@ -66,6 +79,8 @@ export function AnswerPane({
   onSelect,
   onSettingsChange,
   onUnlock,
+  canReturnToResult,
+  onReturnToResult,
   onLevelChange,
   onSubmit,
   onSubmitFixture,
@@ -94,6 +109,10 @@ export function AnswerPane({
   onSettingsChange: (patch: Partial<ViewSettings>) => void
   /** 「返回编辑」：作废这一页的结果，放开重写（之后这一页不再自动提交） */
   onUnlock: () => void
+  /** 这一页还能点回刚才那份批改（一个字都没改过） */
+  canReturnToResult: boolean
+  /** 点回去看那一份批改——**不重新提交**，只是把画面切回结果 */
+  onReturnToResult: () => void
   onLevelChange: (level: PolishLevel) => void
   onSubmit: () => void
   onSubmitFixture: () => void
@@ -106,12 +125,12 @@ export function AnswerPane({
   /** 这一页的结果还在（正在看的就是它）。它是"返回编辑"够不够格出现的依据 */
   const resultShown = shown !== null && !editing
   /**
-   * 这一页被「返回编辑」放开过。
+   * 这一页被「返回编辑」放开过、而且已经改过字（"已修改 · 待提交"那一档）。
    *
-   * 注意它问的是"放开过没有"，**不是**"此刻有没有结果"：用户改完手动提交一次之后
-   * 结果又有了，但这一页仍然是"改过的那一页"——它照样不该再自动提交。
+   * 注意它问的是"改过没有"，**不是**"放开过没有"：放开之后一个字都没动时，
+   * 那份批改还在暂存区、还能点回去看，界面不该说"已修改"。
    */
-  const wasUnlocked = pageState === 'edited'
+  const wasModified = pageState === 'modified'
 
   return (
     <section className="pane pane-answer">
@@ -152,8 +171,23 @@ export function AnswerPane({
               返回编辑
             </button>
           )}
+          {/*
+            「返回编辑」之后还能点回那一份批改（用户要求："退回修改后，仍然可以返回到批改界面"）。
+            只在这一页**一个字都没改**的时候给这颗按钮——理由见 App 里 canReturnToResult 的注释：
+            批注的位置是按提交当时那段文字算的，改了字再回去看，画面上就会出现对不上的勾画。
+          */}
+          {editing && canReturnToResult && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={onReturnToResult}
+              title="回到这一页的批改结果（不重新提交、不消耗 API）；改了字就不能再回去看了"
+            >
+              查看上次批改
+            </button>
+          )}
           {/* 正在写、而且这一页是"改过的那一页"：提醒它交出去要自己按，不会自动发 */}
-          {editing && wasUnlocked && <span className="chip chip-warn">已改过 · 待提交</span>}
+          {editing && wasModified && <span className="chip chip-warn">已改过 · 待提交</span>}
           {editing && (
             <>
               <div className="level-switch" role="group" aria-label="修改风格">
@@ -176,7 +210,7 @@ export function AnswerPane({
                 disabled={!hasAnswer || judging}
                 title={hasAnswer ? undefined : '先在这一页写下你的译文'}
               >
-                {judging ? '批改中…' : wasUnlocked ? '提交批改（手动）' : '提交批改'}
+                {judging ? '批改中…' : wasModified ? '提交批改（手动）' : '提交批改'}
               </button>
             </>
           )}
@@ -218,6 +252,11 @@ export function AnswerPane({
           />
         ) : shown ? (
           settings.answerView === 'compare' ? (
+            /*
+             * 对照视图**不受行距设置影响**（用户要求"对照视图还是保持以前那样一句对一句"）。
+             * 它本来就不画勾画、不画方框，行距只是它自己那份排版的事——
+             * 因此这里刻意**不传** lineHeight，让它就用样式表里的默认值。
+             */
             <CompareView validated={shown.validated} answer={shown.answer} selection={selection} onSelect={onSelect} />
           ) : (
             <AnnotationText
@@ -225,7 +264,8 @@ export function AnswerPane({
               answer={shown.answer}
               validated={shown.validated}
               selection={selection}
-              lineHeightBase={settings.lineHeight}
+              /* 批改视图的译文更疏（用户要求"加大一倍"），见 CORRECTION_LINE_HEIGHT 的说明 */
+              lineHeightBase={settings.lineHeight * CORRECTION_LINE_HEIGHT}
               showFixBoxes={settings.showFixBoxes}
               onSelect={onSelect}
               {...(onToggleFavorite ? { onToggleFavorite, favorited: favorite === true } : null)}
@@ -243,26 +283,26 @@ export function AnswerPane({
   )
 }
 
-/** 翻页导航中间那句状态说明。三档各一句话，让人一眼知道这一页走到哪一步了。 */
+/** 翻页导航中间那句状态说明。四档各一句话，让人一眼知道这一页走到哪一步了。 */
 export const PAGE_STATE_HINT: Record<PageState, string> = {
   pending: '待批改',
   graded: '已批改（只读，点「返回编辑」可改）',
-  edited: '已修改 · 待提交',
+  edited: '编辑中（未改动，可点「查看上次批改」）',
+  modified: '已修改 · 待提交',
 }
 
 /**
  * 「下一页」点下去会发生什么。
  *
- * 三种情形说的话完全不同，因此写清楚**点下去会发生什么**：
+ * 四种情形说的话完全不同，因此写清楚**点下去会发生什么**：
  * 自动交出去批、直接翻过去看结果、还是这一页压根还没写。
  */
 export function nextPageHint(options: {
   hasAnswer: boolean
-  wasUnlocked: boolean
   pageState: PageState
 }): string {
   if (!options.hasAnswer) return '这一页还没写——先写点东西吧'
-  if (options.wasUnlocked) return '翻到下一页（改过的页不会自动提交，请先按「提交批改」）'
+  if (options.pageState === 'modified') return '翻到下一页（改过的页不会自动提交，请先按「提交批改」）'
   if (options.pageState === 'graded') return '翻到下一页（这一页已批过，不会重新提交）'
   return '翻到下一页：这一页会先交去批改'
 }

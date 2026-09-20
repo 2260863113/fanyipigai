@@ -206,7 +206,7 @@ export function App(): JSX.Element {
   }
   /** 这道题自己的会话状态（作答、结果、看哪一面、第几份原文、AI 生成的题池） */
   const session = sessionOf(sessions, exercise.id)
-  const { drafts, sectionIndex, pages, unlocked } = session
+  const { drafts, sectionIndex, pages, unlocked, openResults } = session
   /*
    * 当前这一页的批改结果；没批过就是 undefined。
    *
@@ -253,26 +253,45 @@ export function App(): JSX.Element {
   const currentAnswer = drafts[sectionIndex] ?? ''
 
   /*
-   * 这一页在"逐页批改"里的状态。按钮文案与翻页行为全由它推出来，
+   * 这一页在"逐页批改"里的四档。按钮文案与翻页行为全由它推出来，
    * 不再由"全篇写完了没有"决定——"一整篇非写完不可"这条约束已随逐页批改取消。
    *
-   * 三档的判据：
-   *   1. **被「返回编辑」放开过** → 改过的那一页（哪怕后来手动交回去了也还是它）；
-   *   2. 有结果、也没被放开过 → 已批改，只读；
-   *   3. 其余（没批过）→ 待批改。
+   * 判据（顺序有意义，见下面注释）：
+   *   1. 被「返回编辑」放开过、而且**一个字都还没改** → `edited`：
+   *      界面在写，但那份批改还暂存着，可以点「查看上次批改」回去；翻页时照旧自动提交；
+   *   2. 被放开过、而且**已经改过字** → `modified`：批注已经对不上，绝不自动提交，
+   *      只能自己按「提交批改（手动）」；
+   *   3. 有结果、没被放开过 → `graded`，只读；
+   *   4. 其余 → `pending`（还没批过）。
    *
-   * ⚠️ 第 1 条**必须排在最前面**。放开这一页时结果就被作废了，所以"只看有没有结果"
-   * 的话，放开之后这一页会落回"待批改"——于是它又被当成没批过的页，
-   * 翻页时自动提交（那正是这条规矩要禁止的），而且界面永远不承认"这一页改过"。
+   * ⚠️ 第 1 条必须排在"看有没有结果"前面：放开这一页时结果被挪进了暂存区（`openResults`），
+   * 只看 `pages` 会把它当成没批过的页，于是既要用户手动提交、又不给「查看上次批改」。
    */
-  const pageState: PageState = pageUnlocked ? 'edited' : pageResult ? 'graded' : 'pending'
+  const stashedResult = openResults[sectionIndex]
+  const pageState: PageState = pageUnlocked
+    ? stashedResult !== undefined && stashedResult.answer === currentAnswer
+      ? 'edited'
+      : 'modified'
+    : pageResult
+      ? 'graded'
+      : 'pending'
   /**
    * 现在是不是在写这一页（而不是在看这一页的批改结果）。
    * 批过的页要**先按「返回编辑」**才能写——见 pageUnlocked。
    */
-  const editing = pageState === 'pending' || pageUnlocked
+  const editing = pageState !== 'graded'
   /** 批过的页数，用来在原文栏里报进度 */
   const gradedPages = sourceSections.filter((_, index) => pages[index] !== undefined).length
+  /**
+   * 「返回编辑」之后还能不能点回那份批改（用户要求"退回修改后仍然可以返回到批改界面"）。
+   *
+   * 条件里那条"草稿与提交时一字不差"是**安全阀**，不是多余的：
+   * 批注的位置是按**提交当时**那段文字算出来的，草稿一旦改过，它就不是被批的那一段了——
+   * 那时光把旧批注画上去，用户会看到"划在别的字上的红线"。
+   * 一个字都没改时回去看，画面与刚才完全一致，等于白送一次"再瞄一眼"。
+   */
+  const canReturnToResult =
+    pageUnlocked && openResults[sectionIndex] !== undefined && (openResults[sectionIndex]?.answer ?? '') === currentAnswer
 
 
   const caseRecords = records.filter((record) => record.exerciseId === exercise.id)
@@ -900,7 +919,7 @@ export function App(): JSX.Element {
               sectionIndex={sectionIndex}
               gradedPages={gradedPages}
               pageStateHint={PAGE_STATE_HINT[pageState]}
-              nextHint={nextPageHint({ hasAnswer: currentAnswer.trim().length > 0, wasUnlocked: pageUnlocked, pageState })}
+              nextHint={nextPageHint({ hasAnswer: currentAnswer.trim().length > 0, pageState })}
               judging={judging}
               currentSection={currentSection}
               currentSource={currentSource}
@@ -981,6 +1000,16 @@ export function App(): JSX.Element {
                 setOpenRecord(null)
                 setSelection(null)
                 setNotice('这一页已可以修改。改完请点「提交批改」——这一页不会再自动提交。')
+              }}
+              canReturnToResult={canReturnToResult}
+              onReturnToResult={() => {
+                /*
+                 * 点回刚才那份批改：**不重新提交**，只是把这一页收回只读、把结果重新显示出来。
+                 * 能点到这里就说明草稿一个字都没改，因此显示的批注与草稿仍然对得上。
+                 */
+                dispatchSession({ type: 'pageResultRestored', exerciseId: exercise.id })
+                setSelection(null)
+                setNotice('这是刚才那份批改。想继续改就再按一次「返回编辑」。')
               }}
               onLevelChange={setLevel}
               onSubmit={() => void submitPage(sectionIndex)}

@@ -401,6 +401,33 @@ try {
          state: text('.section-nav .hint'),
        };
 
+       // ── 行距：批改视图加倍，对照视图不受影响（用户要求） ──
+       const clickView = async (label) => {
+         const btn = [...document.querySelectorAll('.view-btn')].find((b) => (b.textContent || '').trim() === label);
+         if (!btn) return false;
+         btn.click();
+         await sleep(400);
+         return true;
+       };
+       const annotatedLineHeight = () => {
+         const el = document.querySelector('.annotated-lines');
+         return el ? getComputedStyle(el).lineHeight : '(没有批改视图)';
+       };
+       const annotatedInline = () => document.querySelector('.annotated-lines')?.getAttribute('style') || '';
+       const fontSize = getComputedStyle(document.documentElement).fontSize;
+       const correctionView = { 行高: annotatedLineHeight(), 行内样式: annotatedInline(), 根字号: fontSize };
+       const switchedToCompare = await clickView('对照视图');
+       const compareView = {
+         切过去了: switchedToCompare,
+         有对照列表: document.querySelector('.compare-list') !== null,
+         有批注译文: document.querySelector('.annotated-lines') !== null,
+       };
+       await clickView('批改视图');
+       const backToCorrection = { 行高: annotatedLineHeight() };
+       // 收起选中，别把它带进后面的检查
+       document.querySelector('.pane-source')?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 5, clientY: 5 }));
+       await sleep(200);
+
        // 「返回编辑」：结果作废、可以接着改，按钮变成手动的那个
        const mark = document.querySelector('.pane-answer [data-mark-id]');
        if (mark) mark.click();
@@ -417,14 +444,53 @@ try {
          收藏按钮: (document.querySelector('.pane-answer .ann-bubble button')?.textContent || '').trim(),
        };
        let favoriteCount = 0;
+       let favoriteStored = null;
        try {
-         favoriteCount = (JSON.parse(window.localStorage.getItem('translation-practice.favorites') || '[]') || []).length;
+         const raw = JSON.parse(window.localStorage.getItem('translation-practice.favorites') || '[]') || [];
+         favoriteCount = raw.length;
+         favoriteStored = raw[0]
+           ? { id: raw[0].id, why: (raw[0].why || '').slice(0, 20), 整句: (raw[0].sentenceBefore || '').slice(0, 30) }
+           : null;
        } catch (error) {
          favoriteCount = -1;
        }
        // 收起卡片，别把选中状态带进后面的检查
        document.querySelector('.pane-source')?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 5, clientY: 5 }));
        await sleep(200);
+
+       /*
+        * 「查看上次批改」：按「返回编辑」之后**一个字都没改**时，应该还能点回那份批改。
+        * 点回去之后：结果回来、这一页重新只读、而且**不再发请求**（不是重新提交）。
+        */
+       let returnToResult = null;
+       {
+         const unlockBtn = [...document.querySelectorAll('.pane-answer .btn')]
+           .find((b) => (b.textContent || '').trim() === '返回编辑');
+         if (unlockBtn) unlockBtn.click();
+         await sleep(500);
+         const before = {
+           有返回按钮: [...document.querySelectorAll('.pane-answer .btn')].some(
+             (b) => (b.textContent || '').trim() === '查看上次批改',
+           ),
+           有输入框: document.querySelector('.answer-input') !== null,
+         };
+         const callsBeforeReturn = window.__judgeCalls.length;
+         const back = [...document.querySelectorAll('.pane-answer .btn')]
+           .find((b) => (b.textContent || '').trim() === '查看上次批改');
+         if (back) back.click();
+         await sleep(500);
+         returnToResult = {
+           点之前: before,
+           点之后: {
+             有批注译文: document.querySelector('.pane-answer .annotated-lines') !== null,
+             有输入框: document.querySelector('.answer-input') !== null,
+             又是只读: [...document.querySelectorAll('.pane-answer .btn')].some(
+               (b) => (b.textContent || '').trim() === '返回编辑',
+             ),
+           },
+           新增调用: window.__judgeCalls.length - callsBeforeReturn,
+         };
+       }
 
        const unlock = [...document.querySelectorAll('.pane-answer .btn')]
          .find((b) => (b.textContent || '').trim() === '返回编辑');
@@ -434,11 +500,25 @@ try {
          hasInput: document.querySelector('.answer-input') !== null,
          hasAnnotated: document.querySelector('.pane-answer .annotated-lines') !== null,
          button: (document.querySelector('.pane-answer .btn-primary')?.textContent || '').trim(),
+         /*
+          * 还没动字时：按钮是普通的「提交批改」，而且给着「查看上次批改」。
+          * 改过字之后才会变成「提交批改（手动）」并撤掉「查看上次批改」——
+          * 这两条在下面改字之后各量一次。
+          */
+         有查看上次批改: [...document.querySelectorAll('.pane-answer .btn')].some(
+           (b) => (b.textContent || '').trim() === '查看上次批改',
+         ),
        };
 
        // 改一个字，再翻到下一页：改过的页**不该**自动提交
        const area2 = document.querySelector('.answer-input');
-       if (area2) { setValue(area2, '改过之后的内容'); await sleep(200); }
+       if (area2) { setValue(area2, '改过之后的内容'); await sleep(250); }
+       const afterEdit = {
+         按钮: (document.querySelector('.pane-answer .btn-primary')?.textContent || '').trim(),
+         有查看上次批改: [...document.querySelectorAll('.pane-answer .btn')].some(
+           (b) => (b.textContent || '').trim() === '查看上次批改',
+         ),
+       };
        const callsBeforeEdit = window.__judgeCalls.length;
        const nextAfterEdit = document.querySelector('.section-nav [data-nav="next"]');
        if (nextAfterEdit) nextAfterEdit.click();
@@ -448,6 +528,16 @@ try {
          state: text('.section-nav .hint'),
        };
 
+       /*
+        * 行距：批改视图那一段要明显更疏（用户要求"加大一倍"）；
+        * 对照视图仍然是"一句对一句"，不画勾画、也不受行距设置影响。
+        */
+       const lineHeights = {
+         批改视图: correctionView,
+         对照视图: compareView,
+         切回批改视图: backToCorrection,
+       };
+
        return {
          total,
          sources,
@@ -455,10 +545,14 @@ try {
          callsAfterAll,
          revisit,
          afterUnlock,
+         afterEdit,
          editedTurn,
+         lineHeights,
          bubbleBefore,
          bubbleAfter,
          favoriteCount,
+         favoriteStored,
+         returnToResult,
          requests: window.__judgeCalls.map((call) => ({
            start: call.start,
            text: call.text.slice(0, 30),
@@ -538,23 +632,70 @@ try {
     '翻回第 1 页时界面说"已批改"而不是"待批改"',
     walked.revisit.state,
   )
-  check(walked.afterUnlock.hasInput && !walked.afterUnlock.hasAnnotated, '点「返回编辑」回到作答框，结果作废')
+  check(walked.afterUnlock.hasInput && !walked.afterUnlock.hasAnnotated, '点「返回编辑」回到作答框，可以接着改')
   check(
-    walked.afterUnlock.button.includes('手动'),
-    '放开之后提交按钮变成手动的「提交批改（手动）」',
-    walked.afterUnlock.button,
+    walked.afterUnlock.button === '提交批改',
+    `还没动字时按钮是普通的「提交批改」（实际 ${JSON.stringify(walked.afterUnlock.button)}）`,
   )
-  console.log('小卡片收藏 =', JSON.stringify({ 点之前: walked.bubbleBefore, 点之后: walked.bubbleAfter, 收藏条数: walked.favoriteCount }))
+  check(walked.afterUnlock.有查看上次批改, '还没动字时给着「查看上次批改」')
+  console.log('改过之后 =', JSON.stringify(walked.afterEdit))
+  check(
+    walked.afterEdit.按钮.includes('手动'),
+    `改过字之后按钮变成手动的「提交批改（手动）」（实际 ${JSON.stringify(walked.afterEdit.按钮)}）`,
+  )
+  check(!walked.afterEdit.有查看上次批改, '改过字之后「查看上次批改」消失了（批注已经对不上那段文字）')
+  console.log('小卡片收藏 =', JSON.stringify({ 点之前: walked.bubbleBefore, 点之后: walked.bubbleAfter, 收藏条数: walked.favoriteCount, 落盘内容: walked.favoriteStored }))
   check(walked.bubbleBefore.卡片在, '点一处勾画，小卡片出来了')
   check(walked.bubbleBefore.收藏按钮 === '收藏', '小卡片自己带一颗「收藏」按钮', walked.bubbleBefore.收藏按钮)
   check(walked.bubbleAfter.卡片在, '点小卡片里的「收藏」之后，卡片**不消失**（点它不算"点外面"）')
   check(walked.bubbleAfter.收藏按钮 === '已收藏', '收藏之后按钮文案变成「已收藏」', walked.bubbleAfter.收藏按钮)
   check(walked.favoriteCount === 1, `收藏落盘了（localStorage 里 ${walked.favoriteCount} 条）`)
   check(
+    Boolean(walked.favoriteStored?.id) && (walked.favoriteStored?.why ?? '').length > 0 && (walked.favoriteStored?.整句 ?? '').length > 0,
+    '落盘的这条带 id、说明与所在整句（不是只有个空壳）',
+    JSON.stringify(walked.favoriteStored),
+  )
+  console.log('返回上次批改 =', JSON.stringify(walked.returnToResult))
+  check(walked.returnToResult?.点之前.有返回按钮 === true, '按「返回编辑」之后，还能看到「查看上次批改」')
+  check(walked.returnToResult?.点之后.有批注译文 === true, '点它就回到那份带批注的批改')
+  check(walked.returnToResult?.点之后.有输入框 === false, '回去之后这一页又是只读的（没在作答状态）')
+  check(walked.returnToResult?.点之后.又是只读 === true, '回去之后又能按「返回编辑」，可以再来一轮')
+  check(walked.returnToResult?.新增调用 === 0, `回去看**不是**重新提交（多发 ${walked.returnToResult?.新增调用} 次请求）`)
+  check(
     walked.editedTurn.calls === 0,
     `改过之后翻页**没有**自动提交（多发 ${walked.editedTurn.calls} 次）`,
   )
   check(cdp.errors.length === 0, '整条流程没有页面异常', JSON.stringify(cdp.errors.slice(0, 3)))
+
+  console.log('行距 =', JSON.stringify(walked.lineHeights))
+  {
+    const correction = Number.parseFloat(String(walked.lineHeights?.批改视图.行高 ?? ''))
+    const font = Number.parseFloat(String(walked.lineHeights?.批改视图.根字号 ?? '16')) || 16
+    check(
+      Number.isFinite(correction) && correction > 0,
+      `批改视图量到了行高（${walked.lineHeights?.批改视图.行高}）`,
+      JSON.stringify(walked.lineHeights?.批改视图),
+    )
+    /*
+     * 要求"明显更疏"，而不是钉死一个像素：行距来自设置（默认 3）再乘一倍，
+     * 因此这里按"相对字号"判：批改视图的行高应当 ≥ 字号的 4 倍。
+     * 这样换字号、换默认值都不会误报，而"没加倍"一定会被抓到。
+     */
+    check(
+      correction >= font * 4,
+      `批改视图的行距确实加大了（行高 ${correction}px ≥ 字号 ${font}px 的 4 倍）`,
+    )
+    check(walked.lineHeights?.对照视图.切过去了 === true, '能切到对照视图')
+    check(walked.lineHeights?.对照视图.有对照列表 === true, '对照视图仍然是"一句对一句"的清单')
+    check(
+      walked.lineHeights?.对照视图.有批注译文 === false,
+      '对照视图里没有带勾画的译文（它与行距设置无关）',
+    )
+    check(
+      walked.lineHeights?.切回批改视图.行高 === walked.lineHeights?.批改视图.行高,
+      '切回批改视图后行距还是加大后的那个值',
+    )
+  }
 
   const failed = results.filter((item) => !item.ok)
   console.log(
