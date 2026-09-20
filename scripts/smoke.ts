@@ -27,6 +27,7 @@ import { clearDir } from './lib/clear-dir'
 import { mergeRowsOnTopEdge as mergePageRows } from './lib/row-merge.mjs'
 import { mergeRowsOnTopEdge } from '../src/domain/row-merge'
 import { INITIAL_SESSIONS, sessionOf, sessionReducer, type ExerciseSession } from '../src/components/session'
+import type { RecordView } from '../src/components/RecordsView'
 import path from 'node:path'
 
 // 本文件由 scripts/run-smoke.mjs 用 esbuild 打包后交给 Node 运行，
@@ -1595,6 +1596,139 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     ;(globalThis as { document?: unknown }).document = previousDocument
   } catch (error) {
     check(false, '兜底界面可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 练习记录落盘：写进去、读回来、超上限裁剪、写不下时丢最旧的。
+   *
+   * 为什么值得单独测：这块以前只在内存里，刷新即失。改成 localStorage 之后，
+   * 最容易出错的两处是 ①顺序（界面按"最旧的在前"存、显示时 reverse，颠倒就会翻车）
+   * ②写不下时怎么办（一条记录可能几十 KB，而 localStorage 通常只有 5 MB）。
+   */
+  try {
+    const { loadRecords, saveRecords, MAX_RECORDS } = await import('../src/components/records-store')
+    const makeRecord = (n: number, exerciseId = 'x-1'): RecordView => ({
+      id: `record-test-${n}`,
+      exerciseId,
+      mode: 'sentence',
+      direction: 'en-to-zh',
+      topic: '测试',
+      attempt: n,
+      level: 'polish',
+      answer: `第 ${n} 次作答`,
+      correction: { errors: [], highlights: [] },
+      validated: { errors: [], highlights: [], rejections: [] },
+      source: 'live',
+      raw: '{}',
+      createdAt: new Date(2026, 0, 1, 0, n),
+    })
+
+    // 干净起点
+    window.localStorage.removeItem('translation-practice.records.v1')
+
+    const three = [makeRecord(1), makeRecord(2), makeRecord(3)]
+    const stored = saveRecords(three)
+    check(stored.length === 3, `三条记录都存下来了（实际 ${stored.length}）`)
+
+    const readBack = loadRecords()
+    check(readBack.length === 3, `读回来还是三条（实际 ${readBack.length}）`)
+    check(
+      readBack.map((r) => r.attempt).join(',') === '1,2,3',
+      `顺序保持"最旧的在前"（实际 ${readBack.map((r) => r.attempt).join(',')}）`,
+    )
+    check(readBack[0]?.createdAt instanceof Date, 'createdAt 读回来是真正的 Date（不是字符串）')
+    check(readBack[0]?.answer === '第 1 次作答', '作答内容原样存住')
+    check(readBack[0]?.validated !== undefined, '校验结果也一起存了（记录页要靠它画勾画）')
+
+    // 超过上限：只留最近的 MAX_RECORDS 条，且丢的是**最旧的**
+    const many = Array.from({ length: MAX_RECORDS + 20 }, (_, index) => makeRecord(index + 1))
+    const trimmed = saveRecords(many)
+    check(trimmed.length === MAX_RECORDS, `超过上限后只留 ${MAX_RECORDS} 条（实际 ${trimmed.length}）`)
+    check(trimmed[0]?.attempt === 21, `丢的是最旧的（第一条变成第 21 次，实际第 ${trimmed[0]?.attempt} 次）`)
+    check(
+      trimmed[trimmed.length - 1]?.attempt === MAX_RECORDS + 20,
+      '最新那条仍然留着',
+    )
+
+    // 坏数据：整份不是数组 / 某一条坏掉
+    window.localStorage.setItem('translation-practice.records.v1', '{不是 JSON')
+    check(loadRecords().length === 0, '内容不是 JSON 时当作"没有记录"，不抛错')
+    window.localStorage.setItem('translation-practice.records.v1', JSON.stringify({ a: 1 }))
+    check(loadRecords().length === 0, '内容不是数组时也当作"没有记录"')
+    window.localStorage.setItem(
+      'translation-practice.records.v1',
+      JSON.stringify([
+        { id: 'ok', exerciseId: 'x', answer: 'a', createdAt: new Date().toISOString(), correction: {}, validated: {} },
+        { id: 'bad' },
+      ]),
+    )
+    const filtered = loadRecords()
+    check(filtered.length === 1 && filtered[0]?.id === 'ok', '坏的那一条被跳过，好的那条留住')
+
+    /*
+     * 写不下时**丢掉最旧的再重试**，而且返回的必须是真写进去的那些（不谎报）。
+     *
+     * 前两次写入一律失败、第三次起放行：因此 store 必须至少丢过一次才写得下，
+     * 成功时留下的条数必然少于 20。
+     *
+     * 补丁要打在**原型**上：jsdom 的 localStorage 是宿主对象，
+     * 给实例赋值（`ls.setItem = ...`）或 defineProperty 到实例上都**不生效且不报错**——
+     * 第一版就这么写的，测试"通过"了却什么也没验证到。
+     */
+    const storageProto = Object.getPrototypeOf(window.localStorage)
+    const originalSetItem = storageProto.setItem
+    const failAlways = (): never => {
+      const error = new Error('quota exceeded') as Error & { name: string }
+      error.name = 'QuotaExceededError'
+      throw error
+    }
+    let writes = 0
+    storageProto.setItem = function patched(this: Storage, key: string, value: string): void {
+      if (key === 'translation-practice.records.v1') {
+        writes += 1
+        if (writes <= 2) failAlways()
+      }
+      originalSetItem.call(this, key, value)
+    } as typeof storageProto.setItem
+
+    const manyAgain = Array.from({ length: 20 }, (_, index) => makeRecord(index + 1))
+    const afterQuota = saveRecords(manyAgain)
+    storageProto.setItem = originalSetItem
+
+    check(writes >= 3, `确实重试了（写入尝试 ${writes} 次，前两次是故意失败的）`)
+    check(
+      afterQuota.length > 0 && afterQuota.length < 20,
+      `写不下时丢掉最旧的再重试，而不是整个失败（存下 ${afterQuota.length} / 20 条）`,
+    )
+    check(
+      afterQuota[afterQuota.length - 1]?.attempt === 20,
+      `丢的时候保住最新那条（最后一条是第 ${afterQuota[afterQuota.length - 1]?.attempt} 次）`,
+    )
+    check(
+      afterQuota[0]?.attempt !== 1,
+      `丢的是最旧的（第一条已经不是第 1 次，而是第 ${afterQuota[0]?.attempt} 次）`,
+    )
+    // 关键：返回的必须是**真的写进去了**的那些，不能谎报
+    check(
+      loadRecords().length === afterQuota.length,
+      `返回的条数与真正落盘的一致（返回 ${afterQuota.length}，落盘 ${loadRecords().length}）`,
+    )
+
+    /*
+     * 一条都写不下时返回空——**不谎报**。
+     * 谎报的后果是界面显示几条记录、一刷新就没了，用户会以为记录功能坏了。
+     */
+    let attempts = 0
+    storageProto.setItem = function alwaysFail(this: Storage): void {
+      attempts += 1
+      failAlways()
+    } as typeof storageProto.setItem
+    const nothing = saveRecords(manyAgain)
+    storageProto.setItem = originalSetItem
+    check(nothing.length === 0, `一条都写不下时返回空（不谎报存下了），实际 ${nothing.length}`)
+    check(attempts > 1, `确实做了多次重试（尝试了 ${attempts} 次）`)
+  } catch (error) {
+    check(false, '练习记录落盘可以验证', error instanceof Error ? error.message : String(error))
   }
 
   return { checks, failures, skipped }

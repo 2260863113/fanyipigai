@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react'
 import type { Correction, Direction, Mode, PolishLevel } from '../domain/types'
 import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
 import { EXERCISE_SOURCES } from '../domain/mock'
+import { articleById } from '../domain/articles'
 import { customSources } from '../domain/custom'
 import type { ValidatedCorrection } from '../domain/validate'
 import { scoreCorrection } from '../domain/scoring'
@@ -56,10 +57,16 @@ interface Props {
  */
 export function RecordsView({ records, openRecord, onOpen, selection, settings, onSelect, favorites, onToggleFavorite }: Props) {
   /*
-   * 题干原文：内置题的原文在 EXERCISE_SOURCES 里，**自己贴的题**在浏览器本地按题号留了档
-   * （见 domain/custom.ts）——不然翻回旧记录时那一栏会是空的。
+   * 题干原文：内置题的原文在 EXERCISE_SOURCES 里，**文章库**的选段在 articles.ts 里，
+   * **自己贴的题**在浏览器本地按题号留了档（见 domain/custom.ts）——不然翻回旧记录时那一栏会是空的。
+   * 顺序无所谓（三种题的编号前缀不同、不会撞车），找不到就如实显示"未保存题干"。
    */
-  const source = openRecord ? (EXERCISE_SOURCES[openRecord.exerciseId] ?? customSources()[openRecord.exerciseId] ?? '') : ''
+  const source = openRecord
+    ? (EXERCISE_SOURCES[openRecord.exerciseId] ??
+       articleById(openRecord.exerciseId)?.excerpt ??
+       customSources()[openRecord.exerciseId] ??
+       '')
+    : ''
 
   /*
    * 左右两屏的边界也能拖（与练习页同一套 useSplitDrag）。

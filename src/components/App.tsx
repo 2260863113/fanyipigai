@@ -45,6 +45,7 @@ import { ArticlePickerModal } from './ArticlePickerModal'
 import { ARTICLE_EXCERPTS, articleById, articlesOf } from '../domain/articles'
 import { exerciseOfArticle } from '../domain/article-exercise'
 import { loadSelection, saveSelection, type ArticleSelection } from './article-selection'
+import { loadRecords, saveRecords } from './records-store'
 
 type Tab = Mode | 'records' | 'custom' | 'favorites'
 
@@ -103,7 +104,7 @@ export function App(): JSX.Element {
   const [error, setError] = useState<JudgeError | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
-  const [records, setRecords] = useState<RecordView[]>([])
+  const [records, setRecords] = useState<RecordView[]>(() => loadRecords())
   const [openRecord, setOpenRecord] = useState<RecordView | null>(null)
 
   /** 自己贴的那一篇（存在浏览器里，只留最新一篇）；贴题弹窗的开关与草稿 */
@@ -339,24 +340,38 @@ export function App(): JSX.Element {
     dispatchSession({ type: 'resultCommitted', exerciseId: exercise.id, draft: judging_ })
     setSelection(null)
     setOpenRecord(null)
-    setRecords((previous) => [
-      ...previous,
-      {
-        id: `record-${previous.length + 1}`,
-        exerciseId: exercise.id,
-        mode,
-        direction: exercise.direction,
-        topic: exercise.topic,
-        attempt: previous.filter((r) => r.exerciseId === exercise.id).length + 1,
-        level: attemptLevel,
-        answer: submittedSections.map((section) => section.text).join('\n\n'),
-        correction: judging_.correction,
-        validated: judging_.validated,
-        source: judging_.source,
-        raw: judging_.raw,
-        createdAt: new Date(),
-      },
-    ])
+    setRecords((previous) => {
+      /*
+       * 编号与"第几次"都不能用 previous.length 推：
+       *   1. 记录会被上限裁剪（旧的先丢），长度不再等于历史次数 → 编号会重复、
+       *      而 key 重复会让 React 复用错节点；
+       *   2. "第几次作答"更不能用"现有条数 + 1"，否则丢过旧记录之后次数会倒退。
+       * 因此改成时间戳编号 + 按该题已存记录里的最大次序号加一。
+       */
+      const attempts = previous.filter((item) => item.exerciseId === exercise.id).map((item) => item.attempt)
+      const nextAttempt = (attempts.length > 0 ? Math.max(...attempts) : 0) + 1
+      const now = new Date()
+      const next: RecordView[] = [
+        ...previous,
+        {
+          id: `record-${now.getTime()}-${nextAttempt}`,
+          exerciseId: exercise.id,
+          mode,
+          direction: exercise.direction,
+          topic: exercise.topic,
+          attempt: nextAttempt,
+          level: attemptLevel,
+          answer: submittedSections.map((section) => section.text).join('\n\n'),
+          correction: judging_.correction,
+          validated: judging_.validated,
+          source: judging_.source,
+          raw: judging_.raw,
+          createdAt: now,
+        },
+      ]
+      // 存下来的是**实际落盘的**那份：写不下时会丢最旧的，界面必须跟着一致
+      return saveRecords(next)
+    })
   }
 
   async function submitLive(): Promise<void> {
