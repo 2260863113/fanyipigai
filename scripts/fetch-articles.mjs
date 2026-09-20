@@ -133,10 +133,17 @@ function extractParagraphs(html) {
   for (const match of segment.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
     const text = stripTags(match[1]).replace(/\s+/g, ' ').trim()
     if (text.length < 40) continue
-    // 明显的非正文：版权、分享、编辑署名、导航
+    // 明显的非正文：版权、分享、编辑署名、导航、Cookie 提示
     if (/^(copyright|all rights reserved|editor:|source:|share|related|most read)/i.test(text)) continue
     if (/\. All rights reserved/i.test(text)) continue
     if (/^(Xinhua|China Daily|CGTN)\s*\|/i.test(text)) continue
+    /*
+     * Cookie / 隐私提示：实测漏过一次——art-society-1 的选段里混进了整句
+     * "By continuing to browse our site you agree to our use of cookies, revised Privacy
+     * Policy and Terms of Use."。它出现在正文容器里，靠"太短"过滤不掉（它很长），
+     * 只能按内容特征拦。
+     */
+    if (/cookies?|privacy policy|terms of use|browse our site/i.test(text)) continue
     paragraphs.push(text)
   }
   return paragraphs
