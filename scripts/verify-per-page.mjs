@@ -272,12 +272,19 @@ try {
          const m = /第\\s*\\d+\\s*\\/\\s*(\\d+)\\s*页/.exec(hint);
          return m ? Number(m[1]) : 0;
        })(),
+       /*
+        * 翻页导航必须落在**左边「原文」那一栏**（用户要求）：放在那边，
+        * 人的眼睛在原文上，翻页是为了换一段原文；放右栏会和「提交批改」挤在一起。
+        */
+       导航在左栏: document.querySelector('.pane-source .section-nav') !== null,
+       导航在右栏: document.querySelector('.pane-answer .section-nav') !== null,
      })`,
   )
   console.log('起始状态 =', JSON.stringify(setup))
   check(setup.stub, '批改接口桩已注入（不花 API 钱）')
   check(setup.tab === '文章', '默认落在「文章」栏（逐页批改就是文章题的主循环）', setup.tab)
   check(setup.pages >= 3, `这一篇有 ${setup.pages} 页（够走完"填一页 / 交一页 / 翻一页"）`)
+  check(setup.导航在左栏 && !setup.导航在右栏, '「上一页 / 下一页」在左边「原文」那一栏，不在作答栏')
 
   /*
    * 读下每一页的原文，然后逐页走：
@@ -395,6 +402,30 @@ try {
        };
 
        // 「返回编辑」：结果作废、可以接着改，按钮变成手动的那个
+       const mark = document.querySelector('.pane-answer [data-mark-id]');
+       if (mark) mark.click();
+       await sleep(400);
+       const bubbleBefore = {
+         卡片在: !!document.querySelector('.pane-answer .ann-bubble'),
+         收藏按钮: (document.querySelector('.pane-answer .ann-bubble button')?.textContent || '').trim(),
+       };
+       const bubbleFavorite = document.querySelector('.pane-answer .ann-bubble button');
+       if (bubbleFavorite) bubbleFavorite.click();
+       await sleep(400);
+       const bubbleAfter = {
+         卡片在: !!document.querySelector('.pane-answer .ann-bubble'),
+         收藏按钮: (document.querySelector('.pane-answer .ann-bubble button')?.textContent || '').trim(),
+       };
+       let favoriteCount = 0;
+       try {
+         favoriteCount = (JSON.parse(window.localStorage.getItem('translation-practice.favorites') || '[]') || []).length;
+       } catch (error) {
+         favoriteCount = -1;
+       }
+       // 收起卡片，别把选中状态带进后面的检查
+       document.querySelector('.pane-source')?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 5, clientY: 5 }));
+       await sleep(200);
+
        const unlock = [...document.querySelectorAll('.pane-answer .btn')]
          .find((b) => (b.textContent || '').trim() === '返回编辑');
        if (unlock) unlock.click();
@@ -425,6 +456,9 @@ try {
          revisit,
          afterUnlock,
          editedTurn,
+         bubbleBefore,
+         bubbleAfter,
+         favoriteCount,
          requests: window.__judgeCalls.map((call) => ({
            start: call.start,
            text: call.text.slice(0, 30),
@@ -510,6 +544,12 @@ try {
     '放开之后提交按钮变成手动的「提交批改（手动）」',
     walked.afterUnlock.button,
   )
+  console.log('小卡片收藏 =', JSON.stringify({ 点之前: walked.bubbleBefore, 点之后: walked.bubbleAfter, 收藏条数: walked.favoriteCount }))
+  check(walked.bubbleBefore.卡片在, '点一处勾画，小卡片出来了')
+  check(walked.bubbleBefore.收藏按钮 === '收藏', '小卡片自己带一颗「收藏」按钮', walked.bubbleBefore.收藏按钮)
+  check(walked.bubbleAfter.卡片在, '点小卡片里的「收藏」之后，卡片**不消失**（点它不算"点外面"）')
+  check(walked.bubbleAfter.收藏按钮 === '已收藏', '收藏之后按钮文案变成「已收藏」', walked.bubbleAfter.收藏按钮)
+  check(walked.favoriteCount === 1, `收藏落盘了（localStorage 里 ${walked.favoriteCount} 条）`)
   check(
     walked.editedTurn.calls === 0,
     `改过之后翻页**没有**自动提交（多发 ${walked.editedTurn.calls} 次）`,

@@ -18,6 +18,15 @@ interface Props {
   /** 是否显示"填补内容"的方框（设置里可关） */
   showFixBoxes: boolean
   onSelect: (selection: Selection | null) => void
+  /**
+   * 小卡片里的「收藏」。
+   *
+   * 为什么不传就不显示：记录页也在用这个组件，那里没有"当前题目"上下文，
+   * 收藏一条旧记录容易存出指不到题的条目（见 domain/favorites.ts 的说明）。
+   */
+  onToggleFavorite?: () => void
+  /** 当前这一处是否已经在收藏里（按钮文案跟着变） */
+  favorited?: boolean
 }
 
 interface Arc {
@@ -322,6 +331,8 @@ export function AnnotationText({
   lineHeightBase,
   showFixBoxes,
   onSelect,
+  onToggleFavorite,
+  favorited,
 }: Props): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const linesRef = useRef<HTMLDivElement | null>(null)
@@ -437,6 +448,12 @@ export function AnnotationText({
    *   - 点到气泡的范围内：气泡不接管鼠标事件（pointer-events: none），
    *     所以那一击其实落在它下面的文字上，但用户的意思显然是"我要看这个气泡"。
    *     因此按坐标判断一次，落在气泡里就不关。
+   *
+   * ⚠️ 还有一处**不属于"外面"**：右下角详情栏里的按钮（「收藏」、关闭）。
+   * 它们说的是"当前选中的这一处"，点了就把选中清掉的话，小卡片会跟着一起消失——
+   * 用户报的正是这个（"点击收藏，卡片不消失"）。收藏按钮自己就在卡片里，
+   * 因此点它绝不能顺手把卡片关掉。判定放在最前面，比坐标判断更可靠：
+   * 收藏之后卡片会重排（按钮文案变「已收藏」），坐标可能已经落在卡片外了。
    */
   useEffect(() => {
     if (!selection) return
@@ -444,7 +461,12 @@ export function AnnotationText({
       const target = event.target
       if (
         target instanceof Element &&
-        (target.closest('[data-mark-id]') || target.closest('.arc-group') || target.closest('.fix-text'))
+        (target.closest('[data-mark-id]') ||
+          target.closest('.arc-group') ||
+          target.closest('.fix-text') ||
+          target.closest('.ann-bubble') ||
+          target.closest('.detail-actions') ||
+          target.closest('.detail-head'))
       ) {
         return
       }
@@ -518,7 +540,29 @@ export function AnnotationText({
             这里**不写**"某某 → 某某"：改前改后本来就画在译文上（荧光带 + 上方小字），
             卡片再抄一遍反而占地方。卡片只说"这是什么问题、为什么"，完整说明在右下角。
           */}
-          <span className="ann-bubble-why">{withSemicolonBreaks(bubble.summary.why)}</span>          <span className="ann-bubble-more">完整说明见右下角</span>
+          <span className="ann-bubble-why">{withSemicolonBreaks(bubble.summary.why)}</span>
+          {/*
+            小卡片自己带一颗「收藏」（用户要求）。
+            与右下角那颗是同一个开关，因此点这里同样**不会**把卡片关掉——
+            点外面才关（见上面 onDocumentClick 里对 .ann-bubble / .detail-actions 的例外）。
+          */}
+          <span className="ann-bubble-foot">
+            {onToggleFavorite ? (
+              <button
+                type="button"
+                className={favorited ? 'btn btn-primary btn-tiny' : 'btn btn-tiny'}
+                onClick={onToggleFavorite}
+                title={
+                  favorited
+                    ? '这一处已经在收藏里了；再点一次就取消收藏'
+                    : '把这一处连同改前/改后/为什么存进收藏，以后在顶栏的「收藏」里看'
+                }
+              >
+                {favorited ? '已收藏' : '收藏'}
+              </button>
+            ) : null}
+            <span className="ann-bubble-more">完整说明见右下角</span>
+          </span>
         </div>
       )}
     </div>

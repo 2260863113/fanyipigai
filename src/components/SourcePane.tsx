@@ -19,12 +19,16 @@ export function SourcePane({
   sourceSectionCount,
   sectionIndex,
   gradedPages,
+  pageStateHint,
+  nextHint,
+  judging,
   currentSection,
   currentSource,
   currentReference,
   onRepaste,
   onRotate,
   onOpenGenerator,
+  onSectionChange,
 }: {
   exercise: Exercise
   mode: Mode
@@ -36,12 +40,19 @@ export function SourcePane({
   sectionIndex: number
   /** 已批改过的页数（逐页批改：每一页各批各的） */
   gradedPages: number
+  /** 当前这一页在逐页批改里的状态说明（"待批改 / 已批改 / 已修改待提交"） */
+  pageStateHint: string
+  /** 「下一页」点下去会发生什么（自动提交 / 只看结果 / 还没写完） */
+  nextHint: string
+  /** 批改进行中：这时不许翻页（结果还没落定） */
+  judging: boolean
   currentSection: Section | undefined
   currentSource: string
   currentReference: string
   onRepaste: () => void
   onRotate: () => void
   onOpenGenerator: () => void
+  onSectionChange: (index: number) => void
 }): JSX.Element {
   return (
     <section className="pane pane-source">
@@ -84,7 +95,7 @@ export function SourcePane({
           )}
           {multiSection && (
             <span className="chip" title="逐页批改：点「下一页」时，刚写完的那一页会自动交去批改">
-              第 {sectionIndex + 1} / {sourceSectionCount} 页 · 已批 {gradedPages} 页
+              已批 {gradedPages} 页
             </span>
           )}
           {isCustom ? (
@@ -110,6 +121,38 @@ export function SourcePane({
             <p>{currentReference}</p>
           </details>
         ) : null}
+
+        {/*
+          翻页导航在**原文这一栏**（用户要求「放在原文左边一栏去」）。
+          放在这里更顺手：人的眼睛在原文上，翻页是为了换一段原文，
+          而右栏是作答/结果——那里放导航会和「提交批改」挤在一起。
+        */}
+        {multiSection && (
+          <div className="section-nav">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => onSectionChange(Math.max(0, sectionIndex - 1))}
+              data-nav="prev"
+              disabled={sectionIndex === 0 || judging}
+            >
+              ← 上一页
+            </button>
+            <span className="hint">
+              第 {sectionIndex + 1} / {sourceSectionCount} 页 · {pageStateHint}
+            </span>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => onSectionChange(Math.min(sourceSectionCount - 1, sectionIndex + 1))}
+              data-nav="next"
+              disabled={sectionIndex >= sourceSectionCount - 1 || judging}
+              title={nextHint}
+            >
+              下一页 →
+            </button>
+          </div>
+        )}
       </div>
     </section>
   )

@@ -200,11 +200,19 @@ try {
          return null;
        };
 
-       const total = pageNo().count;
-       if (!total) return '界面上没有翻页导航，这道题不是多页题';
-
+       const total = pageNo().count || 1;
+       /*
+        * 单页题（句子题那种）没有翻页导航，pageNo() 拿到的是 0——那就按一页走。
+        * 只断言"页数 ≥ 1"会漏掉这段退让，这里显式写出来：没有导航时不需要点「下一页」。
+        */
+       const hasNav = !!document.querySelector('.section-nav');
        for (let i = 0; i < total; i++) {
-         const area = await waitForFreshInput(i);
+         let area = null;
+         for (let k = 0; k < 150 && !area; k++) {
+           const onRightPage = total === 1 || pageNo().index === i;
+           if (onRightPage) area = document.querySelector('.answer-input');
+           if (!area) await sleep(150);
+         }
          if (!area) return '第 ' + (i + 1) + ' 页没有等到可写的输入框（页码=' + (pageNo().index + 1) + '）';
          const onScreen = (document.querySelector('.pane-source .source-text')?.textContent || '').trim();
          setValue(area, sections[i] || onScreen);
@@ -212,7 +220,7 @@ try {
 
          if (i === total - 1) break;
          const next = document.querySelector('.section-nav [data-nav="next"]');
-         if (!next) return '第 ' + (i + 1) + ' 页找不到「下一页」';
+         if (!next) return '第 ' + (i + 1) + ' 页找不到「下一页」（导航=' + hasNav + '）';
          next.click();
        }
        const submit = document.querySelector('.pane-answer .btn-primary');

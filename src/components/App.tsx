@@ -36,7 +36,7 @@ import { SettingsModal } from './SettingsModal'
 import { PasteModal } from './PasteModal'
 import { GenerateModal } from './GenerateModal'
 import { SourcePane } from './SourcePane'
-import { AnswerPane, type PageState } from './AnswerPane'
+import { AnswerPane, PAGE_STATE_HINT, nextPageHint, type PageState } from './AnswerPane'
 import { ScorePane } from './ScorePane'
 import { NotesPane } from './NotesPane'
 import { TopBar } from './TopBar'
@@ -69,10 +69,20 @@ const FIRST_ARTICLE = ARTICLE_EXCERPTS[0]
 const EMPTY_GENERATED: GeneratedExercise[] = []
 const EMPTY_LAYOUT: AnnotatedLayout = { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 }
 
-function casesOfMode(mode: Tab): typeof ALL_CASES {
-  if (mode === 'records' || mode === 'custom' || mode === 'favorites') return []
-  return ALL_CASES.filter((item) => item.exercise.mode === mode)
+/** 「上一次在某一栏看的是哪道题」——切回来要回到它（见 selectTab 的注释）。 */
+interface LastInTab {
+  id: string
+  origin: ExerciseOrigin
 }
+
+/**
+ * 一道题是从哪里来的。
+ *
+ * 光记题号不够：文章栏的题号可能是 `art-…`（文章库）、`article-001`（内置题库）、
+ * AI 现出的 `gen-…`，也可能是自己贴的 `custom-…`。按来源重新解析一遍，
+ * 才能保证"取回来的确实是当初那一篇"，而不是某个撞了号的别的东西。
+ */
+type ExerciseOrigin = 'article-bank' | 'builtin' | 'custom' | 'sentence' | 'term'
 
 export function App(): JSX.Element {
   const firstCase = ALL_CASES[0]
@@ -159,6 +169,41 @@ export function App(): JSX.Element {
             ? exerciseOfSentence(exerciseId, activeSentence)
             : activeCase.exercise
   const mode = exercise.mode
+  /**
+   * 每一栏"上一次看的是哪道题"。
+   *
+   * 为什么用 ref 而不是 state：它记的是"离开时的样子"，只给下一次切栏读，
+   * 不参与渲染；而切栏那一刻读到的必须是**最新**的一份——写进 state 会晚一帧，
+   * 用户"切走→立刻切回"时就会读到空值。这里在**每次渲染时**顺手记下当前这一栏，
+   * 与渲染同步、不触发重渲染。
+   */
+  const lastInTabRef = useRef<Partial<Record<Tab, LastInTab>>>({})
+  const origin: ExerciseOrigin = isCustom
+    ? 'custom'
+    : activeArticle
+      ? 'article-bank'
+      : activeSentence
+        ? 'sentence'
+        : isTermExercise
+          ? 'term'
+          : 'builtin'
+  lastInTabRef.current[tab] = { id: exercise.id, origin }
+
+  /**
+   * 把"记住的那道文章题"解析回一个现在确实存在的题号；取不回来就返回 null（退回内置第一道）。
+   *
+   * 四种来源分别确认：文章库、自己贴的、AI 现出的（在本题的池子里）、内置题库。
+   * 不确认就会出现"切回来落在一道已经不存在的题上"——那比换一篇更糟：界面会空着。
+   */
+  function resolveRememberedArticle(remembered: LastInTab | undefined): string | null {
+    if (!remembered) return null
+    if (remembered.origin === 'article-bank') return articleById(remembered.id) ? remembered.id : null
+    if (remembered.origin === 'custom') return customExercise?.id === remembered.id ? remembered.id : null
+    if (remembered.origin === 'builtin') {
+      return ALL_CASES.some((item) => item.exercise.id === remembered.id) ? remembered.id : null
+    }
+    return null
+  }
   /** 这道题自己的会话状态（作答、结果、看哪一面、第几份原文、AI 生成的题池） */
   const session = sessionOf(sessions, exercise.id)
   const { drafts, sectionIndex, pages, unlocked } = session
@@ -326,35 +371,64 @@ export function App(): JSX.Element {
     )
   }
 
+  /**
+   * 切到某个题型栏。
+   *
+   * ## 切走再切回来，回到的是**离开时那一篇**
+   *
+   * 用户报过"切一下导航栏，回来发现之前的批改内容清除了"。查下来会话状态其实一直在
+   * （reducer 里留着那一篇每一页的批改），**是题目被换掉了**：
+   * 文章栏由**文章库**供题（`art-<领域>-<n>`，这一篇 8 页），而内置题库里也有两道文章题
+   * （`article-001/002`，4 段）。原先切回「文章」栏一律落到"该栏的第一道内置题"，
+   * 于是用户从文章库第 5 页切去「术语」再切回来，看到的是**另一篇 4 段的文章**、第 1 页、什么都没写。
+   * 术语栏与句子栏是同一个毛病（切回来被弹回"该领域第 1 组 / 第 1 句"）。
+   *
+   * 现在按栏记住"上一次在这一栏看的是哪道题"，切回来就回到它——包括题目来源是
+   * 文章库、句子库、术语库、自己贴的题，还是内置题库。
+   *
+   * ## 记的是"题目来源"，不是"题号"
+   *
+   * 只记一个题号是不够的：文章栏的题号可能是 `art-...`（文章库）、`article-001`（内置）、
+   * 也可能是 AI 现出的 `gen-...`。因此记 `{id, origin}` 两样，取回来时按来源重新解析，
+   * 免得"题号撞车"（比如某个来源被清掉之后，同一个 id 落到另一来源上）。
+   */
   function selectTab(nextTab: Tab): void {
     setTab(nextTab)
     setOpenRecord(null)
     if (nextTab === 'records') return
     if (nextTab === 'favorites') return
     if (nextTab === 'custom') {
-      // 贴过就直接切到那一篇；没贴过就把贴题弹窗打开
+      // 贴过就回到那一篇；没贴过就把贴题弹窗打开
       if (customExercise) selectExercise(customExercise.id)
       else openPaste()
       return
     }
     /*
-     * 术语栏由**术语库**供题（不是内置题库）：进去就落到上次那个领域的第 1 组。
-     * 领域跟着文章栏选的那个走——术语与文章是同一套主题域，没必要让人选两次。
+     * 术语栏与句子栏都由数据表供题（术语库 / 文章库切句），
+     * 领域跟着文章栏选的那个走——术语、句子与文章是同一套主题域，没必要让人选两次。
+     * 但**离开时是哪一组/哪一句，回来还是它**（见上面"切走再切回来"那段）。
      */
+    const remembered = lastInTabRef.current[nextTab]
     if (nextTab === 'term') {
-      selectExercise(termExerciseId(articleSelection.domain, 1))
+      const id = remembered?.origin === 'term' ? remembered.id : termExerciseId(articleSelection.domain, 1)
+      if (id !== exerciseId) selectExercise(id)
+      return
+    }
+    if (nextTab === 'sentence') {
+      const id = remembered?.origin === 'sentence' ? remembered.id : sentenceExerciseId(articleSelection.domain, 1)
+      if (id !== exerciseId) selectExercise(id)
       return
     }
     /*
-     * 句子栏也由**文章库**供题：进去就落到上次那个领域的第一句。
-     * （内置的句子题数据仍在 mock.ts 里，只是不再从界面进入——与「段落」栏同样处理。）
+     * 文章栏：回到离开时那一篇。它可能来自文章库、内置题库、AI 出题或自己贴的题，
+     * 因此按**来源**判断能不能取回来，取不回来（例如文章库那一篇已不在数据里）才退回内置的第一道。
      */
-    if (nextTab === 'sentence') {
-      selectExercise(sentenceExerciseId(articleSelection.domain, 1))
+    const articleCandidate = resolveRememberedArticle(remembered)
+    if (articleCandidate) {
+      if (articleCandidate !== exerciseId) selectExercise(articleCandidate)
       return
     }
-    // 切题型只换"当前在看哪道题"，不清空任何一道题的作答与结果
-    const next = casesOfMode(nextTab)[0]
+    const next = ALL_CASES.find((item) => item.exercise.mode === nextTab)
     if (next) selectExercise(next.exercise.id)
   }
 
@@ -734,7 +808,7 @@ export function App(): JSX.Element {
       : null
 
   return (
-    <div className="app">
+    <div className="app" data-exercise-id={exercise.id}>
       <TopBar
         tab={tab}
         onSelectTab={selectTab}
@@ -825,9 +899,13 @@ export function App(): JSX.Element {
               sourceSectionCount={sourceSections.length}
               sectionIndex={sectionIndex}
               gradedPages={gradedPages}
+              pageStateHint={PAGE_STATE_HINT[pageState]}
+              nextHint={nextPageHint({ hasAnswer: currentAnswer.trim().length > 0, wasUnlocked: pageUnlocked, pageState })}
+              judging={judging}
               currentSection={currentSection}
               currentSource={currentSource}
               currentReference={currentReference}
+              onSectionChange={(next) => void goToSection(next)}
               onRepaste={openPaste}
               onRotate={rotateSource}
               onOpenGenerator={openGenerator}
@@ -893,7 +971,6 @@ export function App(): JSX.Element {
               pageState={pageState}
               multiSection={multiSection}
               sectionIndex={sectionIndex}
-              sectionCount={sourceSections.length}
               currentAnswer={currentAnswer}
               onSelect={toggleSelection}
               onSettingsChange={updateSettings}
@@ -909,7 +986,13 @@ export function App(): JSX.Element {
               onSubmit={() => void submitPage(sectionIndex)}
               onSubmitFixture={submitFixture}
               onAnswerChange={updateAnswer}
-              onSectionChange={(next) => void goToSection(next)}
+              {...(practiceFavorite
+                ? {
+                    favorite: favorites.some((item) => item.id === practiceFavorite.id),
+                    onToggleFavorite: () =>
+                      setFavorites((previous) => toggleFavorite(previous, practiceFavorite)),
+                  }
+                : null)}
             />
             )}
 

@@ -171,6 +171,14 @@ export interface RenderProbe {
    * 只测"作答内容是否保留"（textarea 的 value），因为它是用户最在意的东西。
    */
   survivedTabRoundTrip?: { typed: string; afterReturn: string }
+  /**
+   * 切到别的题型再切回来之后，**批改结果**还在不在（不看作答文字，看那份批改本身）。
+   * 用户的报告是"切走再切回来，之前的批改内容被清除了"，因此单独量这一件事。
+   */
+  tabRoundTripResult?: {
+    before: { score: string; annotatedChars: number; notesChars: number; pageState: string }
+    after: { score: string; annotatedChars: number; notesChars: number; pageState: string }
+  }
   /** 顶部导航里的模式标签 */
   modeTabLabels: string[]
   /** 切换到的第一个示例（用来核对四类题型都有题） */
@@ -1011,6 +1019,7 @@ export async function renderApp(
 
   // 切走再切回来，检查会不会丢东西
   let survivedTabRoundTrip: RenderProbe['survivedTabRoundTrip']
+  let tabRoundTripResult: RenderProbe['tabRoundTripResult']
   if (options.checkTabRoundTrip) {
     const clickTab = async (label: string): Promise<void> => {
       const tab = [...container.querySelectorAll<HTMLButtonElement>('.mode-tab')].find(
@@ -1021,11 +1030,30 @@ export async function renderApp(
         tab.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       })
     }
+    const backTabLabel = MODE_TAB_LABEL[targetMode] ?? '文章'
+    const readGraded = (): { score: string; annotatedChars: number; notesChars: number; pageState: string } => ({
+      score: textOf('.pane-score .score-number').trim(),
+      annotatedChars: (container.querySelector('.pane-answer .annotated-lines')?.textContent ?? '').length,
+      notesChars: textOf('.pane-notes').trim().length,
+      pageState: navText(),
+    })
 
     /*
-     * 先回到第 1 页，再在那上面写一段独有内容——**那一页已经批过**，所以得先按
-     * 「返回编辑」（批过的页是只读的，这正是逐页批改的样子）。这一步同时也是
-     * "改过的页不再自动提交"那条规矩的起点。
+     * ① 先量"**已批改**的那一页切走再切回来，那份批改还在不在"。
+     *
+     * 这正是用户报告的那一条（"切换导航栏，切换回来发现之前的批改内容清除了"）。
+     * 必须**趁这一页还是只读的**去量：一旦按下「返回编辑」，画面上本来就没有批注了
+     * （那是另一个状态），量出来的"0 字"会让人以为功能坏了——第一版就写错在这里。
+     */
+    const gradedBefore = readGraded()
+    await clickTab('术语')
+    await clickTab(backTabLabel)
+    await tick()
+    tabRoundTripResult = { before: gradedBefore, after: readGraded() }
+
+    /*
+     * ② 再量"正在写的那一页切走再切回来，写进去的字还在不在"。
+     * 这一页已经批过，得先按「返回编辑」——它同时也是"改过的页不再自动提交"的起点。
      */
     for (let index = sectionIndexNow(); index > 0; index -= 1) await clickNav('prev')
     await ensureEditable()
@@ -1033,9 +1061,9 @@ export async function renderApp(
     await typeInto(typed)
     const afterTyping = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
 
-    // 切到别的题型，再切回来：刚写的内容必须还在
     await clickTab('术语')
-    await clickTab(MODE_TAB_LABEL[targetMode] ?? '文章')
+    await clickTab(backTabLabel)
+    await tick()
 
     const afterReturn = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
     survivedTabRoundTrip = { typed: afterTyping, afterReturn }
@@ -1257,6 +1285,7 @@ export async function renderApp(
     judgeCalls: judgeFetch.calls(),
     judgeRequestBody: judgeFetch.lastBody(),
     survivedTabRoundTrip,
+    tabRoundTripResult,
     interaction,
     restore: () => {
       // 把改过的全局对象放回去。不做这一步，后面依赖 fetch 的检查（例如截屏的就绪探测）

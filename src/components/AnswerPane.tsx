@@ -62,7 +62,6 @@ export function AnswerPane({
   pageState,
   multiSection,
   sectionIndex,
-  sectionCount,
   currentAnswer,
   onSelect,
   onSettingsChange,
@@ -71,7 +70,8 @@ export function AnswerPane({
   onSubmit,
   onSubmitFixture,
   onAnswerChange,
-  onSectionChange,
+  favorite,
+  onToggleFavorite,
 }: {
   shown: ShownCorrection | null
   layout: AnnotatedLayout
@@ -89,7 +89,6 @@ export function AnswerPane({
   pageState: PageState
   multiSection: boolean
   sectionIndex: number
-  sectionCount: number
   currentAnswer: string
   onSelect: (selection: Selection | null) => void
   onSettingsChange: (patch: Partial<ViewSettings>) => void
@@ -99,7 +98,9 @@ export function AnswerPane({
   onSubmit: () => void
   onSubmitFixture: () => void
   onAnswerChange: (value: string) => void
-  onSectionChange: (index: number) => void
+  /** 小卡片里的「收藏」；不传就不显示那颗按钮（记录页不传） */
+  favorite?: boolean
+  onToggleFavorite?: () => void
 }): JSX.Element {
   const hasAnswer = currentAnswer.trim().length > 0
   /** 这一页的结果还在（正在看的就是它）。它是"返回编辑"够不够格出现的依据 */
@@ -111,18 +112,6 @@ export function AnswerPane({
    * 结果又有了，但这一页仍然是"改过的那一页"——它照样不该再自动提交。
    */
   const wasUnlocked = pageState === 'edited'
-
-  /**
-   * 「下一页」的提示语。三种情形说的话完全不同，因此写清楚**点下去会发生什么**：
-   * 自动交出去批、直接翻过去看结果、还是压根还没写完。
-   */
-  const nextHint = !hasAnswer
-    ? '这一页还没写——先写点东西吧'
-    : wasUnlocked
-      ? '翻到下一页（改过的页不会自动提交，请先按「提交批改」）'
-      : pageState === 'graded'
-        ? '翻到下一页（这一页已批过，不会重新提交）'
-        : '翻到下一页：这一页会先交去批改'
 
   return (
     <section className="pane pane-answer">
@@ -239,48 +228,41 @@ export function AnswerPane({
               lineHeightBase={settings.lineHeight}
               showFixBoxes={settings.showFixBoxes}
               onSelect={onSelect}
+              {...(onToggleFavorite ? { onToggleFavorite, favorited: favorite === true } : null)}
             />
           )
         ) : null}
 
         {/*
-          翻页导航**一直显示**（不再只在作答时显示）：批过的页是只读的，
-          但它同样要能翻回上一页看结果、翻到下一页接着译——那是逐页批改的主循环。
+          翻页导航**不在这里**——它挪到了左边「原文」那一栏（用户要求）。
+          理由：翻页是为了换一段原文，人的眼睛在原文上；而这一栏是作答/结果，
+          导航摆在这里会和「提交批改」挤在一起。
         */}
-        {multiSection && (
-          <div className="section-nav">
-            <button
-              type="button"
-              className="btn"
-              onClick={() => onSectionChange(Math.max(0, sectionIndex - 1))}
-              data-nav="prev"
-              disabled={sectionIndex === 0 || judging}
-            >
-              ← 上一页
-            </button>
-            <span className="hint">
-              第 {sectionIndex + 1} / {sectionCount} 页 · {PAGE_STATE_HINT[pageState]}
-            </span>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => onSectionChange(Math.min(sectionCount - 1, sectionIndex + 1))}
-              data-nav="next"
-              disabled={sectionIndex >= sectionCount - 1 || judging}
-              title={nextHint}
-            >
-              下一页 →
-            </button>
-          </div>
-        )}
       </div>
     </section>
   )
 }
 
-/** 翻页导航中间那句状态说明。三种状态各一句话，让人一眼知道这一页走到哪一步了。 */
-const PAGE_STATE_HINT: Record<PageState, string> = {
+/** 翻页导航中间那句状态说明。三档各一句话，让人一眼知道这一页走到哪一步了。 */
+export const PAGE_STATE_HINT: Record<PageState, string> = {
   pending: '待批改',
   graded: '已批改（只读，点「返回编辑」可改）',
   edited: '已修改 · 待提交',
+}
+
+/**
+ * 「下一页」点下去会发生什么。
+ *
+ * 三种情形说的话完全不同，因此写清楚**点下去会发生什么**：
+ * 自动交出去批、直接翻过去看结果、还是这一页压根还没写。
+ */
+export function nextPageHint(options: {
+  hasAnswer: boolean
+  wasUnlocked: boolean
+  pageState: PageState
+}): string {
+  if (!options.hasAnswer) return '这一页还没写——先写点东西吧'
+  if (options.wasUnlocked) return '翻到下一页（改过的页不会自动提交，请先按「提交批改」）'
+  if (options.pageState === 'graded') return '翻到下一页（这一页已批过，不会重新提交）'
+  return '翻到下一页：这一页会先交去批改'
 }

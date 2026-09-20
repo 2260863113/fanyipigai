@@ -7,7 +7,7 @@ import { useCallback, useState } from 'react'
  * 跟作答内容无关；写进浏览器就够，也免得为它加一张表。
  */
 export interface ViewSettings {
-  /** 正文行距（em 倍数）。默认 2.5，与 styles.css 的 .annotated-lines 一致 */
+  /** 正文行距（em 倍数）。与 styles.css 的 .annotated-lines 一致 */
   lineHeight: number
   /** 是否显示"填补内容"的方框（关掉后只留荧光笔底色/弧线） */
   showFixBoxes: boolean
@@ -15,8 +15,17 @@ export interface ViewSettings {
   answerView: 'correct' | 'compare'
 }
 
+/**
+ * 默认行距。
+ *
+ * 从 2.5 提到 3.0：用户要求"批改后的行间距加大"（他原话是"和练习记录的行间距一样"——
+ * 那两处其实是同一个渲染器、同一份设置，从来就是一样的；他要的是**更长**）。
+ * 加长之后每一行上方补写的正确写法、以及调序弧线都更不容易挤在一起，读起来也更省力。
+ * ⚠️ 这一条会影响 FixLayer 的测量（行距是它算"这一行还放不放得下"的基准），
+ * 改它之后必须跑 `npm run smoke` 与 `scripts/probe-fix-align.mjs`。
+ */
 export const DEFAULT_SETTINGS: ViewSettings = {
-  lineHeight: 2.5,
+  lineHeight: 3,
   showFixBoxes: true,
   answerView: 'correct',
 }

@@ -127,6 +127,53 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(false, '最小修改用例可以执行', error instanceof Error ? error.message : String(error))
   }
 
+  /*
+   * 收藏里的"整句"断句：**句末标点跟着引号**时也要在那里断开。
+   *
+   * 用户报过的那一条。他给的原例里，句末那个点号后面跟的是引号而不是空格，
+   * 而且**引号后面紧跟着下一个句子的第一个词**（`."someone says.`），
+   * 因此两个方向都要验：
+   *   ① 直引号「左引号 + 空格 + 内容 + 点号 + 右引号 + 紧跟下一个词」
+   *   ② 直引号、但句末跟着的是**左引号**（用户实际敲出来的样子，他左右不分）
+   */
+  console.log('\n[收藏断句] 句末标点跟着引号时也要断开')
+  try {
+    const { sentenceAround, splitSentenceSpans } = await import('../src/domain/favorites')
+    const samples = [
+      { label: '直引号·句末跟右引号', text: 'sgadgg ds  ds ." sdf  fds ."someone says.' },
+      // 用户实际敲出来的样子：句末那个点号后面跟的是**左引号**（他左右不分），也要能切
+      { label: '直引号·句末跟左引号', text: 'sgadgg ds  ds ." sdf  fds .“someone says.' },
+      { label: '弯引号', text: 'sgadgg ds  ds .“ sdf  fds .”someone says.' },
+    ]
+    for (const sample of samples) {
+      const spans = splitSentenceSpans(sample.text)
+      const pieces = spans.map((span) => sample.text.slice(span.from, span.to))
+      check(pieces.length === 3, `${sample.label}：拆成 3 句（实际 ${pieces.length}：${JSON.stringify(pieces)}）`)
+      check(
+        pieces.join('') === sample.text,
+        `${sample.label}：三句首尾相接、合起来正好是原文（不重不漏不丢字）`,
+        JSON.stringify(pieces),
+      )
+      const second = sample.text.indexOf('sdf')
+      const third = sample.text.indexOf('someone')
+      const mid = sentenceAround(sample.text, second, second + 3)
+      const last = sentenceAround(sample.text, third, third + 4)
+      check(mid.includes('sdf') && mid.includes('fds'), `${sample.label}：第二处落在引号里那句（实际：${JSON.stringify(mid)}）`, mid)
+      check(last === 'someone says.', `${sample.label}：第三处落在 someone says.（实际：${JSON.stringify(last)}）`, last)
+    }
+    check(
+      sentenceAround('It costs 3.5 euros in total. Then we left.', 10, 13) === 'It costs 3.5 euros in total.',
+      '小数点不会被切碎',
+    )
+    check(
+      sentenceAround('He said "stop." Then we left.', 9, 17).includes('stop'),
+      '引号里的整句仍然是自足的一句',
+      JSON.stringify(sentenceAround('He said "stop." Then we left.', 9, 17)),
+    )
+  } catch (error) {
+    check(false, '收藏断句可以验证', error instanceof Error ? error.message : String(error))
+  }
+
   // 批改提示词：不含参考译文
   console.log('\n[提示词] 参考译文不发给模型')
   try {
@@ -903,6 +950,30 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         `切到别的题型再切回来，作答原样保留（回来是 ${survived.afterReturn.length} 字：${JSON.stringify(survived.afterReturn.slice(0, 24))}）`,
       )
     }
+    /*
+     * 切走再切回来，**批改结果**必须原样还在。
+     *
+     * 用户的报告就是这一条："只要切换导航栏，切换回来发现之前的批改内容清除了"。
+     * 因此这里核对的不只是作答文字，而是界面上那份批改本身：
+     * 带批注的译文、分数、右下角的说明——三样都在，才算"批改没被清掉"。
+     */
+    const trip = roundTrip.tabRoundTripResult
+    check(Boolean(trip), '拿到了切换前后的对照数据')
+    if (trip) {
+      check(trip.before.annotatedChars > 0, `切换前译文上是带批注的（${trip.before.annotatedChars} 字）`)
+      check(
+        trip.after.annotatedChars === trip.before.annotatedChars && trip.after.annotatedChars > 0,
+        `切走再切回来，带批注的译文原样还在（前 ${trip.before.annotatedChars} 字 / 后 ${trip.after.annotatedChars} 字）`,
+      )
+      check(
+        trip.after.score === trip.before.score && trip.after.score !== '',
+        `分数没变（前 ${trip.before.score} / 后 ${trip.after.score}）`,
+      )
+      check(
+        trip.after.notesChars === trip.before.notesChars && trip.after.notesChars > 0,
+        `右下角的批注说明也还在（前 ${trip.before.notesChars} 字 / 后 ${trip.after.notesChars} 字）`,
+      )
+    }
     roundTrip.restore()
 
     /*
@@ -1261,7 +1332,16 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(!/font-weight:\s*(bold|[6-9]00)/.test(noteToRule), '清单里"改成什么"也不加粗', noteToRule.trim())
     const bubbleToRule = /\.ann-bubble-to\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
     check(!/font-weight:\s*(bold|[6-9]00)/.test(bubbleToRule), '气泡里"改成什么"也不加粗', bubbleToRule.trim())
-    check(/line-height:\s*2\.5/.test(annotatedRule), '正文行高基准仍是 2.5（方框需要时再额外加）')
+    /*
+     * CSS 里那条 line-height 是**初始值**：真正生效的是 `.annotated-lines` 身上的行内样式
+     * （由设置里的行距算出来）。这里只要求它是个合法数值，别再钉死某个具体系数——
+     * 用户会按自己的喜好拖动滑杆，而默认值也在 settings.ts 里改过一次（2.5 → 3）。
+     */
+    check(/line-height:\s*\d/.test(annotatedRule), '正文行高的 CSS 初始值是个合法数值', annotatedRule.trim())
+    check(
+      /lineHeight:\s*3\b/.test(readFileSync(path.join(root, 'src/components/settings.ts'), 'utf8')),
+      '默认行距是 3（用户要求"加大"，见 settings.ts 的注释）',
+    )
 
     /*
      * 记号的视觉语言只有一种：**相应颜色的荧光笔底色**。

@@ -55,25 +55,108 @@ export interface Favorite {
 }
 
 /**
+ * 句末标点后面、真正属于"句子结尾"的那些收尾字符（引号、右括号之类）。
+ *
+ * ⚠️ 这里**同时收了 `“` 与 `”`**（以及 ASCII 的 `"`），看起来违反常识，但有必要：
+ * 用户报的原例正是 `… fds .“ sdf  fds .”someone says.`——句末那个点号后面跟的是
+ * **左引号** `“`（他自己敲的时候左右不分）。若只认右引号，这个句子就切不开。
+ * 一句话里"句点紧跟引号"本身就是很强的收句信号，方向不对也仍然该切。
+ */
+const TRAILING = /["'“”‘’）)】]/
+
+/** 一个句子的区间（`from` 含、`to` 不含）。 */
+export interface SentenceSpan {
+  from: number
+  to: number
+}
+
+/**
+ * 把一段文本切成句子（返回**首尾相接、不重不漏**的区间）。
+ *
+ * ## 句末的判据
+ *
+ * - `。！？!?…` 与换行：本身就是句末；
+ * - `.`：要"收得住"才算句末。两种算，一种不算：
+ *   1. 点号后面是空白或结尾（`… total. Then…`）→ 算；
+ *   2. 点号后面**紧跟一个收尾引号**（`… fds ."` / `… fds .”`）→ 算。
+ *      **这就是用户报的那一条**：句子以引号收尾时，引号后面往往没有空格，
+ *      不认它就会把三句粘成一句；
+ *   3. 点号后面紧跟数字（`3.5`）→ 不算（小数点）。
+ *
+ * ## 不重不漏靠"一次只切一刀 + 引号归前一句"
+ *
+ * 每个切点只切一次，切点后面的收尾引号归**前一句**（`… fds ."` 是自足的一句）。
+ * 于是"右引号后面紧跟着下一个句子的第一个词"这种写法（`."someone says.`）也能切对：
+ * 引号留在前一句里，下一句从 `someone` 开始，两边接得严丝合缝。
+ *
+ * ⚠️ 已知取舍：`e.g.` 这类缩写后面跟空格（或跟引号）看起来就是一个句末，会被切开。
+ * 要做对得引一张缩写表；而收藏里的一整句多切一刀只是少给一点上下文，不值得。
+ */
+export function splitSentenceSpans(text: string): SentenceSpan[] {
+  /** 点号后面紧跟收尾引号 → 这一句到此为止 */
+  const quoteCloses = (index: number): boolean => {
+    const after = text[index + 1]
+    return after !== undefined && TRAILING.test(after)
+  }
+  const endsAt = (index: number): boolean => {
+    const char = text[index] ?? ''
+    if (/[。！？!?…\n]/.test(char)) return true
+    if (char !== '.') return false
+    const after = text[index + 1]
+    if (after !== undefined && /[0-9]/.test(after)) return false // 3.5
+    return after === undefined || /\s/.test(after) || quoteCloses(index)
+  }
+
+  const spans: SentenceSpan[] = []
+  let start = 0
+  for (let index = 0; index < text.length; index += 1) {
+    if (!endsAt(index)) continue
+    let end = index + 1
+    /*
+     * 句末标点后面的收尾引号属于这一句。ASCII 的 `"` 只在这个位置收（紧跟点号），
+     * 别处它可能是**开启**引号——`" sdf` 开头那个就是，不能被上一句抢走。
+     */
+    if (quoteCloses(index)) {
+      while (end < text.length && TRAILING.test(text[end] ?? '')) end += 1
+    }
+    spans.push({ from: start, to: end })
+    start = end
+    index = end - 1
+  }
+  if (start < text.length) spans.push({ from: start, to: text.length })
+  return spans
+}
+
+/**
  * 取"这一处所在的那一整句"在原文里的区间。
  *
  * 从错误区间往两边扩到句末标点或换行为止，并把句末标点带上——不这么扩的话，
  * 收藏里就只剩两个词，回头根本看不出上下文。
- * 英文句点要跟着空格或结尾才算断句，免得把 `e.g.` 这种切碎。
+ *
+ * ## 断句要认引号（用户报过的那一条）
+ *
+ * 句子常常以**引号收尾**，而引号后面不一定有空格：
+ *   - 用户的原例（ASCII 引号）：`sgadgg ds  ds ." sdf  fds ."someone says.` → 要拆成**三句**
+ *   - 同一个例子的弯引号写法：`sgadgg ds  ds .“ sdf  fds .”someone says.`
+ *
+ * 边界由 `splitSentenceSpans` 统一算；这里只负责"这一处落在哪一句里"。
+ * 这样"哪几处算一句"与"收藏里显示的整句"永远出自同一套判据，不会各说各话。
+ *
+ * ⚠️ 已知取舍：`e.g.` 这类缩写后面跟空格，看起来就是一个句末，会被切开。
+ * 要做对得引一张缩写表；而收藏里的一整句多切一刀只是少给一点上下文，不值得。
  */
 export function sentenceRange(answer: string, start: number, end: number): { from: number; to: number } {
-  const boundary = (index: number): boolean => {
-    const char = answer[index] ?? ''
-    if (/[。！？!?…\n]/.test(char)) return true
-    if (char !== '.') return false
-    const next = answer[index + 1] ?? ''
-    return next === '' || /\s/.test(next)
-  }
-  let from = Math.max(0, Math.min(start, answer.length))
-  while (from > 0 && !boundary(from - 1)) from -= 1
-  let to = Math.max(from, Math.min(answer.length, end))
-  while (to < answer.length && !boundary(to)) to += 1
-  if (to < answer.length) to += 1
+  const spans = splitSentenceSpans(answer)
+  const at = Math.max(0, Math.min(start, answer.length))
+  // 落在哪一句里：包含 `at` 的那一句；`at` 正好在句首时就是它自己
+  const hit = spans.find((span) => at >= span.from && at < span.to) ?? spans[spans.length - 1]
+  if (!hit) return { from: 0, to: answer.length }
+  // 区间里的首尾空白去掉，但**不能动句内的字**，因此只往里收、不外扩
+  let from = hit.from
+  const upper = Math.max(hit.from, Math.min(hit.to, end))
+  while (from < upper && /\s/.test(answer[from] ?? '')) from += 1
+  let to = Math.min(answer.length, Math.max(hit.to, end))
+  while (to > from && /\s/.test(answer[to - 1] ?? '')) to -= 1
   return { from, to }
 }
 

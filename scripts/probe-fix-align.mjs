@@ -835,7 +835,15 @@ async function main() {
            if (!btn) return '找不到题型标签';
            btn.click();
            await sleep(500);
-           const item = [...document.querySelectorAll('.case-tab')][${caseIndex}];
+           /*
+            * 题型栏里的"题目切换条"**现在不一定有**：句子栏与文章栏都由文章库供题，
+            * 内置的那几道题不再从界面进入（见 ADR 0007 与句子库那一轮改动）。
+            * 因此这里改成"有就点、没有就用界面默认落点"，而不是直接判失败——
+            * 探针要量的是"补写的字与荧光带对不对齐"，落到哪一道内置题上并不重要。
+            */
+           const items = [...document.querySelectorAll('.case-tab')];
+           if (items.length === 0) return 'ok';
+           const item = items[${caseIndex}];
            if (!item) return '这道题型下没有第 ${caseIndex + 1} 道题';
            item.click();
            await sleep(500);

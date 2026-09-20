@@ -45,6 +45,11 @@ export function DetailPanel({ selection, validated, answer, onClose, embedded, o
 
   return (
     <aside className={embedded ? 'detail detail-embedded' : 'detail'} style={{ borderColor: color }}>
+      {/*
+        `detail-head` 与 `detail-actions` 这两个类名同时是**"点这里不要收起小卡片"的标记**：
+        AnnotationText 的文档级点击处理会跳过它们（见那边的注释）。
+        这个栏说的就是"当前选中的这一处"，点它里面的按钮不该等于取消选中。
+      */}
       <header className="detail-head" style={{ background: MARK_BG_VALUE[summary.color] }}>
         <span className="detail-kind" style={{ color }}>
           {summary.typeLabel} · {summary.categoryLabel}
@@ -73,7 +78,7 @@ export function DetailPanel({ selection, validated, answer, onClose, embedded, o
       </dl>
 
       {onToggleFavorite && (
-        <footer className="detail-foot">
+        <footer className="detail-foot detail-actions">
           <button
             type="button"
             className={favorited ? 'btn btn-primary' : 'btn'}
