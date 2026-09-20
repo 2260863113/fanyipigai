@@ -111,7 +111,17 @@ function isGenerationRequest(value: unknown): value is {
     body.topic.length <= 40
   )
 }
-function isCorrectionRequest(value: unknown): value is {
+/**
+ * 批改请求的合法性判据。
+ *
+ * ⚠️ 导出是为了让**验证脚本用它自己这道判据**去检查捕获到的请求
+ * （见 scripts/verify-per-page.mjs）：接口桩只记录请求、不做校验，
+ * 因此"两次请求的段数对不上"这类错误只有在真服务器的这道门里才会露头。
+ * 曾经就有过一次真实故障：逐页批改时发的是"整篇原文分段（N）+ 一页作答（1）"，
+ * 长度对不上 → 每次提交都 400"请求缺少必要字段或字段取值不合法"，一页都批不了。
+ * 把判据本身交给测试，才不会又靠人记得。
+ */
+export function isCorrectionRequest(value: unknown): value is {
   source: string
   direction: Direction
   genre: Genre

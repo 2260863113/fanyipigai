@@ -20,6 +20,38 @@ import { existsSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { build } from 'esbuild'
+import { pathToFileURL } from 'node:url'
+
+/**
+ * 取出**服务端那道请求判据本身**，用来检查捕获到的请求。
+ *
+ * 为什么要绕一圈：接口桩只记录请求、不做校验，因此"原文分段与作答分段段数对不上"
+ * 这类错误在桩里永远看不出来——它只在真服务器的那道门里才露头。
+ * 曾经就有过一次真实故障：逐页批改时发的是"整篇原文分段（N）+ 一页作答（1）"，
+ * 长度对不上 → 每次提交都 400"请求缺少必要字段或字段取值不合法"，一页都批不了。
+ *
+ * 判据在 vite 插件里（`.ts`，且引用了无法在裸 Node 里解析的无后缀导入），
+ * 因此这里用 esbuild 把它打包成一个临时 `.mjs` 再 import——与 npm run smoke 同一套办法。
+ */
+async function loadRequestPredicate() {
+  const outFile = path.join(process.cwd(), 'node_modules', '.cache', 'verify-per-page', 'predicate.mjs')
+  await build({
+    entryPoints: [path.join(process.cwd(), 'vite-plugin-judge-api.ts')],
+    outfile: outFile,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node20',
+    external: ['vite'],
+    logLevel: 'silent',
+  })
+  const module = await import(pathToFileURL(outFile).href)
+  if (typeof module.isCorrectionRequest !== 'function') {
+    throw new Error('没能从 vite 插件里取到 isCorrectionRequest')
+  }
+  return module.isCorrectionRequest
+}
 
 const base = process.argv[2] ?? 'http://127.0.0.1:5180'
 const debugPort = 9234
@@ -107,6 +139,11 @@ const stubSource = `
         start: sections[0] ? sections[0].start : -1,
         text: submitted,
         direction: body.direction || '',
+        /*
+         * 整个请求体原样记下来：验证脚本要拿**服务端那道判据**去检查它
+         *（见下面 isCorrectionRequest 的用法），而不是只数段数。
+         */
+        body,
         at: Date.now(),
       });
 
@@ -388,7 +425,13 @@ try {
          revisit,
          afterUnlock,
          editedTurn,
-         requests: window.__judgeCalls.map((call) => ({ start: call.start, text: call.text.slice(0, 30) })),
+         requests: window.__judgeCalls.map((call) => ({
+           start: call.start,
+           text: call.text.slice(0, 30),
+           answerSectionCount: call.answerSectionCount,
+           sourceSectionCount: call.sourceSectionCount,
+           body: call.body,
+         })),
        };
      })()`,
   )
@@ -428,6 +471,30 @@ try {
     perPageMatch.every(Boolean),
     '每一次请求发的都是那一页自己的文字（没有串页）',
     JSON.stringify(walked.requests.map((request, index) => `${index + 1}:${request.text.slice(0, 14)}`)),
+  )
+  /*
+   * 用**服务端那道判据本身**去检查每一次请求。
+   *
+   * 这条是回归闸，写下它的时候正好踩了一次真故障：请求发的是"整篇原文分段（N）"配
+   * "一页作答（1）"，服务端要求两边一一对应，于是每次提交都 400
+   * "请求缺少必要字段或字段取值不合法"，一页都批不了。接口桩只记录请求、不做校验，
+   * 所以这类错误只有在真服务器的这道门里才会露头——把判据交给测试，才不会又靠人记得。
+   *
+   * 判据里已经包含"两边段数必须相同"，因此这里不再单独数一遍段数。
+   */
+  const isCorrectionRequest = await loadRequestPredicate()
+  const rejected = walked.requests
+    .map((request, index) => ({ index, ok: isCorrectionRequest(request.body) }))
+    .filter((item) => !item.ok)
+  check(
+    rejected.length === 0,
+    '每一次请求都通过服务端那道判据（isCorrectionRequest）——不会再 400',
+    JSON.stringify(
+      rejected.map((item) => ({
+        第几次: item.index + 1,
+        段数: `${walked.requests[item.index]?.answerSectionCount}/${walked.requests[item.index]?.sourceSectionCount}`,
+      })),
+    ),
   )
   check(walked.revisit.back && walked.revisit.index === 0, '能翻回第 1 页')
   check(walked.revisit.hasAnnotated && !walked.revisit.hasInput, '第 1 页显示的是当时的结果，而且是只读的')

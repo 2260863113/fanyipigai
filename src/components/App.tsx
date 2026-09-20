@@ -423,6 +423,20 @@ export function App(): JSX.Element {
   }
 
   /**
+   * 原文里**这一页**那一段，形状与 answerSectionOf 一致。
+   *
+   * ⚠️ 必须与"这一次批的是什么"严格对应：接口的校验要求
+   * `answerSections.length === sourceSections.length`（两边一一对应）。
+   * 逐页批改一次只批一页，因此这里也只发这一页——早先发的是**整篇的原文分段**
+   * （N 段）配上**一页的作答**（1 段），长度对不上，服务端直接 400
+   * "请求缺少必要字段或字段取值不合法"，一页都批不了。
+   */
+  function sourceSectionOf(sectionIndex: number): JudgeSectionInput {
+    const section = sourceSections[sectionIndex]
+    return { start: section?.start ?? 0, text: section?.text ?? '' }
+  }
+
+  /**
    * 一次批改的收尾：落进 session（按页存）、写进练习记录、清掉一次性的界面状态。
    *
    * ⚠️ `target` 必须由调用方在**发起请求之前**取好并传进来。
@@ -509,7 +523,7 @@ export function App(): JSX.Element {
       direction: exercise.direction,
       genre: exercise.genre,
       level,
-      sourceSections: sourceSections.map((section) => ({ start: section.start, text: section.text })),
+      sourceSections: [sourceSectionOf(sectionIndex)],
       answerSections,
     })
 

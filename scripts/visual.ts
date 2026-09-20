@@ -333,13 +333,42 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                  return '提交后没有出现批改结果';
                };
 
-               for (let i = 0; i < sections.length; i++) {
-                 const ta = document.querySelector('.answer-input');
-                 if (!ta) return '找不到输入框（第 ' + (i + 1) + ' 页）';
-                 setValue(ta, sections[i]);
+               /*
+                * ⚠️ 等到**页码真的变了、而且新的一页有输入框**再写。
+                *
+                * 只等"有输入框"会立刻满足：点完「下一页」之后，旧那一页的输入框
+                * 还在 DOM 里停一会儿（React 还没把它换掉），于是下一页的文字会被写进
+                * **上一页那个正在消失的 textarea**，末页就变成空的、提交按钮禁用
+                * （真踩过，表现为"末页的提交按钮是禁用的"）。
+                */
+               const pageNo = () => {
+                 const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(
+                   (document.querySelector('.section-nav .hint') || {}).textContent ?? '',
+                 );
+                 return m ? { index: Number(m[1]) - 1, count: Number(m[2]) } : { index: 0, count: 0 };
+               };
+               const waitForFreshInput = async (expectedPage) => {
+                 for (let k = 0; k < 150; k++) {
+                   if (pageNo().index === expectedPage) {
+                     const area = document.querySelector('.answer-input');
+                     if (area) return area;
+                   }
+                   const err = document.querySelector('.error-block');
+                   if (err) return '页面报错：' + err.textContent.slice(0, 200);
+                   await sleep(150);
+                 }
+                 return null;
+               };
+
+               const total = pageNo().count || sections.length;
+               for (let i = 0; i < total; i++) {
+                 const ta = hasSectionNav ? await waitForFreshInput(i) : document.querySelector('.answer-input');
+                 if (typeof ta === 'string') return ta;
+                 if (!ta) return '第 ' + (i + 1) + ' 页没有等到可写的输入框';
+                 setValue(ta, sections[i] ?? onScreen);
                  await sleep(200);
 
-                 if (i === sections.length - 1) {
+                 if (i === total - 1) {
                    // 末页没有「下一页」可点，只能手动交
                    const btn = document.querySelector('.pane-answer .btn-primary');
                    if (!btn) return '找不到提交按钮（第 ' + (i + 1) + ' 页）';
@@ -351,21 +380,12 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                  }
                  /*
                   * 点「下一页」本身就是提交：界面会先把这一页交出去批，再翻过去。
-                  * 因此这里要等到**新的一页出现**（输入框回来）才算真翻过去了，
-                  * 否则下一次 setValue 会打到上一页上去（这正是逐页批改最容易踩的坑）。
+                  * 因此这里要等到**新的一页出现**才算真翻过去了。
                   */
-                 const next = [...document.querySelectorAll('.section-nav [data-nav="next"]')][0];
-                 if (!next) return '翻页导航里找不到「下一页」按钮（本张用了 ' + sections.length + ' 页，第 ' + (i + 1) + ' 页）';
+                 const next = document.querySelector('.section-nav [data-nav="next"]');
+                 if (!next) return '翻页导航里找不到「下一页」按钮（本张用了 ' + total + ' 页，第 ' + (i + 1) + ' 页）';
                  next.click();
-                 let moved = false;
-                 for (let k = 0; k < 100; k++) {
-                   if (document.querySelector('.answer-input')) { moved = true; break; }
-                   const err = document.querySelector('.error-block');
-                   if (err) return '自动批改失败：' + err.textContent.slice(0, 200);
-                   await sleep(200);
-                 }
-                 if (!moved) return '点了「下一页」但界面没有翻过去（第 ' + (i + 1) + ' 页）';
-                 await sleep(200);
+                 await sleep(150);
                }
                return 'ok';
              })()`,

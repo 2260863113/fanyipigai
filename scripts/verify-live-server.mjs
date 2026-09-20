@@ -175,32 +175,56 @@ try {
        /*
         * 逐页批改：填一页 → 点「下一页」（这一页自动交去批改）→ 填下一页；
         * 末页没有「下一页」可点，只能手动按「提交批改」。
-        * 因此每翻一页都要等**新的一页真的出现**（输入框回来）再接着写，
-        * 否则下一次 setValue 会打到上一页上去。
+        *
+        * ⚠️ 每翻一页都要等到**页码真的变了、而且新的一页有输入框**，再接着写。
+        *
+        * 只等"界面上有输入框"是不够的：点完「下一页」之后，旧那一页的输入框
+        * 还在 DOM 里停一会儿（React 还没把它换掉），于是"等到输入框"会立刻满足，
+        * 下一页的文字就被写进了**上一页那个正在消失的 textarea**里——
+        * 表现是"翻到末页按钮是禁用的"（那一页其实是空的）。
         */
-       const waitForInput = async () => {
-         for (let k = 0; k < 100; k++) {
-           const area = document.querySelector('.answer-input');
-           if (area) return area;
-           await sleep(200);
+       const pageNo = () => {
+         const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(
+           (document.querySelector('.section-nav .hint') || {}).textContent || '',
+         );
+         return m ? { index: Number(m[1]) - 1, count: Number(m[2]) } : { index: 0, count: 0 };
+       };
+       const waitForFreshInput = async (expectedPage) => {
+         for (let k = 0; k < 150; k++) {
+           if (pageNo().index === expectedPage) {
+             const area = document.querySelector('.answer-input');
+             if (area) return area;
+           }
+           await sleep(150);
          }
          return null;
        };
-       for (let i = 0; i < sections.length; i++) {
-         const area = await waitForInput();
-         if (!area) return '第 ' + (i + 1) + ' 页找不到输入框';
-         setValue(area, sections[i]);
-         await sleep(120);
 
-         if (i === sections.length - 1) break;
+       const total = pageNo().count;
+       if (!total) return '界面上没有翻页导航，这道题不是多页题';
+
+       for (let i = 0; i < total; i++) {
+         const area = await waitForFreshInput(i);
+         if (!area) return '第 ' + (i + 1) + ' 页没有等到可写的输入框（页码=' + (pageNo().index + 1) + '）';
+         const onScreen = (document.querySelector('.pane-source .source-text')?.textContent || '').trim();
+         setValue(area, sections[i] || onScreen);
+         await sleep(150);
+
+         if (i === total - 1) break;
          const next = document.querySelector('.section-nav [data-nav="next"]');
          if (!next) return '第 ' + (i + 1) + ' 页找不到「下一页」';
          next.click();
        }
        const submit = document.querySelector('.pane-answer .btn-primary');
        if (!submit) return '末页找不到提交按钮';
-       if (submit.disabled) return '末页的提交按钮是禁用的';
-       submit.click();
+       if (submit.disabled) {
+         return '末页的提交按钮是禁用的' + JSON.stringify({
+           总页数: total,
+           页数文字: (document.querySelector('.section-nav .hint') || {}).textContent || '(无导航)',
+           输入框值长度: (document.querySelector('.answer-input')?.value || '').length,
+           按钮文案: (submit.textContent || '').trim(),
+         });
+       }       submit.click();
        await sleep(3500);
        return 'ok';
      })()`,

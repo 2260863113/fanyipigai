@@ -858,22 +858,35 @@ async function main() {
          /*
           * 逐页批改：填一页 → 点「下一页」（这一页自动交去批改）→ 填下一页；
           * 末页没有「下一页」可点，只能手动按「提交批改」。
-          * 每翻一页都要等新的一页真的出现（输入框回来）再接着写。
+          *
+          * ⚠️ 必须等到**页码真的变了、而且新的一页有输入框**再写。
+          * 只等"有输入框"会立刻满足——旧那一页的输入框还在 DOM 里停一会儿，
+          * 下一页的文字就被写进了上一页那个正在消失的 textarea（末页会是空的）。
           */
-         const waitForInput = async () => {
-           for (let k = 0; k < 100; k++) {
-             const area = document.querySelector('.answer-input');
-             if (area) return area;
-             await sleep(200);
+         const pageNo = () => {
+           const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(
+             (document.querySelector('.section-nav .hint') || {}).textContent || '',
+           );
+           return m ? { index: Number(m[1]) - 1, count: Number(m[2]) } : { index: 0, count: 0 };
+         };
+         const waitForFreshInput = async (expectedPage) => {
+           for (let k = 0; k < 150; k++) {
+             if (pageNo().index === expectedPage) {
+               const area = document.querySelector('.answer-input');
+               if (area) return area;
+             }
+             await sleep(150);
            }
            return null;
          };
-         for (let i = 0; i < sections.length; i++) {
-           const ta = await waitForInput();
-           if (!ta) return '第 ' + (i + 1) + ' 页找不到输入框';
-           setValue(ta, sections[i]);
-           await sleep(200);
-           if (i === sections.length - 1) break;
+         const total = pageNo().count || sections.length;
+         for (let i = 0; i < total; i++) {
+           const ta = await waitForFreshInput(i);
+           if (!ta) return '第 ' + (i + 1) + ' 页没有等到可写的输入框';
+           const onScreen = (document.querySelector('.pane-source .source-text')?.textContent || '').trim();
+           setValue(ta, sections[i] || onScreen);
+           await sleep(150);
+           if (i === total - 1) break;
            const next = document.querySelector('.section-nav [data-nav="next"]');
            if (!next) return '第 ' + (i + 1) + ' 页找不到「下一页」';
            next.click();

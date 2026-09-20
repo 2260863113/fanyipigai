@@ -4,8 +4,13 @@
  * 前端永远不接触 API 密钥——请求发给同源的 /api/judge，
  * 由本地开发接口（将来是 Cloudflare Worker）在服务端补上密钥再转发。
  *
- * 请求按「段」组织：每段带它在全文中的起点。文章题因此会被拆成多个段落并行批改，
- * 单段题只会有一个元素，行为与不分段完全一致。
+ * 请求按「段」组织：每段带它在全文中的起点，**原文分段与作答分段必须一一对应**
+ * （服务端就是这么校验的）。多段时会并行批改，单段时就只有一个请求。
+ *
+ * ⚠️ 逐页批改之后，一次请求只发**正在批的那一页**：`sourceSections[i]` 是这一页的原文、
+ * `answerSections[i]` 是这一页的译文，两边长度相同（通常都是 1）。
+ * 不要"发整篇原文分段 + 只发一页作答"——长度对不上，服务端会直接 400
+ * "请求缺少必要字段或字段取值不合法"（真实踩过，一页都批不了）。
  */
 
 import type { Direction, Genre, Mode, PolishLevel } from './types'
@@ -15,7 +20,7 @@ import type { GeneratedExercise } from './generate'
 export type JudgeResult = JudgeSuccess | JudgeFailure
 
 export interface JudgeSectionInput {
-  /** 该段在全文中的起始字符序号 */
+  /** 该段在**它自己那一篇文本**里的起始字符序号 */
   start: number
   text: string
 }
@@ -25,9 +30,9 @@ export interface JudgeRequest {
   direction: Direction
   genre: Genre
   level: PolishLevel
-  /** 原文按段落切分 */
+  /** 正在批的那一页的原文分段 */
   sourceSections: JudgeSectionInput[]
-  /** 作答按同样的段落切分 */
+  /** 作答按同样的切分，**长度必须与 sourceSections 相同** */
   answerSections: JudgeSectionInput[]
 }
 
