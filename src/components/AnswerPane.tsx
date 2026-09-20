@@ -17,7 +17,7 @@
  * 这里只按 `pageState` / `editing` 渲染。
  */
 
-import type { JSX } from 'react'
+import { useEffect, useRef, useState, type JSX } from 'react'
 import { AnnotationText, type Selection } from './AnnotationText'
 import { CompareView } from './CompareView'
 import { LEVEL_LABEL, type PolishLevel } from '../domain/types'
@@ -35,17 +35,6 @@ export interface ShownCorrection {
   sectionCount: number
   raw: string
 }
-
-/**
- * 批改视图的译文再疏一倍（用户要求："批改视图用户翻译的译文行间距加大一倍"）。
- *
- * 为什么单独乘在批改视图上、而不是直接把默认设置翻倍：
- *   - 设置里那个滑杆是**全局行距**，用户可能已经按自己的习惯调过；
- *   - 而"要更疏"这件事只针对**带勾画的批改视图**——那里每行上方还压着补写的正确写法，
- *     行距宽一点才不挤。对照视图仍然是"一句对一句"，不动。
- * 因此这里的口径是"在设置值的基础上再乘一倍"，用户随时还能用滑杆微调。
- */
-const CORRECTION_LINE_HEIGHT = 2
 
 /**
  * 当前这一页在逐页批改里的状态。**按钮文案与翻页行为都由它推出来**，
@@ -217,13 +206,13 @@ export function AnswerPane({
         </div>
       </header>
 
-      <div className="pane-body">
-        {judging && (
-          <p className="hint judging">
-            正在批改这一页。长段通常十几秒；若返回未通过位置校验会自动重试。
-          </p>
-        )}
+      {/*
+        批改进度条：正好在「我的译文」标题栏下方、作答框上方（用户指定）。
+        只在批改中显示——平时不占地方，也不给"进度"这种并不精确的东西常驻位置。
+      */}
+      {judging && <JudgingProgress />}
 
+      <div className="pane-body">
         {error && (
           <div className="error-block">
             <strong>批改未完成：</strong>
@@ -264,8 +253,8 @@ export function AnswerPane({
               answer={shown.answer}
               validated={shown.validated}
               selection={selection}
-              /* 批改视图的译文更疏（用户要求"加大一倍"），见 CORRECTION_LINE_HEIGHT 的说明 */
-              lineHeightBase={settings.lineHeight * CORRECTION_LINE_HEIGHT}
+              /* 行距就是设置里那个值（1–3），批改视图与对照视图共用同一个口径 */
+              lineHeightBase={settings.lineHeight}
               showFixBoxes={settings.showFixBoxes}
               onSelect={onSelect}
               {...(onToggleFavorite ? { onToggleFavorite, favorited: favorite === true } : null)}
@@ -305,4 +294,58 @@ export function nextPageHint(options: {
   if (options.pageState === 'modified') return '翻到下一页（改过的页不会自动提交，请先按「提交批改」）'
   if (options.pageState === 'graded') return '翻到下一页（这一页已批过，不会重新提交）'
   return '翻到下一页：这一页会先交去批改'
+}
+
+/** 批改一次大约要多久（秒）。用户给的口径是"大约 20 秒"。 */
+const JUDGING_ESTIMATE_SECONDS = 20
+/**
+ * 估计时间内爬到这个百分比就**停住**，一直到结果回来。
+ *
+ * 为什么不到 100：进度条走到头却还在等，是最容易被骂的那种假进度。
+ * 卡在 80–90 之间既说明"还在干活"，也留出了余量——真提前返回就直接跳到 100。
+ */
+const JUDGING_HOLD_PERCENT = 88
+
+/**
+ * 批改进度条。
+ *
+ * 三条行为（都是用户点名的）：
+ *   1. 大约 20 秒内**一点点地瞬移**上去（不是匀速滑动，而是像分段跳一下、停一下）；
+ *   2. 到 88% 就**保持不动**，一直等到 AI 返回；
+ *   3. 结果回来 → 直接跳到 100%（组件随之被卸载，因为 `judging` 变 false）。
+ *
+ * 它**估的是时间，不是真进度**：批改接口只有"发出去"和"回来"两个时刻，
+ * 中间没有任何可用于量进度的信号。因此这里刻意不显示百分比数字，
+ * 只给一条蓝色细条——它表达的是"还在忙"，不是一个可以信到个位的数字。
+ */
+function JudgingProgress(): JSX.Element {
+  const [percent, setPercent] = useState(0)
+  const startedAt = useRef<number>(Date.now())
+
+  useEffect(() => {
+    startedAt.current = Date.now()
+    /*
+     * 每 140ms 重算一次该显示多少。
+     *
+     * 为什么是"算"而不是"每次加一点"：按经过的时间算出**应当**到哪儿，
+     * 于是刷新率、掉帧都不会让它跑偏，切到后台再回来也会立刻归位。
+     *
+     * 曲线选了 `1 - (1 - 时间比例)^2`：开头快、越接近估计时间越慢，
+     * 最后自然爬到 hold 值附近停住。看上去就是"跳几下、越跳越小"，
+     * 而不是一条匀速滑到底的假条。
+     */
+    const timer = window.setInterval(() => {
+      const elapsed = (Date.now() - startedAt.current) / 1000
+      const ratio = Math.min(1, elapsed / JUDGING_ESTIMATE_SECONDS)
+      const curved = 1 - (1 - ratio) ** 2
+      setPercent(Math.min(JUDGING_HOLD_PERCENT, Math.round(curved * JUDGING_HOLD_PERCENT)))
+    }, 140)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  return (
+    <div className="judge-progress" role="progressbar" aria-label="批改进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+      <span className="judge-progress-bar" style={{ width: `${percent}%` }} />
+    </div>
+  )
 }

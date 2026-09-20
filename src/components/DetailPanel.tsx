@@ -32,13 +32,11 @@ export function DetailPanel({ selection, validated, answer, onClose, embedded, o
   const summary = summarize(validated, answer, selection)
 
   if (!summary) {
-    return (
-      <aside className={embedded ? 'detail detail-idle detail-embedded' : 'detail detail-idle'}>
-        <p className="hint">
-          点右上角译文里的任意一处勾画——勾了底色的词、上方的小字、插入标记、调序弧线——这里只显示那一处的说明。
-        </p>
-      </aside>
-    )
+    /*
+     * 没选中任何一处时，这一栏**什么也不说**（用户明确要去掉那段"点右上角译文里……"的说明）。
+     * 空着比写一段谁都不会读的用法提示更清爽：译文上那些标记本身就是入口。
+     */
+    return <aside className={embedded ? 'detail detail-idle detail-embedded' : 'detail detail-idle'} />
   }
 
   const color = MARK_COLOR_VALUE[summary.color]

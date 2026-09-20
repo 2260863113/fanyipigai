@@ -832,6 +832,31 @@ button {
   border-top: 1px solid var(--line);
 }
 
+/*
+ * 批改进度条：夹在「我的译文」标题栏与作答框之间的一条**细蓝线**（用户指定）。
+ *
+ * 只占一条线的高度（3px）+ 一点上下留白，因此它出现/消失时不会把下面的作答框顶来顶去。
+ * 蓝色用站点的主色，与"红橙绿=批注颜色"那套语言区分开——它不是批注的一部分。
+ * 左右留白与 .pane-body 的内边距对齐，看着才是"栏里的一条线"而不是通栏的一条。
+ */
+.judge-progress {
+  flex: none;
+  height: 3px;
+  margin: 6px 0 2px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.judge-progress-bar {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  /* 每次百分比变化都平滑过渡一下，"一点点跳"看起来才不生硬 */
+  transition: width 140ms linear;
+}
+
 .level-switch {
   display: inline-flex;
   border: 1px solid var(--line-strong);
@@ -1163,6 +1188,15 @@ button {
  * 那样一整块会被行尾顶到下一行去，这正是"捆绑着一起换行"的来源。
  * 词内部永远不拆：靠的是正常的西文断行规则，不额外加 break-all 之类的东西。
  */
+/*
+ * 删除类：荧光底色 + **一道横线划掉**（用户要求："如果原文需要删掉（但是无更换内容），
+ * 那么标色后，再加上横线划掉"）。
+ *
+ * 为什么只给删除加横线，替换/整句重写不加：
+ *   - 删除是"这块不要了、也不补什么"，光有底色看不出"是删掉还是只是被标了一下"；
+ *   - 替换/重写上方会写正确写法，横线会和上方的方框、箭头搅在一起，反而更难读。
+ * 因此删除仍然归"三色荧光笔"那套语言，只是多一道划线把"不要了"说清楚。
+ */
 .mk-delete {
   cursor: pointer;
 }
@@ -1173,9 +1207,22 @@ button {
   cursor: pointer;
 }
 
-/* 摘掉删除线之后这里不再有样式，class 保留：它是"被替换掉的旧文字"的记号 */
+/*
+ * 被划掉的那段文字（替换里的旧文字、纯删除里的整块）。
+ *
+ * 底色挂在外层（要跟 FixLayer 加的空档一起撑开），**横线画在这一层**：
+ * 横线于是与文字同色，而底色仍是那条完整颜色的带子。
+ * 替换类这里不加横线（`text-decoration: none`）——上方会写正确写法，
+ * 再加横线会与方框、箭头搅在一起；**只有纯删除加**（见 .mk-delete 的说明）。
+ */
 .mk-deleted {
   text-decoration: none;
+}
+
+/* 纯删除：底色之上再加一道横线（用户要求） */
+.mk-delete > .mk-deleted {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
 }
 
 /*

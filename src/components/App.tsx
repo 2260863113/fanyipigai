@@ -994,22 +994,26 @@ export function App(): JSX.Element {
               onSelect={toggleSelection}
               onSettingsChange={updateSettings}
               onUnlock={() => {
-                // 「返回编辑」：作废这一页的结果、放开这一页重写（文字还在 drafts 里）。
+                // 「返回编辑」：把这一页的结果挪进暂存区、放开这一页重写（文字还在 drafts 里）。
                 // 放开之后这一页**不再自动提交**，改完自己按「提交批改」。
+                // 不弹提示语：按钮文案与页面状态已经把这件事说清楚了（用户明确要去掉这类废话）。
                 dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
                 setOpenRecord(null)
                 setSelection(null)
-                setNotice('这一页已可以修改。改完请点「提交批改」——这一页不会再自动提交。')
+                setNotice(null)
               }}
               canReturnToResult={canReturnToResult}
               onReturnToResult={() => {
                 /*
                  * 点回刚才那份批改：**不重新提交**，只是把这一页收回只读、把结果重新显示出来。
                  * 能点到这里就说明草稿一个字都没改，因此显示的批注与草稿仍然对得上。
+                 *
+                 * 不再弹提示语（用户明确说那句是废话）：画面本身已经变成"带批注的批改"，
+                 * 而右上角那颗「返回编辑」就摆在那里，用法一目了然。
                  */
                 dispatchSession({ type: 'pageResultRestored', exerciseId: exercise.id })
                 setSelection(null)
-                setNotice('这是刚才那份批改。想继续改就再按一次「返回编辑」。')
+                setNotice(null)
               }}
               onLevelChange={setLevel}
               onSubmit={() => void submitPage(sectionIndex)}

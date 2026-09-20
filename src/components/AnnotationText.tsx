@@ -217,9 +217,16 @@ function SegmentView({
 
   switch (segment.kind) {
     case 'delete':
+      /*
+       * 纯删除（没有替换内容）：底色 + 一道横线。
+       * 底色挂在外层（FixLayer 会按需要给它加空档），横线画在内层——
+       * 这样横线与文字同色，而底色仍是那条完整颜色的带子。
+       */
       return (
-        <span className="mk mk-delete" style={{ color, background: tint }} {...interactiveProps}>
-          {segment.text}
+        <span className="mk mk-delete" style={{ background: tint }} {...interactiveProps}>
+          <span className="mk-deleted" style={{ color }}>
+            {segment.text}
+          </span>
         </span>
       )
 

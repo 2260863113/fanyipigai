@@ -7,7 +7,7 @@ import { useCallback, useState } from 'react'
  * 跟作答内容无关；写进浏览器就够，也免得为它加一张表。
  */
 export interface ViewSettings {
-  /** 正文行距（em 倍数）。与 styles.css 的 .annotated-lines 一致 */
+  /** 正文行距（em 倍数），取值 1–3，默认 1.6（见 DEFAULT_SETTINGS） */
   lineHeight: number
   /** 是否显示"填补内容"的方框（关掉后只留荧光笔底色/弧线） */
   showFixBoxes: boolean
@@ -16,21 +16,20 @@ export interface ViewSettings {
 }
 
 /**
- * 默认行距。
+ * 默认行距（用户指定）。
  *
- * 从 2.5 提到 3.0：用户要求"批改后的行间距加大"（他原话是"和练习记录的行间距一样"——
- * 那两处其实是同一个渲染器、同一份设置，从来就是一样的；他要的是**更长**）。
- * 加长之后每一行上方补写的正确写法、以及调序弧线都更不容易挤在一起，读起来也更省力。
- * ⚠️ 这一条会影响 FixLayer 的测量（行距是它算"这一行还放不放得下"的基准），
- * 改它之后必须跑 `npm run smoke` 与 `scripts/probe-fix-align.mjs`。
+ * 用户明确要求范围 **1–3**、默认 **1.6**，并取消了上一轮"批改视图再翻一倍"那条
+ * （那个做法是在旧口径 3 上叠出来的，会把值推到范围之外）。
+ * 现在就是"设置里多少就是多少"，批改视图与对照视图共用同一个值。
  */
 export const DEFAULT_SETTINGS: ViewSettings = {
-  lineHeight: 3,
+  lineHeight: 1.6,
   showFixBoxes: true,
   answerView: 'correct',
 }
 
-export const LINE_HEIGHT_RANGE = { min: 1.8, max: 4, step: 0.1 }
+/** 行距的取值范围（用户指定 1–3）。 */
+export const LINE_HEIGHT_RANGE = { min: 1, max: 3, step: 0.1 }
 
 const STORAGE_KEY = 'translation-practice.settings.v1'
 

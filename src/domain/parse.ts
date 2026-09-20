@@ -138,7 +138,14 @@ function resolveChanged(
 ): Array<{ start: number; end: number; to: string }> {
   const original = span.snippet
 
-  // 删除：整块划掉就是最小改法
+  /*
+   * 删除：AI 圈的范围就是"要划掉的东西"，而且没有替换内容。
+   *
+   * ⚠️ 这里**不能**只取"最小不同项"：删除的本身就是"整块都不要了"，
+   * 新旧文字之间也不存在"共同的前缀/后缀"可以让出来——
+   * `the past` → 空 时，被删的 `the past` 两个词都得划掉，不能只划一个。
+   * 因此纯删除走这一支，直接把整块划掉（界面上是荧光底色 + 一道横线，见 styles.css）。
+   */
   if (errorType === 'delete') {
     return [{ start: span.start, end: span.end, to: '' }]
   }

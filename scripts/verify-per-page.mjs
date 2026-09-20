@@ -130,6 +130,15 @@ const stubSource = `
     window.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
       if (!url.includes('/api/judge')) return original(input, init);
+      /*
+       * 第一次批改故意慢一点（3 秒）：只有在"批改还没回来"的这段时间里，
+       * 进度条才看得到——用它验"它确实在涨、而且到 88% 就停住不下来"。
+       * 之后各次立刻返回，免得整趟验收被拖久。
+       */
+      if (window.__judgeDelayOnce) {
+        window.__judgeDelayOnce = false;
+        await new Promise((r) => setTimeout(r, 3000));
+      }
 
       let body = {};
       try { body = JSON.parse((init && init.body) || '{}'); } catch (error) { body = {}; }
@@ -319,6 +328,14 @@ try {
        if (!total) return { error: '界面上没有翻页导航，这道题不是多页题' };
 
        const trace = [];
+       /*
+        * 进度条只在"批改还没回来"的那段时间里看得到，因此让桩把**第一次**批改拖慢 3 秒，
+        * 在那段时间里密集采样几次宽度：应当一点点变大、并且**不超过 88%**
+        * （用户要求"到 80–90 就保持不动，直到结果返回；提前返回就直接 100%"）。
+        */
+       window.__judgeDelayOnce = true;
+       const progressSamples = [];
+
        const sources = [];
        for (let page = 0; page < total; page++) {
          const source = text('.pane-source .source-text');
@@ -342,6 +359,29 @@ try {
            const next = document.querySelector('.section-nav [data-nav="next"]');
            if (!next) return { error: '第 ' + (page + 1) + ' 页没有「下一页」' };
            next.click();
+         }
+
+         /*
+          * 第 1 页这次翻页会把这一页自动交出去，而桩被拖慢 3 秒——
+          * 就趁这 3 秒密集采样进度条。采样要在"等它翻过去"**之前**做完：
+          * 一旦翻页成功，进度条就随批改结束一起消失了。
+          */
+         if (page === 0) {
+           for (let k = 0; k < 6; k++) {
+             const bar = document.querySelector('.pane-answer .judge-progress');
+             const fill = document.querySelector('.pane-answer .judge-progress-bar');
+             const head = document.querySelector('.pane-answer .pane-head');
+             const input = document.querySelector('.pane-answer .answer-input');
+             progressSamples.push({
+               出现了: !!bar,
+               宽度: fill ? fill.style.width : '',
+               背景色: fill ? getComputedStyle(fill).backgroundColor : '',
+               高度: bar ? getComputedStyle(bar).height : '',
+               在标题栏下面: !!(bar && head && (head.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING)),
+               在作答框上面: !!(bar && input && (bar.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING)),
+             });
+             await sleep(430);
+           }
          }
 
          // 等这一页真的交出去（请求数 +1）
@@ -547,6 +587,7 @@ try {
          afterUnlock,
          afterEdit,
          editedTurn,
+         progress: progressSamples,
          lineHeights,
          bubbleBefore,
          bubbleAfter,
@@ -667,6 +708,36 @@ try {
   )
   check(cdp.errors.length === 0, '整条流程没有页面异常', JSON.stringify(cdp.errors.slice(0, 3)))
 
+  console.log('进度条 =', JSON.stringify(walked.progress))
+  {
+    const samples = walked.progress ?? []
+    // 第一次采样往往还没轮到 React 重渲染（点完立刻读），因此从"出现过"的那些里看趋势
+    const seen = samples.filter((item) => item.出现了)
+    const widths = seen.map((item) => Number.parseFloat(String(item.宽度 || '0').replace('%', '')) || 0)
+    check(seen.length > 0, `提交之后「我的译文」栏里出现了进度条（${samples.length} 次采样里 ${seen.length} 次看到）`)
+    check(
+      widths.length >= 2 && widths[widths.length - 1] >= widths[0] && widths[widths.length - 1] > widths[0],
+      `进度条一点点往前走（采到的宽度：${widths.join(' → ')}）`,
+      JSON.stringify(widths),
+    )
+    check(
+      widths.every((width) => width <= 88),
+      `等待期间进度条**不超过 88%**（不会假装走完）（采到的宽度：${widths.join(' → ')}）`,
+    )
+    check(
+      seen.every((item) => (item.背景色 ?? '').includes('44, 107, 237')),
+      `进度条是蓝色的（${seen[0]?.背景色}）`,
+    )
+    check(
+      seen.every((item) => Number.parseFloat(String(item.高度 || '99')) <= 4),
+      `进度条比较细（${seen[0]?.高度}）`,
+    )
+    check(
+      seen.every((item) => item.在标题栏下面 === true && item.在作答框上面 === true),
+      '进度条的位置在「我的译文」标题栏下方、作答框上方',
+    )
+  }
+
   console.log('行距 =', JSON.stringify(walked.lineHeights))
   {
     const correction = Number.parseFloat(String(walked.lineHeights?.批改视图.行高 ?? ''))
@@ -677,14 +748,17 @@ try {
       JSON.stringify(walked.lineHeights?.批改视图),
     )
     /*
+     * 行距口径是"设置里多少就是多少"（默认 1.6，范围 1–3），
+     * 因此这里按行高与字号的比值判：默认值下应当在 1.6 倍上下，而且要在 1–3 这个区间里。
+     * 不再要求"加倍"——那一版已经按用户要求取消了。
+     */
+    const em = correction / font
+    check(em > 1 && em <= 3, `批改视图的行距在 1–3 之间（实测 ${em.toFixed(2)} 倍）`)
+    /*
      * 要求"明显更疏"，而不是钉死一个像素：行距来自设置（默认 3）再乘一倍，
      * 因此这里按"相对字号"判：批改视图的行高应当 ≥ 字号的 4 倍。
      * 这样换字号、换默认值都不会误报，而"没加倍"一定会被抓到。
      */
-    check(
-      correction >= font * 4,
-      `批改视图的行距确实加大了（行高 ${correction}px ≥ 字号 ${font}px 的 4 倍）`,
-    )
     check(walked.lineHeights?.对照视图.切过去了 === true, '能切到对照视图')
     check(walked.lineHeights?.对照视图.有对照列表 === true, '对照视图仍然是"一句对一句"的清单')
     check(

@@ -387,6 +387,83 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(false, '对照视图的纯函数可以执行', error instanceof Error ? error.message : String(error))
   }
 
+  /*
+   * 标色遵循**最小匹配**：修改前后相同的前缀 / 后缀 / 中间某一段**都不标色**，
+   * 也不算进"修改后的内容"里（用户要求）。
+   *
+   * 这一条由 parse.ts 的 resolveChanged 保证（它调 minimal.ts 的 minimizeChange，
+   * 按字符级差异 + 词的边界求出最小的那块），这里把它钉在几个具体形状上：
+   * 共同前缀、共同后缀、中间相同的一段、只有中间不同的情况。
+   */
+  console.log('\n[最小匹配] 标色只圈真正变化的那一块')
+  try {
+    const cases: Array<{ name: string; answer: string; oldText: string; targetText: string; expectMarked: string; expectTo: string }> = [
+      {
+        name: '共同前缀不标',
+        answer: 'the farmer works hard',
+        oldText: 'the farmer',
+        targetText: 'the farmers',
+        expectMarked: 'farmer',
+        expectTo: 'farmers',
+      },
+      {
+        name: '共同后缀不标',
+        answer: 'a big problem appears',
+        oldText: 'a big problem',
+        targetText: 'a huge problem',
+        expectMarked: 'big',
+        expectTo: 'huge',
+      },
+      {
+        name: '中间相同的一段不标（只标两端真正变的那部分）',
+        answer: 'people and nature coexist here',
+        oldText: 'people and nature coexist',
+        targetText: 'people with nature coexisting',
+        // and → with、coexist → coexisting：两处各自最小，中间的 " nature " 完全不动
+        expectMarked: 'and',
+        expectTo: 'with',
+      },
+      {
+        name: '只多一个词时一个字都不标',
+        answer: 'he visited the past year',
+        oldText: 'the past year',
+        targetText: 'the past years',
+        expectMarked: 'year',
+        expectTo: 'years',
+      },
+    ]
+    const { parseCorrection: parse } = await import('../src/domain/parse')
+    for (const item of cases) {
+      const outcome = parse(
+        JSON.stringify({
+          errors: [
+            { id: 'c1', type: 'replace', category: 'grammar', oldText: item.oldText, targetText: item.targetText, explanation: 'x' },
+          ],
+          highlights: [],
+        }),
+        item.answer,
+      )
+      if (!outcome.ok) {
+        check(false, `最小匹配：${item.name}`, outcome.problems.join('；'))
+        continue
+      }
+      const error = outcome.correction.errors[0]
+      const firstChange = error?.changed?.[0]
+      const marked = firstChange ? item.answer.slice(firstChange.start, firstChange.end) : '(没算出改动)'
+      check(
+        marked === item.expectMarked,
+        `最小匹配：${item.name} → 标的是 ${JSON.stringify(item.expectMarked)}（实际 ${JSON.stringify(marked)}）`,
+        JSON.stringify(error?.changed),
+      )
+      check(
+        firstChange?.to === item.expectTo,
+        `最小匹配：${item.name} → 写的是 ${JSON.stringify(item.expectTo)}（实际 ${JSON.stringify(firstChange?.to)}）`,
+      )
+    }
+  } catch (error) {
+    check(false, '最小匹配可以验证', error instanceof Error ? error.message : String(error))
+  }
+
   // 反向验证：故意给出译文里没有的文字，定位器必须拒绝并说清原因
   console.log('\n[反向验证] 让定位器面对它找不到、或分不清的文字')
   try {
@@ -479,10 +556,13 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       '上下两排各自成行（高度可以按内容互相让位，而不是钉死的比例）',
     )
 
-    // 右下角不再一次性列出全部批注：没点之前只有一句提示
+    // 右下角不再一次性列出全部批注：没点之前**什么都不显示**（那段用法提示已被用户点名去掉）
     const noteCount = (rendered.html.match(/class="note-item/g) ?? []).length
     check(noteCount === 0, `没点勾画时右下角不列出批注（当前 ${noteCount} 条）`)
-    check(rendered.notesPaneHtml.includes('点右上角'), '没点勾画时右下角给出了怎么用的提示')
+    check(
+      !rendered.notesPaneHtml.includes('点右上角'),
+      '没点勾画时右下角不再写那段用法提示（用户要求去掉）',
+    )
 
     // 右上角「我的译文」在提交后必须显示**带批注的**作答。
     // 这一栏出过两个问题：整栏空白（渲染时漏了内容）、只显示纯文本而没有标注。
@@ -601,8 +681,9 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     if (it) {
       check(it.markCount >= 3, `译文上有 ${it.markCount} 处可点的勾画`)
       check(
-        it.idleNotes.includes('点右上角') && !it.idleNotes.includes('第 1 处'),
-        '没点勾画时右下角只是一句提示，不显示任何一处',
+        !it.idleNotes.includes('点右上角') && !it.idleNotes.includes('第 1 处'),
+        '没点勾画时右下角没有用法提示、也不显示任何一处（那段提示用户要求去掉）',
+        JSON.stringify(it.idleNotes.slice(0, 80)),
       )
       check(it.firstBubble.length > 0, `点第一处勾画后，那一行下面浮出气泡：${JSON.stringify(it.firstBubble.slice(0, 28))}…`)
       check(it.firstBubble.includes('完整说明见右下角'), '气泡尾部指向右下角的完整说明')
@@ -678,7 +759,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
 
     // 五种改法都要能画在译文上：替换（旧文字勾底色 + 上方小字）、插入、删除、
     // 整句重写、语序调换（配对弧线）。这道句子题的示例正好同时含替换、插入、删除。
-    // 记号语言只有一种：**相应颜色的荧光笔底色**，一律不划删除线。
+    /*
+     * 记号语言是"相应颜色的荧光笔底色"，**只有纯删除额外加一道横线**
+     * （用户要求："如果原文需要删掉（但是无更换内容），那么标色后，再加上横线划掉"）。
+     * 因此这里断言的是"删除有横线、而替换与重写没有"——不是"一律没有删除线"。
+     */
     const sentenceMarks = sentence.answerPaneHtml.match(/class="mk /g) ?? []
     check(sentenceMarks.length >= 3, `右上译文上有 ${sentenceMarks.length} 处标注标记`)
     check(sentence.answerPaneHtml.includes('mk-delete'), '删除类在译文上有标记')
@@ -687,8 +772,9 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       '被改动的内容用相应颜色的底色勾画（荧光笔）',
     )
     check(
-      !/line-through/.test(sentence.answerPaneHtml),
-      '译文上不再出现删除线（改动的记号一律是底色）',
+      /class="mk-deleted"[^>]*>/.test(sentence.answerPaneHtml) &&
+        sentence.answerPaneHtml.includes('mk-delete'),
+      '删除类把文字包在 mk-deleted 里（横线画在这一层，横线与文字同色）',
     )
     check(
       sentence.answerPaneHtml.includes('mk-replace') && sentence.answerPaneHtml.includes('mk-deleted'),
@@ -1354,8 +1440,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
      */
     check(/line-height:\s*\d/.test(annotatedRule), '正文行高的 CSS 初始值是个合法数值', annotatedRule.trim())
     check(
-      /lineHeight:\s*3\b/.test(readFileSync(path.join(root, 'src/components/settings.ts'), 'utf8')),
-      '默认行距是 3（用户要求"加大"，见 settings.ts 的注释）',
+      /lineHeight:\s*1\.6\b/.test(readFileSync(path.join(root, 'src/components/settings.ts'), 'utf8')),
+      '默认行距是 1.6（用户指定；范围 1–3）',
     )
 
     /*
@@ -1369,13 +1455,23 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       '绿色亮点用底色勾画，波浪线已去掉',
       highlightRule.trim() || '样式表里找不到 .mk-highlight',
     )
+    /*
+     * 删除线只允许出现在**纯删除**上（用户要求）：
+     *   删除类 = 底色 + 一道横线   → 横线挂在 `.mk-delete > .mk-deleted` 上；
+     *   替换/重写掉的原文 = 只有底色，不加横线（上方会写正确写法，横线会和方框搅在一起）。
+     */
+    const deleteInnerRule = /\.mk-delete\s*>\s*\.mk-deleted\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(
+      /text-decoration:\s*line-through/.test(deleteInnerRule),
+      '纯删除：底色之上再加一道横线（用户要求）',
+      deleteInnerRule.trim() || '样式表里找不到 .mk-delete > .mk-deleted',
+    )
     for (const [pattern, label] of [
-      [/\.mk-delete\s*\{([^}]*)\}/s, '删除类'],
       [/\.mk-deleted\s*\{([^}]*)\}/s, '替换掉的原文'],
       [/\.mk-rewrite-old\s*\{([^}]*)\}/s, '重写掉的原文'],
     ] as const) {
       const rule = pattern.exec(css)?.[1] ?? ''
-      check(!/line-through/.test(rule), `${label}不再划删除线（记号改用底色）`, rule.trim() || '样式表里找不到这条规则')
+      check(!/line-through/.test(rule), `${label}不划删除线（只勾底色）`, rule.trim() || '样式表里找不到这条规则')
     }
 
     /*
