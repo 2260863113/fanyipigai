@@ -296,27 +296,42 @@ export function nextPageHint(options: {
   return '翻到下一页：这一页会先交去批改'
 }
 
-/** 批改一次大约要多久（秒）。用户给的口径是"大约 20 秒"。 */
-const JUDGING_ESTIMATE_SECONDS = 20
 /**
- * 估计时间内爬到这个百分比就**停住**，一直到结果回来。
+ * 批改进度条的**台阶表**（用户给的节奏）。
  *
- * 为什么不到 100：进度条走到头却还在等，是最容易被骂的那种假进度。
- * 卡在 80–90 之间既说明"还在干活"，也留出了余量——真提前返回就直接跳到 100。
+ * 口径来自用户原话："进度条移动不要平滑，就一下一下地向前瞬移（瞬移！），
+ * 到了百分之 80（大约 15 秒），瞬移速度明显变慢，到了 98（大约三十秒），停止不动，
+ * 直到结果出来。"
+ *
+ * 因此这里写死一串"第几毫秒跳到百分之几"，到点就**直接跳过一格**（CSS 里也不加过渡动画）。
+ * 为什么不按公式算：公式画出来是连续的斜线，而用户要的是"跳"，跳的节奏只能一个个列出来。
+ * 每一格至少占半秒（前端采样间隔也是半秒），因此看到的每一跳都稳稳停一下。
  */
-const JUDGING_HOLD_PERCENT = 88
+const JUDGING_STEPS: ReadonlyArray<{ at: number; percent: number }> = [
+  { at: 0, percent: 0 },
+  { at: 1000, percent: 12 },
+  { at: 2500, percent: 25 },
+  { at: 5000, percent: 40 },
+  { at: 8000, percent: 55 },
+  { at: 11000, percent: 70 },
+  { at: 15000, percent: 80 },
+  { at: 19000, percent: 86 },
+  { at: 23000, percent: 91 },
+  { at: 27000, percent: 95 },
+  { at: 30000, percent: 98 },
+]
 
 /**
  * 批改进度条。
  *
  * 三条行为（都是用户点名的）：
- *   1. 大约 20 秒内**一点点地瞬移**上去（不是匀速滑动，而是像分段跳一下、停一下）；
- *   2. 到 88% 就**保持不动**，一直等到 AI 返回；
- *   3. 结果回来 → 直接跳到 100%（组件随之被卸载，因为 `judging` 变 false）。
+ *   1. 按台阶表**一格一格跳**上去（不要平滑滑动）；
+ *   2. 15 秒到 80% 之后**明显变慢**，30 秒到 98% 就**停住**不再动；
+ *   3. 结果回来 → 组件随即卸载（提前返回也就是"立刻结束"）。
  *
- * 它**估的是时间，不是真进度**：批改接口只有"发出去"和"回来"两个时刻，
- * 中间没有任何可用于量进度的信号。因此这里刻意不显示百分比数字，
- * 只给一条蓝色细条——它表达的是"还在忙"，不是一个可以信到个位的数字。
+ * ⚠️ 它估的是**时间，不是真进度**：批改接口只有"发出去"和"回来"两个时刻，
+ * 中间没有任何可用于量进度的信号。因此刻意**不显示百分比数字**，
+ * 只给一条细蓝线——它表达的是"还在忙"，不是一个可以信到个位的数字。
  */
 function JudgingProgress(): JSX.Element {
   const [percent, setPercent] = useState(0)
@@ -324,28 +339,22 @@ function JudgingProgress(): JSX.Element {
 
   useEffect(() => {
     startedAt.current = Date.now()
-    /*
-     * 每 140ms 重算一次该显示多少。
-     *
-     * 为什么是"算"而不是"每次加一点"：按经过的时间算出**应当**到哪儿，
-     * 于是刷新率、掉帧都不会让它跑偏，切到后台再回来也会立刻归位。
-     *
-     * 曲线选了 `1 - (1 - 时间比例)^2`：开头快、越接近估计时间越慢，
-     * 最后自然爬到 hold 值附近停住。看上去就是"跳几下、越跳越小"，
-     * 而不是一条匀速滑到底的假条。
-     */
+    setPercent(0)
     const timer = window.setInterval(() => {
-      const elapsed = (Date.now() - startedAt.current) / 1000
-      const ratio = Math.min(1, elapsed / JUDGING_ESTIMATE_SECONDS)
-      const curved = 1 - (1 - ratio) ** 2
-      setPercent(Math.min(JUDGING_HOLD_PERCENT, Math.round(curved * JUDGING_HOLD_PERCENT)))
-    }, 140)
+      const elapsed = Date.now() - startedAt.current
+      // 走到台阶表里"最后那个已经到点的格子"
+      let next = 0
+      for (const step of JUDGING_STEPS) {
+        if (elapsed >= step.at) next = step.percent
+      }
+      setPercent(next)
+    }, 500)
     return () => window.clearInterval(timer)
   }, [])
 
   return (
     <div className="judge-progress" role="progressbar" aria-label="批改进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-      <span className="judge-progress-bar" style={{ width: `${percent}%` }} />
+      <span className="judge-progress-bar" style={{ width: `${percent}%` }} data-percent={percent} />
     </div>
   )
 }

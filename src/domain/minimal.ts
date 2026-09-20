@@ -102,12 +102,71 @@ function diffBlocks(a: string, b: string): Block[] {
 
 /**
  * 算出一处修改的最小不同项（可能有多项）。返回 null 表示新旧文字完全相同（无需标注）。
+ *
+ * ## 先剥掉共同的前缀 / 后缀（这一步是"最小匹配"的成败关键）
+ *
+ * 用户报过一条真实的批注：
+ *   原译 `the Director-general of Statistics Department of Comprehensive National Economy`
+ *   改法 `the Director General of the Department of Comprehensive Statistics of the National Economy`
+ * 两边共同的前缀是 `the Director`、后缀是 `National Economy`，肉眼一看就知道那两截不该标色。
+ * 但直接把整串丢给下面的差异算法会**整段替换**：中间的词序被打乱之后，
+ * 字符级 LCS 对齐得支离破碎（切出好几块互相压着的块），"能不能还原 + 各块不重叠"那道判据
+ * 于是判它不合格，退回"整段替换"——共同的前缀后缀就一起被标红了。
+ *
+ * 因此这里先做**纯字符级**的前缀/后缀剥离，只把中间那一段交给差异算法，最后把抵消掉的
+ * 偏移量加回去。剥离不影响正确性：两端原样不动，重建结果自然也对得上。
  */
 export function minimizeChange(oldText: string, newText: string): MinimalChange[] | null {
   if (oldText === newText) return null
   if (oldText.length === 0) return [{ startOffset: 0, endOffset: 0, from: '', to: newText }]
   if (newText.length === 0) return [{ startOffset: 0, endOffset: oldText.length, from: oldText, to: '' }]
 
+  /** 共同前缀的长度（先按字符求，再退到"词的边界"上） */
+  let head = 0
+  while (head < oldText.length && head < newText.length && oldText[head] === newText[head]) head += 1
+  /** 共同后缀的长度（不能与前缀重叠） */
+  let tail = 0
+  while (
+    tail < oldText.length - head &&
+    tail < newText.length - head &&
+    oldText[oldText.length - 1 - tail] === newText[newText.length - 1 - tail]
+  ) {
+    tail += 1
+  }
+
+  /*
+   * 退到**词的边界**上再剥。
+   *
+   * 这一步是必需的，不是保险：`farmer → farmers` 共同的字符前缀是 `farmer`，
+   * 若就地剥掉，剩下的只差一个 `s`，下面的词对齐看到的是"两个字符完全相同"，
+   * 于是给出"补入 s"——而要求是"划掉整个词、上方写新词"（`alignToWord` 的既定口径）。
+   * 退到词边界之后，被剥的都是完整的词，剩下的仍是"整词 vs 整词"，口径保持不变。
+   */
+  const isBoundary = (text: string, index: number): boolean => {
+    if (index <= 0 || index >= text.length) return true
+    const before = text[index - 1] ?? ''
+    const after = text[index] ?? ''
+    return !/[\p{L}\p{N}]/u.test(before) || !/[\p{L}\p{N}]/u.test(after)
+  }
+  while (head > 0 && !(isBoundary(oldText, head) && isBoundary(newText, head))) head -= 1
+  while (tail > 0 && !(isBoundary(oldText, oldText.length - tail) && isBoundary(newText, newText.length - tail))) {
+    tail -= 1
+  }
+
+  const coreOld = oldText.slice(head, oldText.length - tail)
+  const coreNew = newText.slice(head, newText.length - tail)
+  const core = minimizeCore(coreOld, coreNew)
+  if (!core) return null
+  // 把偏移量搬回整串的坐标系
+  return core.map((change) => ({
+    ...change,
+    startOffset: change.startOffset + head,
+    endOffset: change.endOffset + head,
+  }))
+}
+
+/** 差异算法的本体：`oldText` / `newText` 已经剥掉了共同的前后缀，两端都不为空。 */
+function minimizeCore(oldText: string, newText: string): MinimalChange[] | null {
   const blocks = diffBlocks(oldText, newText)
   if (blocks.length === 0) return null
 

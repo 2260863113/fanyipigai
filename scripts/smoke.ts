@@ -174,7 +174,22 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(false, '收藏断句可以验证', error instanceof Error ? error.message : String(error))
   }
 
-  // 批改提示词：不含参考译文
+  // 批改提示词：不含参考译文，并且**明确要求忽略标点后的空格**（用户要求）
+  console.log('\n[提示词] 参考译文不发给模型；标点后的空格不必管')
+  try {
+    const systemMessage = buildSystemPrompt()
+    check(
+      systemMessage.includes('逗号、句号后面与下一个词之间有没有空格，一律忽略'),
+      '提示词里明确要求：逗号/句号后面有没有空格一律忽略',
+    )
+    check(
+      systemMessage.includes('不要为"少了一个空格"或"多了一个空格"标任何东西'),
+      '提示词里把这句写成了"不要标"（而不只是"注意"）',
+    )
+  } catch (error) {
+    check(false, '提示词的标点口径可以验证', error instanceof Error ? error.message : String(error))
+  }
+
   console.log('\n[提示词] 参考译文不发给模型')
   try {
     const userMessage = buildUserPrompt({
@@ -209,6 +224,37 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(sliceForMode('paragraph', article).source === '第一段。', '段落题截取第一个自然段')
     check(sliceForMode('sentence', article).source === '第一段。', '句子题截取第一个句子')
     check(sliceForMode('term', article).source === '湿地修复', '术语题取文章里的关键术语')
+
+    /*
+     * 用户报过的**真实案例**：共同前缀 / 后缀都在，却整段标红。
+     *
+     * 根因是差异算法在"词序被打乱"的长串上对齐得支离破碎，退回"整段替换"，
+     * 连带把共同的两头也标了。修法是先按**词的边界**剥掉共同的前缀与后缀，
+     * 只把中间那段交给差异算法（见 minimal.ts 的 minimizeChange）。
+     */
+    {
+      const { minimizeChange } = await import('../src/domain/minimal')
+      const oldText = 'the Director-general of Statistics Department of Comprehensive National Economy'
+      const newText = 'the Director General of the Department of Comprehensive Statistics of the National Economy'
+      const changes = minimizeChange(oldText, newText)
+      const marked = (changes ?? []).map((change) => oldText.slice(change.startOffset, change.endOffset)).join('｜')
+      check(
+        (changes?.length ?? 0) >= 1 && !marked.includes('the Director-'),
+        `共同前缀「the Director」没有被标进去（实际标了「${marked}」）`,
+        marked,
+      )
+      check(
+        !marked.includes('National Economy'),
+        `共同后缀「National Economy」没有被标进去（实际标了「${marked}」）`,
+        marked,
+      )
+      // 标出来的部分必须真的覆盖了变化：把改动应用回去要等于改法
+      const rebuilt = (changes ?? []).reduce(
+        (text, change) => text.slice(0, change.startOffset) + change.to + text.slice(change.endOffset),
+        oldText,
+      )
+      check(rebuilt === newText, '把标出的最小改动应用回去，正好得到模型的改法', JSON.stringify(rebuilt))
+    }
 
     /*
      * 命题依据必须写进提示词里：模型不联网，不知道"外研社·国才杯"是什么比赛。

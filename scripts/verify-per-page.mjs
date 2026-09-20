@@ -149,6 +149,11 @@ const stubSource = `
         text: submitted,
         direction: body.direction || '',
         /*
+         * 发给模型的 source 也记一份：用户要求"只截取当前段落，不要把整篇原文都发过去"，
+         * 而界面上看不出这件事——只有请求体里才看得到。
+         */
+        source: body.source || '',
+        /*
          * 整个请求体原样记下来：验证脚本要拿**服务端那道判据**去检查它
          *（见下面 isCorrectionRequest 的用法），而不是只数段数。
          */
@@ -270,6 +275,58 @@ try {
   }
   await sleep(600)
 
+  /*
+   * 「上次选了中译英，下次打开要落在中文那一篇上」。
+   *
+   * 用户报过："文章模式，在中译英的选项下，进去后要显示中译英的原文，不要显示英译中的"。
+   * 这一条只在**重新打开页面**时才看得到，因此先单独跑一趟：把"上次的选择"写进浏览器、
+   * 重新加载，再看原文栏里是中文还是英文。看完清掉，后面的检查仍基于原来的落点。
+   */
+  const startupDirection = await (async () => {
+    await cdp.evaluate(
+      `(() => {
+         window.localStorage.setItem(
+           'translation-practice.article-selection.v1',
+           JSON.stringify({ domain: 'economy', direction: 'zh-to-en' }),
+         );
+         return true;
+       })()`,
+    )
+    await cdp.send('Page.navigate', { url: `${base}/` })
+    let ready = false
+    for (let i = 0; i < 40 && !ready; i += 1) {
+      await sleep(250)
+      ready = Boolean(await cdp.evaluate("!!document.querySelector('.mode-tabs')"))
+    }
+    await sleep(600)
+    const observed = await cdp.evaluate(
+      `({
+         高亮方向: (document.querySelector('.dir-btn.dir-btn-active')?.textContent || '').trim(),
+         原文开头: (document.querySelector('.pane-source .source-text')?.textContent || '').trim().slice(0, 24),
+         有汉字: /[\\u4e00-\\u9fff]/.test((document.querySelector('.pane-source .source-text')?.textContent || '')),
+       })`,
+    )
+    // 清掉这个"上次的选择"，后面那些检查要在默认落点上跑
+    await cdp.evaluate("(() => { window.localStorage.removeItem('translation-practice.article-selection.v1'); return true })()")
+    await cdp.send('Page.navigate', { url: `${base}/` })
+    ready = false
+    for (let i = 0; i < 40 && !ready; i += 1) {
+      await sleep(250)
+      ready = Boolean(await cdp.evaluate("!!document.querySelector('.mode-tabs')"))
+    }
+    await sleep(600)
+    return observed
+  })()
+  console.log('\n== 上次选「中译英」时的落点 ==', JSON.stringify(startupDirection))
+  check(
+    startupDirection.高亮方向 === '中译英',
+    `记住的方向仍然是「中译英」（实际 ${startupDirection.高亮方向}）`,
+  )
+  check(
+    startupDirection.有汉字 === true,
+    `原文就是中译英那一篇（中文）：${startupDirection.原文开头}`,
+  )
+
   console.log('\n== 逐页批改 · 真实浏览器验收 ==')
 
   const setup = await cdp.evaluate(
@@ -341,7 +398,6 @@ try {
          const source = text('.pane-source .source-text');
          sources.push(source);
          const typed = '第 ' + (page + 1) + ' 页译文：' + source.slice(0, 24);
-
          const area = await waitFor(() => document.querySelector('.answer-input'));
          if (!area) return { error: '第 ' + (page + 1) + ' 页没有可写的输入框' };
          setValue(area, typed);
@@ -597,10 +653,14 @@ try {
          requests: window.__judgeCalls.map((call) => ({
            start: call.start,
            text: call.text.slice(0, 30),
+           source: call.source || '',
+           sourceHead: (call.source || '').slice(0, 24),
            answerSectionCount: call.answerSectionCount,
            sourceSectionCount: call.sourceSectionCount,
            body: call.body,
          })),
+         /** 逐页读到的原文（与 requests 一一对应），用来核对"这一页发的是这一页的原文" */
+         pageSources: sources,
        };
      })()`,
   )
@@ -770,6 +830,36 @@ try {
       '切回批改视图后行距还是加大后的那个值',
     )
   }
+
+  /*
+   * 发给模型的 `source` 只能是**当前这一页**的原文（用户要求"不要把整篇原文都发过去"）。
+   *
+   * 判据是"与这一页屏幕上那段逐字相同"，不是"比整篇短"——后者会误判：
+   * 8 页里第 2 页本身就比别的页长，拿它跟"整篇"比长度根本说明不了问题（我第一版就这么写错了）。
+   * 注意 requests 与 pageSources 一一对应：每页各提交一次，顺序相同。
+   */
+  const sourceMismatch = walked.requests
+    .map((request, index) => ({
+      page: index + 1,
+      发出的: (request.source || '').slice(0, 24),
+      这一页的: (walked.pageSources?.[index] ?? '').slice(0, 24),
+      一致: (request.source || '').trim() === (walked.pageSources?.[index] ?? '').trim(),
+    }))
+    .filter((item) => !item.一致)
+  check(
+    sourceMismatch.length === 0,
+    '每一次请求发的原文都只是**那一页**（不是整篇）——与屏幕上那一页逐字相同',
+    JSON.stringify(sourceMismatch),
+  )
+  check(
+    walked.requests.every((request) => (request.source || '').trim().length > 0),
+    '每一次请求都带着它那一页的原文（不会串到别的页）',
+  )
+
+  console.log(
+    '请求里的原文 =',
+    JSON.stringify(walked.requests.map((request) => `${(request.source || '').length}：${request.sourceHead}`)),
+  )
 
   const failed = results.filter((item) => !item.ok)
   console.log(

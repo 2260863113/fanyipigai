@@ -232,12 +232,38 @@ try {
        await sleep(700);
        const afterBack = readState('切回文章之后');
 
-       return { initial, graded, onTerm, afterBack, toTerm, back, total };
+       /*
+        * 方向与原文语言必须一致（用户报的问题）：选「中译英」时原文栏要是中文。
+        * 每次都从当前方向切一遍，两边都验。
+        */
+       const probeDirection = async (label) => {
+         const dirBtn = [...document.querySelectorAll('.dir-btn')].find((b) => (b.textContent || '').trim() === label);
+         if (!dirBtn) return { 方向: label, 说明: '找不到这个方向按钮' };
+         dirBtn.click();
+         await sleep(800);
+         const source = text('.pane-source .source-text');
+         return {
+           方向: label,
+           高亮: (document.querySelector('.dir-btn.dir-btn-active')?.textContent || '').trim(),
+           原文开头: source.slice(0, 24),
+           有汉字: /[\\u4e00-\\u9fff]/.test(source),
+         };
+       };
+       const direction = { toEn: await probeDirection('中译英'), toZh: await probeDirection('英译中') };
+
+       return { initial, graded, onTerm, afterBack, toTerm, back, total, direction };
      })()`,
   )
 
   console.log(JSON.stringify(result, null, 2))
   console.log('页面异常 =', JSON.stringify(cdp.errors))
+
+  const directionOk =
+    result?.direction?.toEn?.高亮 === '中译英' &&
+    result.direction.toEn.有汉字 === true &&
+    result?.direction?.toZh?.高亮 === '英译中' &&
+    result.direction.toZh.有汉字 === false
+  console.log(directionOk ? '✓ 方向与原文语言一致' : '✗ 方向与原文语言对不上')
 
   const after = result?.afterBack
   const graded = result?.graded
@@ -248,7 +274,7 @@ try {
     after.分数 === graded.分数 &&
     after.批注译文长度 > 0
   console.log(kept ? '\n✓ 切走再切回来，批改还在' : '\n✗ 切走再切回来，批改没了（或题目被换掉了）')
-  process.exitCode = kept ? 0 : 1
+  process.exitCode = kept && directionOk ? 0 : 1
 
   cdp.close()
 } finally {

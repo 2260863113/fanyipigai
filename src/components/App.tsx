@@ -89,11 +89,23 @@ export function App(): JSX.Element {
   if (!firstCase) throw new Error('题库为空')
 
   /**
-   * 启动时落在「文章」栏 —— 而文章栏现在由**文章库**供题，
-   * 因此默认题号取文章库的第一篇，而不是内置题库的 article-001。
-   * 文章库为空（理论上不会，抓取脚本有断言守着）时退回内置题库，保证界面照样能开。
+   * 启动时落在「文章」栏 —— 而文章栏由**文章库**供题（见 ADR 0007）。
+   *
+   * 启动题号**必须与上次选的方向配套**（用户报过："文章模式，在中译英的选项下，
+   * 进去后要显示中译英的原文，不要显示英译中的"）。
+   * 原先固定取文章库第一篇（`ARTICLE_EXCERPTS[0]`，那是英文的），
+   * 于是上次选了「中译英」的用户一进来看到的还是英文原文——方向和原文对不上。
+   *
+   * 现在的顺序：上次那一篇（若还在）→ 那一格里第一篇 → 文章库第一篇。
+   * 文章库为空时退回内置题库，保证界面照样能开。
    */
-  const startup = FIRST_ARTICLE
+  const startup = (() => {
+    const remembered = loadSelection()
+    const saved = remembered.articleId ? articleById(remembered.articleId) : null
+    if (saved) return saved
+    const inSlot = articlesOf(remembered.domain, remembered.direction)[0]
+    return inSlot ?? FIRST_ARTICLE
+  })()
   const [tab, setTab] = useState<Tab>(startup ? 'article' : firstCase.exercise.mode)
   const [exerciseId, setExerciseId] = useState(startup ? startup.id : firstCase.exercise.id)
 
@@ -148,6 +160,19 @@ export function App(): JSX.Element {
   const isCustom = customExercise !== null && customExercise.id === exerciseId
   /** 当前在做的是不是文章库里的一篇 */
   const activeArticle = useMemo(() => articleById(exerciseId), [exerciseId])
+  /*
+   * 把"当前这一篇"同步进文章选择里（只在真的对不上时写一次）。
+   *
+   * 用途是**下次打开回到这一篇**：换文章的入口有好几个（方向切换、选文章弹窗、
+   * 从练习记录跳回来、启动落点……），与其在每个入口各记一遍、漏一个就前功尽弃，
+   * 不如在这里统一对齐——"当前这一篇"与"选择里记的那一篇"本来就是同一个东西。
+   * 只在不等时写，因此不会来回触发；写的是 localStorage，不影响渲染结果。
+   */
+  if (activeArticle && articleSelection.articleId !== activeArticle.id) {
+    const next: ArticleSelection = { ...articleSelection, articleId: activeArticle.id }
+    setArticleSelection(next)
+    saveSelection(next)
+  }
   /**
    * 当前是不是**术语库**里的一组术语。
    * 术语题不走文章库那套问答：它一次给五条术语，批改完全本地（见 term-exercise.ts）。
@@ -611,8 +636,19 @@ export function App(): JSX.Element {
     setNotice(null)
 
     const answerSections = [answerSectionOf(sectionIndex)]
+    /*
+     * ⚠️ `source` 只发**当前这一页**的原文，不是整篇。
+     *
+     * 用户明确要求："交给 ai 时，文章只截取当前段落，不要把整篇原文章都截取进去了"。
+     * 逐页批改本来就是"一页一页译、一页一页交"，把整篇原文发过去只有坏处：
+     *   - 提示词里一整篇原文 + 一段作答，模型容易去评别的段落（甚至按整篇找 oldText）；
+     *   - 白花输入 token（长文章一篇几千词，一次批改按整篇计费）；
+     *   - 与"这一次只批这一页"这件事在语义上就不一致。
+     * 单页题（句子/段落/术语）本来就只有一段，这一行对它没有影响。
+     */
+    const sourceForJudge = sourceSectionOf(sectionIndex).text || currentSource
     const outcome = await requestJudgment({
-      source: currentSource,
+      source: sourceForJudge,
       direction: exercise.direction,
       genre: exercise.genre,
       level,
@@ -871,10 +907,17 @@ export function App(): JSX.Element {
             <ArticleBar
               selection={articleSelection}
               onChange={(next) => {
-                setArticleSelection(next)
-                saveSelection(next)
-                // 换格子时自动落到那一格的第一篇，免得停在上一个领域的那篇上让人以为没生效
+                /*
+                 * 换领域或换方向时自动落到那一格的第一篇，免得停在上一个格子那篇上让人以为没生效。
+                 *
+                 * ⚠️ 这里**必须同时更新 articleId**（用户报过："选了中译英，进去还是英文原文"）。
+                 * 只存 domain/direction 的话，下次打开会去猜一篇，而"猜"出来的很可能是
+                 * 另一个方向的文章——方向与原文就对不上了。选中的那一篇本身就是状态的一部分。
+                 */
                 const first = articlesOf(next.domain, next.direction)[0]
+                const withArticle: ArticleSelection = first ? { ...next, articleId: first.id } : next
+                setArticleSelection(withArticle)
+                saveSelection(withArticle)
                 if (first) selectExercise(first.id)
                 // 用户点领域是为了挑文章，所以顺手把选文章的弹窗打开（方向切换不打开）
                 if (next.domain !== articleSelection.domain) setArticlePickerOpen(true)
@@ -1082,12 +1125,17 @@ export function App(): JSX.Element {
           activeArticleId={activeArticle ? activeArticle.id : null}
           onSwitchDirection={(direction) => {
             const next = { ...articleSelection, direction }
-            setArticleSelection(next)
-            saveSelection(next)
-            const first = articlesOf(next.domain, next.direction)[0]
+            const first = articlesOf(next.domain, direction)[0]
+            const withArticle: ArticleSelection = first ? { ...next, articleId: first.id } : next
+            setArticleSelection(withArticle)
+            saveSelection(withArticle)
             if (first) selectExercise(first.id)
           }}
           onPick={(article) => {
+            // 选了哪一篇也要存下来：下次打开直接回到它（方向与篇目是配套的）
+            const withArticle: ArticleSelection = { ...articleSelection, articleId: article.id }
+            setArticleSelection(withArticle)
+            saveSelection(withArticle)
             selectExercise(article.id)
             setArticlePickerOpen(false)
           }}

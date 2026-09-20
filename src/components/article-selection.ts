@@ -17,6 +17,14 @@ const STORAGE_KEY = 'translation-practice.article-selection.v1'
 export interface ArticleSelection {
   domain: ArticleDomain
   direction: Direction
+  /**
+   * 上次看的是哪一篇（题号）。
+   *
+   * 为什么要记住它：方向与文章是**配套**的——用户选了「中译英」，
+   * 下次打开就该还在中文那一篇上，而不是又回到默认的英文第一篇。
+   * 存的不只是方向，因为"中译英"在八个领域里各有三篇，光有方向定不出是哪一篇。
+   */
+  articleId?: string
 }
 
 /** 打开页面时的落点：某一格有文章就用它，否则用第一格。 */
@@ -42,6 +50,8 @@ export function loadSelection(): ArticleSelection {
     return {
       domain: isDomain(parsed.domain) ? parsed.domain : DEFAULT_SELECTION.domain,
       direction: isDirection(parsed.direction) ? parsed.direction : DEFAULT_SELECTION.direction,
+      // 题号只是个线索：真正用它之前会拿 articleById 核一遍，不存在就当没有
+      ...(typeof parsed.articleId === 'string' && parsed.articleId ? { articleId: parsed.articleId } : {}),
     }
   } catch {
     // 无痕模式、localStorage 被禁用、内容不是 JSON——一律当作"没存过"

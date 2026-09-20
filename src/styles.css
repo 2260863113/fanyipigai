@@ -853,8 +853,11 @@ button {
   height: 100%;
   border-radius: 2px;
   background: var(--accent);
-  /* 每次百分比变化都平滑过渡一下，"一点点跳"看起来才不生硬 */
-  transition: width 140ms linear;
+  /*
+   * ⚠️ **不要加 transition**（用户要求"不要平滑，就一下一下地向前瞬移"）。
+   * 过渡会把台阶抹成斜坡，看起来就成了匀速滑动——那正是用户明确不要的效果。
+   * 宽度由 JS 按台阶表直接跳，这里保持瞬时切换。
+   */
 }
 
 .level-switch {
