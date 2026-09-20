@@ -26,7 +26,7 @@ const MODE_TAB_LABEL: Record<string, string> = {
 
 export interface RenderProbe {
   html: string
-  /** 逐段填入作答时，每一次「下一段」前后观察到的分段导航状态（诊断用） */
+  /** 逐页填入作答时，每一次「下一页」前后观察到的翻页导航状态（诊断用） */
   sectionNavTrace: Array<{ step: number; before: string; after: string; typedInto: string }>
   /** 批改结果区域的文字 */
   text: string
@@ -85,7 +85,7 @@ export interface RenderProbe {
     /** 点开之后，弹窗里的完整文本 */
     rawModalText: string
   }
-  /** 四栏边界可拖动 / 返回修改后能回到上次结果 */
+  /** 四栏边界可拖动；「返回编辑」之后输入框回来 */
   panels?: {
     hasSplitter: boolean
     manualApplied: boolean
@@ -94,6 +94,13 @@ export interface RenderProbe {
     resultBack: boolean
     judgeCallsAfterReturn: number
   }
+  /**
+   * 逐页批改走一遍的观察：每翻一页记下这一页的状态、按钮文案、有没有输入框。
+   * 见 renderApp 里那一段的说明——"哪一页批过、翻页会不会重复提交"就靠它钉住。
+   */
+  perPage: Array<{ page: number; state: string; hasInput: boolean; submitLabel: string; stateAfterLeave: string }>
+  /** 逐页批改：翻回第 1 页（已批过）时，批改结果是直接显示出来的，还是被重新提交了 */
+  revisit: { showsResult: boolean; hasInput: boolean; judgeCalls: number }
   /** 「自定义」那一栏：自己贴一篇原文来练 */
   custom?: {
     /** 导航栏里的标签 */
@@ -405,12 +412,12 @@ export async function renderApp(
   const judgeFetch = makeJudgeFetch()
   install('fetch', judgeFetch.fetch)
 
-  // 「自定义」那一栏：模拟"上一次贴过的一篇还留在浏览器里"
+  /*
+   * 「自定义」那一栏：模拟"上一次贴过的一篇还留在浏览器里"。
+   */
   if (options.seedCustom) {
-    dom.window.localStorage.setItem(
-      'translation-practice.custom',
-      JSON.stringify({ id: 'custom-seed', source: options.seedCustom, createdAt: new Date().toISOString() }),
-    )
+    const seeded = { id: 'custom-seed', source: options.seedCustom, createdAt: new Date().toISOString() }
+    dom.window.localStorage.setItem('translation-practice.custom', JSON.stringify(seeded))
   }
 
   // jsdom 不实现 ResizeObserver；调序弧线依赖它做尺寸观测
@@ -537,6 +544,8 @@ export async function renderApp(
    */
   const sectionNavTrace: Array<{ step: number; before: string; after: string; typedInto: string }> = []
   const navText = (): string => container.querySelector('.section-nav .hint')?.textContent?.trim() ?? '(无分段导航)'
+  /** 这一页现在是"待批改 / 已批改 / 已修改待提交"——翻页导航中间那句话里带着它 */
+  const pageStateNow = (): string => navText()
 
   const typeInto = async (text: string): Promise<void> => {
     const target = container.querySelector<HTMLTextAreaElement>('.answer-input')
@@ -548,57 +557,281 @@ export async function renderApp(
     })
   }
 
+  /** 让出一轮事件循环（React 的异步动作靠它推进） */
+  const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  const clickNav = async (which: 'prev' | 'next'): Promise<void> => {
+    const button = container.querySelector<HTMLButtonElement>(`.section-nav [data-nav="${which}"]`)
+    if (!button || button.disabled) return
+    const pageBefore = sectionIndexNow()
+    await act(async () => {
+      button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    /*
+     * ⚠️ 必须等到**界面上真的翻过去了**再返回，光等 `act` 是不够的。
+     *
+     * 「下一页」不只是翻页：它还**先把这一页交去批改**（一个 await 的异步过程，
+     * 里面还有一次 useEffect/DOM 提交）。`act` 只保证这次事件处理跑完，
+     * 而它第一个 await 之后发生的事情（批改返回、写入结果、切页）都还在飞行中。
+     * 早先没等就直接往下读界面，读到的是**翻页之前**的状态与正文：
+     * 表现为"每一页都写到第 1 页上""翻走时那一页还是待批改"（踩过，很难定位）。
+     */
+    const expected = which === 'next' ? pageBefore + 1 : pageBefore - 1
+    for (let round = 0; round < 60; round += 1) {
+      /*
+       * 等到**页码真的变了**再返回，光等 `act` 是不够的（见上面的说明）。
+       *
+       * 这里只等页码，不指望"离开的那一页已经在界面上显示成已批改"——
+       * 那个状态还会再晚一步才画出来，拿它当条件就会一直空等。
+       * "这一页到底交出去没有"改由**练习记录**来验（见 smoke.ts），
+       * 那是落盘的事实，不依赖渲染时机。
+       */
+      if (sectionIndexNow() === expected) return
+      await tick()
+    }
+  }
+
+  /**
+   * 现在在第几页（从 0 开始）。
+   *
+   * 只从界面上读：导航中间那句"第 N / M 页 · …"是页号的**唯一**来源，
+   * 探针不去偷看 App 的状态——它要验的正是"界面上说的是不是真的"。
+   */
+  const sectionIndexNow = (): number => {
+    const matched = /第\s*(\d+)\s*\//.exec(navText())
+    return matched?.[1] ? Number(matched[1]) - 1 : 0
+  }
+
+  /**
+   * 让当前这一页变成可写的。
+   *
+   * 逐页批改下批过的页是**只读**的（要在它上面打字得先按「返回编辑」），
+   * 因此每一次要填字之前都得问一下"现在还写不写得进去"。
+   */
+  const ensureEditable = async (): Promise<void> => {
+    if (container.querySelector('.answer-input') !== null) return
+    const unlock = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
+      (node) => node.textContent?.trim() === '返回编辑',
+    )
+    if (!unlock) return
+    await act(async () => {
+      unlock.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+  }
+
+  /** 手动按「提交批改」并等它批完（自动提交只在翻页时发生） */
+  const submitCurrentPage = async (): Promise<void> => {
+    const button = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
+    if (!button || button.disabled) return
+    await act(async () => {
+      button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    /*
+     * 等结果真的落到界面上：提交按钮消失（批过的那一页是只读的）就是落定的标志。
+     * 同样不能只等 `act`——批改是异步的。
+     */
+    for (let round = 0; round < 60; round += 1) {
+      if (container.querySelector('.pane-answer .btn-primary') === null) return
+      await tick()
+    }
+  }
+
   /*
-   * 没有内置示例作答（文章库/句子库供题的栏）时，把**屏幕上的原文**当作答打进去。
-   * 这样提交流程照样能跑通，结构断言（提交后换成带批注的译文、四栏就位、只调一次接口）
+   * 「自定义」那一栏：自己贴一篇原文来练。
+   *
+   * 顺序是刻意的：这一段要跑在**读页面之前**（下面是 sectionsToFill）。
+   * 贴题会把当前题目整个换掉，而逐页流程读的是"屏幕上这一篇"——
+   * 先读、后贴，读到的就是上一个题目的页数与正文（踩过：拿 8 页的文章去套 3 页的自定义题）。
+   */
+  let custom: RenderProbe['custom']
+  if (options.checkCustom) {
+    const clickText = async (selector: string, text: string): Promise<boolean> => {
+      const node = [...container.querySelectorAll<HTMLButtonElement>(selector)].find(
+        (item) => item.textContent?.trim() === text,
+      )
+      if (!node) return false
+      await act(async () => {
+        node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      return true
+    }
+    const hasButton = (text: string): boolean =>
+      [...container.querySelectorAll('.pane-source .btn')].some((node) => node.textContent?.trim() === text)
+
+    const tabs = [...container.querySelectorAll('.mode-tab')].map((node) => node.textContent?.trim() ?? '')
+    await clickText('.mode-tab', '自定义')
+    const shownSource = textOf('.pane-source')
+    const hasReference = container.querySelector('.pane-source .reference') !== null
+
+    // 贴新的一篇：点「重新贴一篇」，把划来的原文填进去，再点「开始练习」
+    await clickText('.pane-source .btn', '重新贴一篇')
+    const area = container.querySelector<HTMLTextAreaElement>('.gen-textarea')
+    const prefill = area?.value ?? ''
+    if (area) {
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')?.set
+        setter?.call(area, options.checkCustom)
+        area.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+      })
+    }
+    await clickText('.gen-modal .btn-primary', '开始练习')
+
+    // 存进浏览器了没有：直接问 localStorage（刷新后还在，靠的就是它）
+    const storedRaw = dom.window.localStorage.getItem('translation-practice.custom') ?? ''
+    const historyRaw = dom.window.localStorage.getItem('translation-practice.custom-sources') ?? ''
+    let storedSource = ''
+    try {
+      storedSource = (JSON.parse(storedRaw) as { source?: string }).source ?? ''
+    } catch {
+      storedSource = ''
+    }
+    let historyCount = 0
+    try {
+      historyCount = Object.keys(JSON.parse(historyRaw) as Record<string, string>).length
+    } catch {
+      historyCount = 0
+    }
+
+    custom = {
+      tabs,
+      navHasCustom: tabs.includes('自定义'),
+      shownSource,
+      hasReference,
+      hasAiButton: hasButton('AI 出题'),
+      hasRotateButton: hasButton('换一换'),
+      hasRepasteButton: hasButton('重新贴一篇'),
+      prefill,
+      afterPaste: textOf('.pane-source'),
+      storedSource,
+      historyCount,
+    }
+  }
+
+  /*
+   * 没有内置示例作答（文章库/句子库/自定义题）时，把**屏幕上的原文**当作答打进去。
+   * 这样提交流程照样能跑通，结构断言（提交后换成带批注的译文、四栏就位、接口调用次数）
    * 仍然有效；批改内容来自接口桩的固定响应，不代表真实错误样本。
+   *
+   * 多段原文要**一段一段读**：原文栏一次只显示当前那一页，因此这里翻到最后再翻回来，
+   * 把每一页的文字收集起来（这一步只翻页、不写不打字，因此不会触发任何自动提交）。
    */
   const fallbackAnswer = (): string =>
     (container.querySelector('.pane-source .source-text')?.textContent ?? '').trim()
-  const sectionsToFill: string[] = answerSections.length > 0 ? answerSections.map((s) => s.text) : [fallbackAnswer()]
+
+  /**
+   * 把"现在这一篇"的每一页原文读下来。
+   *
+   * 只在题库里没有这道题（文章库 / 句子库 / 自定义题）时用得上。
+   * 读完之后会翻回第 1 页——**用实际读到的页号决定翻几次**，不要用读到的段数：
+   * 中途点不动时"读了几段"和"走了几页"会对不上，用段数回退就会回退过头，
+   * 现象是整个逐页流程在错误的页码上跑（踩过：探针在第 1 页上重复写了 8 遍）。
+   */
+  const readPagesFromScreen = async (): Promise<string[]> => {
+    if (!container.querySelector('.section-nav')) return [fallbackAnswer()]
+    const collected: string[] = []
+    for (;;) {
+      collected.push(fallbackAnswer())
+      const next = container.querySelector<HTMLButtonElement>('.section-nav [data-nav="next"]')
+      if (!next || next.disabled) break
+      await clickNav('next')
+    }
+    const atPage = sectionIndexNow()
+    for (let index = 0; index < atPage; index += 1) await clickNav('prev')
+    return collected
+  }
+
+  const sectionsToFill: string[] =
+    answerSections.length > 0 ? answerSections.map((s) => s.text) : []
+  if (sectionsToFill.length === 0) {
+    /*
+     * ⚠️ 必须在**贴题流程跑完之后**才读页面：
+     * 上面那一段会把当前题目整个换掉（换成刚贴的那一篇），
+     * 换题之前读到的页数与正文都属于**上一个题目**。
+     * 先读、后贴，就会出现"拿 8 页的文章去套 3 页的自定义题"这种错位
+     * （表现为每一页都写到同一页上、页号全是 1）。
+     */
+    sectionsToFill.push(...(await readPagesFromScreen()))
+  }
   if (process.env.DSH_PROBE_DEBUG) {
     console.log(
-      `[probe] 内置题=${builtIn ? builtIn.exercise.id : '(无，用屏幕原文当作答)'} 段数=${sectionsToFill.length} ` +
-        `首段=${JSON.stringify(sectionsToFill[0]?.slice(0, 40))} 输入框=${!!container.querySelector('.answer-input')}`,
+      `[probe] 内置题=${builtIn ? builtIn.exercise.id : '(无，用屏幕原文当作答)'} 页数=${sectionsToFill.length} ` +
+        `首页=${JSON.stringify(sectionsToFill[0]?.slice(0, 40))} 输入框=${!!container.querySelector('.answer-input')}`,
     )
   }
 
+  /*
+   * 逐页走一遍：填一页 → 交一页 → 翻一页。
+   *
+   * 这是**逐页批改**的主循环，也顺手把这一轮改动的规矩跑了一遍：
+   *   - 还没批过的页，「下一页」会先把这一页交去批改，再翻过去；
+   *   - 已经批过的页，翻回去只是看结果（`pageState` 会是"已批改"），不会重新提交；
+   *   - 因此每翻一页最多只多一次批改调用——多出来的调用这里能直接数出来。
+   */
+  const perPage: Array<{ page: number; state: string; hasInput: boolean; submitLabel: string; stateAfterLeave: string }> = []
+
   for (const [index, section] of sectionsToFill.entries()) {
     const before = navText()
-    if (index > 0) {
-      const next = [...container.querySelectorAll<HTMLButtonElement>('.section-nav .btn')].find((button) =>
-        button.textContent?.includes('下一段'),
-      )
-      if (!next) throw new Error('分段导航里找不到「下一段」按钮')
-      await act(async () => {
-        next.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-      })
-    }
-    const afterNav = navText()
+    /*
+     * 这里**刻意不点「上一页」**：`readPagesFromScreen` 收完页之后已经翻回第 1 页了，
+     * 而每一轮的结尾都会点「下一页」——所以下一轮开始时人**本来就在**正确的页上。
+     *
+     * 早先每轮开头都点一次「上一页」，于是流程变成了"翻过去又翻回来"：
+     * 每一轮写的都是同一页，而「下一页」因为那一页已经是"改过的页"（不再自动提交）
+     * 而不再前进——整整 8 轮全写在第 1 页上（踩过，很难看出是这里的问题）。
+     */
+    await ensureEditable()
     await typeInto(section)
-    if (process.env.DSH_PROBE_DEBUG && index === 0) {
-      const area = container.querySelector<HTMLTextAreaElement>('.answer-input')
-      const submit = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
-      console.log(
-        `[probe] 打完第一段：textarea.value=${JSON.stringify((area?.value ?? '').slice(0, 40))} ` +
-          `提交按钮=${submit ? (submit.disabled ? '禁用' : '可点') : '(找不到)'} ` +
-          `按钮文案=${JSON.stringify(submit?.textContent?.trim() ?? '')}`,
-      )
-    }
     // 注意：typedInto 要在**填完之后**读，否则记下的是上一次的残留
     const typedInto = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
-    sectionNavTrace.push({ step: index, before, after: afterNav, typedInto })
-  }
+    sectionNavTrace.push({ step: index, before, after: navText(), typedInto })
+    // 离开这一页**之前**的样子：应该是在写（有输入框）、状态是"待批改"
+    const pendingState = pageStateNow()
+    const hadInput = container.querySelector('.answer-input') !== null
 
-  // 回到第一段，便于断言与截图
-  const prev = [...container.querySelectorAll<HTMLButtonElement>('.section-nav .btn')].find((button) =>
-    button.textContent?.includes('上一段'),
-  )
-  if (prev) {
-    await act(async () => {
-      prev.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    /*
+     * 最后一页先手动交出去：翻页导航的「下一页」在末页是禁用的，
+     * 不手动交的话界面会停在"待批改"上，后面那些"看结果"的断言就没有结果可看。
+     */
+    if (index === sectionsToFill.length - 1) await submitCurrentPage()
+    else await clickNav('next')
+    /*
+     * `stateAfterLeave` 记的是**翻走的那一刻界面自己说的状态**：
+     *   - 还有下一页时：翻页时这一页会自动交出去，所以应当是"已批改"；
+     *     "人已经走了、这一页还没交出去"正是逐页批改要避免的事。
+     *   - 末页：翻不过去，`pageStateNow()` 这时读到的还是"待批改"
+     *     （刚提交的结果还没落进 DOM），因此单独写清楚"页面已离开"
+     *     —— 拿它当"已批改"的断言会误报，见下面 smoke.ts 里的用法。
+     */
+    perPage.push({
+      page: index,
+      state: pendingState,
+      hasInput: hadInput,
+      submitLabel: container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')?.textContent?.trim() ?? '',
+      /*
+       * 翻走之后界面自己说的状态：还有下一页时应当是"已批改"。
+       *
+       * ⚠️ 这里必须**等它落定**（见 clickNav 里的说明）：翻页先把这一页交出去批、
+       * 批完才切页，而那些状态更新有自己的节奏。直接读会读到翻页**之前**的
+       * "第 N 页 · 待批改"，看上去像"翻走了还没交出去"，其实是读早了。
+       */
+      stateAfterLeave:
+        index === sectionsToFill.length - 1 ? '(末页，翻不过去)' : pageStateNow(),
     })
   }
+
+  /*
+   * 翻回第 1 页：那一页**已经批过**，必须直接显示当时那份结果、
+   * 并且**不产生新的批改调用**——这就是"返回上一页查看结果"那条要求。
+   */
+  const callsBeforeRevisit = judgeFetch.calls()
+  await clickNav('prev')
+  const revisit = {
+    showsResult: container.querySelector('.pane-answer .annotated-lines') !== null,
+    hasInput: container.querySelector('.answer-input') !== null,
+    judgeCalls: judgeFetch.calls() - callsBeforeRevisit,
+  }
+  // 停在最后一页收场：后面那些断言看的是"刚提交完"的样子
+  await clickNav('next')
 
   /*
    * AI 出题：打开弹窗 → 点生成 → 应当切到刚出的那一篇（并留存下来）。
@@ -638,19 +871,15 @@ export async function renderApp(
   }
 
   /*
-   * 必须用**限定到作答栏**的选择器，不能只写 `.btn-primary`：
-   * 顶栏/文章栏/句子栏里也有 primary 按钮（例如句子栏的「换一句」），
-   * 而它在 DOM 里排在作答栏**前面**，`querySelector` 会先命中它——
-   * 于是"点提交"实际点成了"换一句"，表现为"提交后调用了批改接口 0 次"（踩过）。
+   * 末页已经在上面的逐页循环里交出去了（那一页是"待批改"，按钮就在），
+   * 因此这里只做校验：**提交之后按钮应当消失**——批过的页是只读的，
+   * 想再改要先按「返回编辑」。这条比"点一下按钮"更能说明这一栏现在的形态。
    */
-  const submit = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
-  if (!submit) throw new Error('找不到「提交批改」按钮')
-  await act(async () => {
-    submit.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-  })
+  const submitGoneAfterSubmit = container.querySelector('.pane-answer .btn-primary') === null
 
-  // 关键：提交后输入框应当从右上角消失，左下与右下换成计分与批注
+  // 关键：末页提交后，答题位置换成带批注的译文，左下与右下换成计分与批注
   const inputReplacedByResult =
+    submitGoneAfterSubmit &&
     container.querySelector('.answer-input') === null &&
     container.querySelector('.pane-score') !== null &&
     container.querySelector('.pane-notes') !== null
@@ -793,46 +1022,33 @@ export async function renderApp(
       })
     }
 
-    // 先回到可编辑状态，写一段独有内容
-    const back = [...container.querySelectorAll<HTMLButtonElement>('.btn-ghost')].find((node) =>
-      node.textContent?.includes('返回修改'),
-    )
-    if (back) {
-      await act(async () => {
-        back.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-      })
-    }
+    /*
+     * 先回到第 1 页，再在那上面写一段独有内容——**那一页已经批过**，所以得先按
+     * 「返回编辑」（批过的页是只读的，这正是逐页批改的样子）。这一步同时也是
+     * "改过的页不再自动提交"那条规矩的起点。
+     */
+    for (let index = sectionIndexNow(); index > 0; index -= 1) await clickNav('prev')
+    await ensureEditable()
     const typed = '这是一段用来检查切换页面是否会丢失的文字'
     await typeInto(typed)
     const afterTyping = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
 
-    // 切到别的题型，再切回来
+    // 切到别的题型，再切回来：刚写的内容必须还在
     await clickTab('术语')
     await clickTab(MODE_TAB_LABEL[targetMode] ?? '文章')
 
     const afterReturn = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
     survivedTabRoundTrip = { typed: afterTyping, afterReturn }
 
-    // 再提交一次并把界面留在结果态，方便后面的断言（此时第一步已被切走，需要重新填满分段）
-    for (const [index, section] of sectionsToFill.entries()) {
-      if (index > 0) {
-        const next = [...container.querySelectorAll<HTMLButtonElement>('.section-nav .btn')].find((button) =>
-          button.textContent?.includes('下一段'),
-        )
-        if (next) {
-          await act(async () => {
-            next.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-          })
-        }
-      }
-      await typeInto(section)
-    }
-    const submitAgain = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
-    if (submitAgain && !submitAgain.disabled) {
-      await act(async () => {
-        submitAgain.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-      })
-    }
+    /*
+     * 收场：留在**末页已批改**上，后面那些"看结果"的断言才有结果可看。
+     * 末页也已经被批过，所以同样是先「返回编辑」、写、再手动交出去。
+     */
+    for (let index = sectionIndexNow(); index < sectionsToFill.length - 1; index += 1) await clickNav('next')
+    const lastSection = sectionsToFill[sectionsToFill.length - 1] ?? ''
+    await ensureEditable()
+    await typeInto(lastSection)
+    await submitCurrentPage()
   }
 
   /*
@@ -948,26 +1164,38 @@ export async function renderApp(
 
   let panels: RenderProbe['panels']
   if (options.checkPanels) {
-    // 1) 点「返回修改」回到作答框，再点「查看上次批改」回到同一份结果（不重新提交）
-    const answerText = textOf('.pane-answer')
-    const back = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
-      (node) => node.textContent?.trim() === '返回修改',
+    /*
+     * 1) 批阅态是**只读**的；按「返回编辑」才放开，而且放开之后
+     *    **不能**再悄悄交一次（`judgeCallsAfterReturn` 与放开前相等）。
+     *
+     *    这一条正是逐页批改的核心取舍：批过的页想改就得明确说一句，
+     *    说了之后也不再自动提交——否则用户每改一个字都在花钱调模型。
+     */
+    const callsBeforeUnlock = judgeFetch.calls()
+    const unlock = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
+      (node) => node.textContent?.trim() === '返回编辑',
     )
-    if (back) {
+    // 批过的那一页现在是结果视图：没有输入框，也没有「提交批改」
+    const readonlyBeforeUnlock =
+      container.querySelector('.answer-input') === null &&
+      container.querySelector('.pane-answer .btn-primary') === null
+    if (unlock) {
       await act(async () => {
-        back.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        unlock.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       })
     }
     const editorShown = container.querySelector('.answer-input') !== null
-    const returnButton = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
-      (node) => node.textContent?.trim() === '查看上次批改',
-    )
-    if (returnButton) {
-      await act(async () => {
-        returnButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-      })
-    }
-    const resultBack = container.querySelector('.answer-input') === null && textOf('.pane-answer') === answerText
+    // 放开之后是"已修改 · 待提交"：按钮变回可点的「提交批改（手动）」
+    const submitLabelAfterUnlock =
+      container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')?.textContent?.trim() ?? ''
+    /*
+     * 改一个字之后**再翻一次页**：这一页已经批过又被放开，
+     * 翻页绝不能自动提交（那正是"改完要自己按批改"那条规矩）。
+     */
+    await typeInto('（改了一下）')
+    await clickNav('prev')
+    await clickNav('next')
+    const judgeCallsAfterReturn = judgeFetch.calls()
 
     // 2) 拖动左右边界：应当切到手动比例，并记住
     const splitter = container.querySelector<HTMLElement>('.splitter-v')
@@ -987,75 +1215,16 @@ export async function renderApp(
       hasSplitter: Boolean(splitter),
       manualApplied: container.querySelector('.split-manual') !== null,
       editorShown,
-      canReturnToResult: Boolean(returnButton),
-      resultBack,
-      judgeCallsAfterReturn: judgeFetch.calls(),
+      canReturnToResult: readonlyBeforeUnlock && Boolean(unlock),
+      resultBack: submitLabelAfterUnlock.includes('手动'),
+      judgeCallsAfterReturn: judgeCallsAfterReturn - callsBeforeUnlock,
     }
   }
 
-  let custom: RenderProbe['custom']
-  if (options.checkCustom) {
-    const clickText = async (selector: string, text: string): Promise<boolean> => {
-      const node = [...container.querySelectorAll<HTMLButtonElement>(selector)].find(
-        (item) => item.textContent?.trim() === text,
-      )
-      if (!node) return false
-      await act(async () => {
-        node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-      })
-      return true
-    }
-    const hasButton = (text: string): boolean =>
-      [...container.querySelectorAll('.pane-source .btn')].some((node) => node.textContent?.trim() === text)
-
-    const tabs = [...container.querySelectorAll('.mode-tab')].map((node) => node.textContent?.trim() ?? '')
-    await clickText('.mode-tab', '自定义')
-    const shownSource = textOf('.pane-source')
-    const hasReference = container.querySelector('.pane-source .reference') !== null
-
-    // 贴新的一篇：点「重新贴一篇」，把划来的原文填进去，再点「开始练习」
-    await clickText('.pane-source .btn', '重新贴一篇')
-    const area = container.querySelector<HTMLTextAreaElement>('.gen-textarea')
-    const prefill = area?.value ?? ''
-    if (area) {
-      await act(async () => {
-        const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')?.set
-        setter?.call(area, options.checkCustom)
-        area.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
-      })
-    }
-    await clickText('.gen-modal .btn-primary', '开始练习')
-
-    // 存进浏览器了没有：直接问 localStorage（刷新后还在，靠的就是它）
-    const storedRaw = dom.window.localStorage.getItem('translation-practice.custom') ?? ''
-    const historyRaw = dom.window.localStorage.getItem('translation-practice.custom-sources') ?? ''
-    let storedSource = ''
-    try {
-      storedSource = (JSON.parse(storedRaw) as { source?: string }).source ?? ''
-    } catch {
-      storedSource = ''
-    }
-    let historyCount = 0
-    try {
-      historyCount = Object.keys(JSON.parse(historyRaw) as Record<string, string>).length
-    } catch {
-      historyCount = 0
-    }
-
-    custom = {
-      tabs,
-      navHasCustom: tabs.includes('自定义'),
-      shownSource,
-      hasReference,
-      hasAiButton: hasButton('AI 出题'),
-      hasRotateButton: hasButton('换一换'),
-      hasRepasteButton: hasButton('重新贴一篇'),
-      prefill,
-      afterPaste: textOf('.pane-source'),
-      storedSource,
-      historyCount,
-    }
-  }
+  /*
+   * 「自定义」那一栏的检查已经搬到上面（必须在收集页面文字之前跑完），
+   * 这里只留一个位置说明，免得后来人以为漏了一段。
+   */
 
   // 译文文字流：把调序圈号（绝对定位的标记）去掉后，必须与作答逐字相同
   const flowLines = container.querySelector('.pane-answer .annotated-lines')
@@ -1064,6 +1233,8 @@ export async function renderApp(
 
   return {
     sectionNavTrace,
+    perPage,
+    revisit,
     flow: { text: flowText, answer: submittedAnswer, matches: flowText === submittedAnswer },
     panels,
     custom,

@@ -457,7 +457,7 @@ async function main() {
          })()`,
       )
 
-      // 逐段填入示例作答，再点提交（与 visual.ts 的做法一致）
+      // 逐页填入示例作答，再点提交（与 visual.ts 的做法一致）
       const outcome = await cdp.evaluate(
         `(async () => {
            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -467,22 +467,32 @@ async function main() {
              el.dispatchEvent(new Event('input', { bubbles: true }));
            };
            const sections = ${JSON.stringify(fixture.answerSections)};
-           for (let i = 0; i < sections.length; i++) {
-             if (i > 0) {
-               const next = [...document.querySelectorAll('.section-nav .btn')]
-                 .find((b) => b.textContent.includes('下一段'));
-               if (!next) return '第 ' + i + ' 段找不到「下一段」';
-               next.click();
-               await sleep(250);
+           /*
+            * 逐页批改：填一页 → 点「下一页」（这一页自动交去批改）→ 填下一页；
+            * 末页没有「下一页」可点，只能手动按「提交批改」。
+            * 每翻一页都要等新的一页真的出现（输入框回来）再接着写。
+            */
+           const waitForInput = async () => {
+             for (let k = 0; k < 100; k++) {
+               const area = document.querySelector('.answer-input');
+               if (area) return area;
+               await sleep(200);
              }
-             const area = document.querySelector('.answer-input');
-             if (!area) return '第 ' + i + ' 段找不到输入框';
+             return null;
+           };
+           for (let i = 0; i < sections.length; i++) {
+             const area = await waitForInput();
+             if (!area) return '第 ' + (i + 1) + ' 页找不到输入框';
              setValue(area, sections[i]);
              await sleep(120);
+             if (i === sections.length - 1) break;
+             const next = document.querySelector('.section-nav [data-nav="next"]');
+             if (!next) return '第 ' + (i + 1) + ' 页找不到「下一页」';
+             next.click();
            }
            const submit = document.querySelector('.pane-answer .btn-primary');
-           if (!submit) return '找不到提交按钮';
-           if (submit.disabled) return '提交按钮是禁用的';
+           if (!submit) return '末页找不到提交按钮';
+           if (submit.disabled) return '末页的提交按钮是禁用的';
            submit.click();
            await sleep(${live ? 25000 : 4000});
            return 'ok';

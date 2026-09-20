@@ -285,7 +285,8 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
         if (shot.action === 'submit') {
           // 真的把示例作答打进输入框再点提交，这样截到的是真实交互后的界面。
           // 必须用原生 setter + input 事件，React 才会收到这次受控更新。
-          // 分段题要求每段都写完才允许提交，因此这里逐段填入。
+          // 分段题按**逐页批改**走：填一页 → 点「下一页」（这一页自动交出去批）→ 填下一页，
+          // 最后一页再手动按「提交批改」。见下面那段里的说明。
           const fixtureSections = answerSectionsByExercise.get(shot.exerciseId ?? DEFAULT_EXERCISE_ID) ?? []
           const outcome = await cdp.evaluate(
             `(async () => {
@@ -303,8 +304,8 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                const fromFixture = ${JSON.stringify(fixtureSections)};
                /*
                 * 要送哪一段作答：
-                *   - 屏幕上**有分段导航**（文章题那种逐段作答）→ 用表里的示例作答逐段填；
-                *   - 表里有示例、屏幕上是单段题 → 也送**表里的示例作答**，
+                *   - 屏幕上**有翻页导航**（文章题那种逐页作答）→ 用表里的示例作答逐页填；
+                *   - 表里有示例、屏幕上是单页题 → 也送**表里的示例作答**，
                 *     这样接口桩能认出它是哪道内置示例，从而回一批批注，
                 *     截图才点得到勾画（否则回的是"没有批注"的空结果，02-result 无点可点）；
                 *   - 表里没有（文章库/句子库供题）→ 只好把屏幕原文当作答。
@@ -317,34 +318,56 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                    ? fromFixture
                    : [fromFixture.join('\\n\\n')];
                if (!sections[0]) return '原文栏是空的，拿不到可填的作答';
+
+               const waitForResult = async () => {
+                 for (let i = 0; i < 80; i++) {
+                   // 批改结果出来的标志：输入框被带批注的译文替换掉了
+                   if (!document.querySelector('.answer-input') && document.querySelector('.pane-answer .annotated-lines')) {
+                     await sleep(400);
+                     return 'ok';
+                   }
+                   const err = document.querySelector('.error-block');
+                   if (err) return '页面报错：' + err.textContent.slice(0, 200);
+                   await sleep(200);
+                 }
+                 return '提交后没有出现批改结果';
+               };
+
                for (let i = 0; i < sections.length; i++) {
-                 if (i > 0) {
-                   const next = [...document.querySelectorAll('.section-nav .btn')]
-                     .find((b) => b.textContent.includes('下一段'));
-                   if (!next) return '分段导航里找不到「下一段」按钮（本张用了 ' + sections.length + ' 段，第 ' + (i + 1) + ' 段）';
-                   next.click();
-                   await sleep(250);
-                 }
                  const ta = document.querySelector('.answer-input');
-                 if (!ta) return '找不到输入框（第 ' + (i + 1) + ' 段）';
+                 if (!ta) return '找不到输入框（第 ' + (i + 1) + ' 页）';
                  setValue(ta, sections[i]);
-                 await sleep(250);
-               }
-               const btn = document.querySelector('.pane-answer .btn-primary');
-               if (!btn) return '找不到提交按钮';
-               if (btn.disabled) return '提交按钮是禁用的（共 ' + sections.length + ' 段）';
-               btn.click();
-               for (let i = 0; i < 80; i++) {
-                 // 批改结果出来的标志：输入框被带批注的译文替换掉了
-                 if (!document.querySelector('.answer-input') && document.querySelector('.pane-answer .annotated-lines')) {
-                   await sleep(600);
-                   return 'ok';
+                 await sleep(200);
+
+                 if (i === sections.length - 1) {
+                   // 末页没有「下一页」可点，只能手动交
+                   const btn = document.querySelector('.pane-answer .btn-primary');
+                   if (!btn) return '找不到提交按钮（第 ' + (i + 1) + ' 页）';
+                   if (btn.disabled) return '提交按钮是禁用的（第 ' + (i + 1) + ' 页）';
+                   btn.click();
+                   const settled = await waitForResult();
+                   if (settled !== 'ok') return settled;
+                   break;
                  }
-                 const err = document.querySelector('.error-block');
-                 if (err) return '页面报错：' + err.textContent.slice(0, 200);
+                 /*
+                  * 点「下一页」本身就是提交：界面会先把这一页交出去批，再翻过去。
+                  * 因此这里要等到**新的一页出现**（输入框回来）才算真翻过去了，
+                  * 否则下一次 setValue 会打到上一页上去（这正是逐页批改最容易踩的坑）。
+                  */
+                 const next = [...document.querySelectorAll('.section-nav [data-nav="next"]')][0];
+                 if (!next) return '翻页导航里找不到「下一页」按钮（本张用了 ' + sections.length + ' 页，第 ' + (i + 1) + ' 页）';
+                 next.click();
+                 let moved = false;
+                 for (let k = 0; k < 100; k++) {
+                   if (document.querySelector('.answer-input')) { moved = true; break; }
+                   const err = document.querySelector('.error-block');
+                   if (err) return '自动批改失败：' + err.textContent.slice(0, 200);
+                   await sleep(200);
+                 }
+                 if (!moved) return '点了「下一页」但界面没有翻过去（第 ' + (i + 1) + ' 页）';
                  await sleep(200);
                }
-               return '提交后没有出现批改结果';
+               return 'ok';
              })()`,
           )
           if (outcome !== 'ok') return { ok: false, files, note: `${shot.name}：${String(outcome)}` }

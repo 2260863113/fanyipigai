@@ -8,7 +8,7 @@
  * ## 存什么、不存什么
  *
  * 存：作答、批改、校验结果（含每处的绝对区间）、AI 原样返回的文本、以及题目上下文
- *    （哪道题 / 题型 / 方向 / 领域 / 第几次 / 修改风格）。
+ *    （哪道题 / 第几页 / 题型 / 方向 / 领域 / 第几次 / 修改风格）。
  * 不存：题目原文。记录里靠**题号**去题库里找原文（见 RecordsView 的回退逻辑：
  *    先在 EXERCISE_SOURCES 里找，再在 customSources 里找）。这样一条记录不会
  *    因为抄了一份原文而翻倍变大；代价是题库改了题目、或自定义题被覆盖之后，
@@ -22,11 +22,21 @@
  *   2. 即使在上限之内，也可能因为别的键（收藏、自定义题）占满而写不下——
  *      这时**从最旧的开始丢**再重试，直到写得下或只剩一条。
  *      宁少存几条，也不要"整个键写失败、结果一条也没存上"。
+ *
+ * ## v2：为什么换掉了存储键（旧记录直接作废）
+ *
+ * v1 里一条记录 = **一整篇**的作答与批改；逐页批改之后，一条记录 = **一页**。
+ * 两者的 `answer` 含义完全不同（整篇 vs 一页），旧记录又没有页号，
+ * 读回来只能当成"第 1 页的作答里有整篇文章"——那比丢掉更糟：界面会显示得理直气壮，
+ * 而分数、勾画位置全都对不上。
+ *
+ * 用户对这一点明确说了"已有的旧记录直接作废"，因此这里换了键名。
+ * v1 那份**留在浏览器里不动**（不主动删别人的数据），只是不再读它。
  */
 
 import type { RecordView } from './RecordsView'
 
-const STORAGE_KEY = 'translation-practice.records.v1'
+const STORAGE_KEY = 'translation-practice.records.v2'
 
 /** 最多留多少条。练习记录是回顾用的，不是仓库。 */
 export const MAX_RECORDS = 100
@@ -44,6 +54,13 @@ function isStoredRecord(value: unknown): value is StoredRecord {
     typeof record.exerciseId === 'string' &&
     typeof record.answer === 'string' &&
     typeof record.createdAt === 'string' &&
+    /*
+     * 页号也在校验之列：逐页批改之后它是**必填**的。
+     * 没有它就无法判断这段作答属于哪一页，界面只能瞎猜一个（见文件头 v2 的说明）。
+     */
+    typeof record.sectionIndex === 'number' &&
+    Number.isInteger(record.sectionIndex) &&
+    record.sectionIndex >= 0 &&
     typeof record.correction === 'object' &&
     record.correction !== null
   )

@@ -855,19 +855,30 @@ async function main() {
            el.dispatchEvent(new Event('input', { bubbles: true }));
          };
          const sections = ${JSON.stringify(fixture.answerSections)};
-         for (let i = 0; i < sections.length; i++) {
-           if (i > 0) {
-             const next = [...document.querySelectorAll('.section-nav .btn')].find((b) => b.textContent.includes('下一段'));
-             if (!next) return '找不到下一段按钮';
-             next.click();
-             await sleep(250);
+         /*
+          * 逐页批改：填一页 → 点「下一页」（这一页自动交去批改）→ 填下一页；
+          * 末页没有「下一页」可点，只能手动按「提交批改」。
+          * 每翻一页都要等新的一页真的出现（输入框回来）再接着写。
+          */
+         const waitForInput = async () => {
+           for (let k = 0; k < 100; k++) {
+             const area = document.querySelector('.answer-input');
+             if (area) return area;
+             await sleep(200);
            }
-           const ta = document.querySelector('.answer-input');
-           if (!ta) return '找不到输入框';
+           return null;
+         };
+         for (let i = 0; i < sections.length; i++) {
+           const ta = await waitForInput();
+           if (!ta) return '第 ' + (i + 1) + ' 页找不到输入框';
            setValue(ta, sections[i]);
-           await sleep(250);
+           await sleep(200);
+           if (i === sections.length - 1) break;
+           const next = document.querySelector('.section-nav [data-nav="next"]');
+           if (!next) return '第 ' + (i + 1) + ' 页找不到「下一页」';
+           next.click();
          }
-         const btn = document.querySelector('.btn-primary');
+         const btn = document.querySelector('.pane-answer .btn-primary');
          if (!btn || btn.disabled) return '提交按钮不可用';
          btn.click();
          for (let i = 0; i < 80; i++) {

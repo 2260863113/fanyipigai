@@ -17,7 +17,14 @@ import { useSplitDrag } from './split-drag'
 import type { Favorite } from '../domain/favorites'
 import type { ViewSettings } from './settings'
 
-/** 一次作答的存档视图。第一版只存在内存里，接入 D1 后改为从服务端读取。 */
+/**
+ * 一次作答的存档视图。
+ *
+ * ⚠️ 逐页批改之后，**一条记录 = 一页**，不再是"一整篇"。因此 `answer` 是
+ * **那一页**的译文、`sectionIndex` 是它在这一篇里的页号（从 0 开始）。
+ * "第几次作答"（attempt）仍然是按**题目**数的：同一篇译文的第 1 页、第 2 页
+ * 会各自留下一条，编号连续往下走，回看时能看清先后。
+ */
 export interface RecordView {
   id: string
   exerciseId: string
@@ -25,6 +32,8 @@ export interface RecordView {
   direction: Direction
   topic: string
   attempt: number
+  /** 这一页在这一篇原文里的页号（从 0 开始）。术语题没有分页，恒为 0 */
+  sectionIndex: number
   level: PolishLevel
   answer: string
   correction: Correction
@@ -112,7 +121,8 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
         <header className="screen-head">
           <h2>练习记录</h2>
           <div className="head-meta">
-            <span className="chip">共 {records.length} 次作答</span>
+            {/* 逐页批改之后一条记录是**一页**，因此这里说的是"页"，不再说"次作答" */}
+            <span className="chip">共 {records.length} 页记录</span>
           </div>
         </header>
         <div className="screen-body">
@@ -134,7 +144,7 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                     >
                       <span className="record-top">
                         <span className="record-attempt">
-                          {KIND_LABEL[record.mode]} · 第 {record.attempt} 次
+                          {KIND_LABEL[record.mode]} · 第 {record.attempt} 次 · 第 {record.sectionIndex + 1} 页
                         </span>
                         <span className="record-score">
                           {scoreCorrection(record.correction, record.answer).total} 分
@@ -173,7 +183,11 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
 
       <section className="screen screen-right">
         <header className="screen-head">
-          <h2>{openRecord ? `${KIND_LABEL[openRecord.mode]} · 第 ${openRecord.attempt} 次作答的批改` : '批改详情'}</h2>
+          <h2>
+            {openRecord
+              ? `${KIND_LABEL[openRecord.mode]} · 第 ${openRecord.attempt} 次作答的第 ${openRecord.sectionIndex + 1} 页批改`
+              : '批改详情'}
+          </h2>
           {openRecord && (
             <div className="head-meta">
               <button type="button" className="btn btn-ghost" onClick={() => onOpen(null)}>

@@ -18,6 +18,7 @@ export function SourcePane({
   multiSection,
   sourceSectionCount,
   sectionIndex,
+  gradedPages,
   currentSection,
   currentSource,
   currentReference,
@@ -33,6 +34,8 @@ export function SourcePane({
   multiSection: boolean
   sourceSectionCount: number
   sectionIndex: number
+  /** 已批改过的页数（逐页批改：每一页各批各的） */
+  gradedPages: number
   currentSection: Section | undefined
   currentSource: string
   currentReference: string
@@ -80,8 +83,8 @@ export function SourcePane({
             </>
           )}
           {multiSection && (
-            <span className="chip">
-              第 {sectionIndex + 1} / {sourceSectionCount} 段
+            <span className="chip" title="逐页批改：点「下一页」时，刚写完的那一页会自动交去批改">
+              第 {sectionIndex + 1} / {sourceSectionCount} 页 · 已批 {gradedPages} 页
             </span>
           )}
           {isCustom ? (

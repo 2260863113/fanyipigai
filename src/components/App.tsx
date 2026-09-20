@@ -36,7 +36,7 @@ import { SettingsModal } from './SettingsModal'
 import { PasteModal } from './PasteModal'
 import { GenerateModal } from './GenerateModal'
 import { SourcePane } from './SourcePane'
-import { AnswerPane } from './AnswerPane'
+import { AnswerPane, type PageState } from './AnswerPane'
 import { ScorePane } from './ScorePane'
 import { NotesPane } from './NotesPane'
 import { TopBar } from './TopBar'
@@ -161,7 +161,16 @@ export function App(): JSX.Element {
   const mode = exercise.mode
   /** 这道题自己的会话状态（作答、结果、看哪一面、第几份原文、AI 生成的题池） */
   const session = sessionOf(sessions, exercise.id)
-  const { drafts, sectionIndex, result, view } = session
+  const { drafts, sectionIndex, pages, unlocked } = session
+  /*
+   * 当前这一页的批改结果；没批过就是 undefined。
+   *
+   * 这里刻意**没有**一个"当前看哪一面"的状态：看结果是看这一页的结果，
+   * 结果一没（还没提交 / 被「返回编辑」作废）就必然是在写。两份状态迟早会打架。
+   */
+  const pageResult = pages[sectionIndex]
+  /** 这一页是不是被「返回编辑」放开来改过（据此决定翻页时**绝不**自动提交） */
+  const pageUnlocked = unlocked.includes(sectionIndex)
   // 两个恒定的引用：直接写 `?? []` / `?? 0` 会每帧新建，让下面的 useMemo 失效
   const generatedOptions = session.generated.length > 0 ? session.generated : EMPTY_GENERATED
 
@@ -197,9 +206,28 @@ export function App(): JSX.Element {
   const multiSection = sourceSections.length > 1
   const currentSection = sourceSections[sectionIndex] ?? sourceSections[0]
   const currentAnswer = drafts[sectionIndex] ?? ''
-  const filledSections = sourceSections.filter((_, index) => (drafts[index] ?? '').trim().length > 0).length
-  const allFilled = filledSections === sourceSections.length
 
+  /*
+   * 这一页在"逐页批改"里的状态。按钮文案与翻页行为全由它推出来，
+   * 不再由"全篇写完了没有"决定——"一整篇非写完不可"这条约束已随逐页批改取消。
+   *
+   * 三档的判据：
+   *   1. **被「返回编辑」放开过** → 改过的那一页（哪怕后来手动交回去了也还是它）；
+   *   2. 有结果、也没被放开过 → 已批改，只读；
+   *   3. 其余（没批过）→ 待批改。
+   *
+   * ⚠️ 第 1 条**必须排在最前面**。放开这一页时结果就被作废了，所以"只看有没有结果"
+   * 的话，放开之后这一页会落回"待批改"——于是它又被当成没批过的页，
+   * 翻页时自动提交（那正是这条规矩要禁止的），而且界面永远不承认"这一页改过"。
+   */
+  const pageState: PageState = pageUnlocked ? 'edited' : pageResult ? 'graded' : 'pending'
+  /**
+   * 现在是不是在写这一页（而不是在看这一页的批改结果）。
+   * 批过的页要**先按「返回编辑」**才能写——见 pageUnlocked。
+   */
+  const editing = pageState === 'pending' || pageUnlocked
+  /** 批过的页数，用来在原文栏里报进度 */
+  const gradedPages = sourceSections.filter((_, index) => pages[index] !== undefined).length
 
 
   const caseRecords = records.filter((record) => record.exerciseId === exercise.id)
@@ -352,13 +380,18 @@ export function App(): JSX.Element {
   }
 
   function updateAnswer(value: string): void {
-    // 写入作答、作废旧结果、view 回 'result' 都在 reducer 里一处做完
+    /*
+     * 只把文字写进草稿：**不动**已提交的结果，也不动页号。
+     * 能写字就说明这一页要么还没批过、要么已经被「返回编辑」放开了（结果在那一刻就作废了），
+     * 因此不存在"草稿与结果对不上"的情况——见 session.ts 里 answerChanged 的说明。
+     */
     dispatchSession({ type: 'answerChanged', exerciseId: exercise.id, text: value })
     setError(null)
     setNotice(null)
     setSelection(null)
   }
 
+  /** 直接切到某一页（不自动提交）。自动提交那条路在 goToSection 里。 */
   function setSection(nextIndex: number): void {
     dispatchSession({ type: 'sectionChanged', exerciseId: exercise.id, sectionIndex: nextIndex })
   }
@@ -372,24 +405,44 @@ export function App(): JSX.Element {
     dispatchSession({ type: 'answerAtChanged', exerciseId: exercise.id, row, text: value })
   }
 
-  /** 把逐段作答整理成接口需要的形状（每段带它在全文中的起点）。 */
-  function buildAnswerSections(): JudgeSectionInput[] {
+  /**
+   * 把某一页的作答整理成接口需要的形状（带它在**整篇**里的起点）。
+   *
+   * 起点按"前面每一页各占自己的长度 + 两个换行"累加，因此这个位置是绝对位置，
+   * 与后面拼起来的那篇全文对得上——批注区间要能落回那一页的文字上。
+   * 逐页提交时只发这一页，但那段文字在全文里的位置并不因此改变，
+   * 这样同一条记录无论从哪一页看都是自洽的。
+   */
+  function answerSectionOf(sectionIndex: number): JudgeSectionInput {
     const parts = sourceSections.map((_, index) => drafts[index] ?? '')
-    let cursor = 0
-    return sourceSections.map((_, index) => {
-      const start = cursor
-      const text = parts[index] ?? ''
-      cursor = start + text.length + 2 // 段与段之间按两个换行分隔
-      return { start, text }
-    })
+    let start = 0
+    for (let index = 0; index < sectionIndex; index += 1) {
+      start += (parts[index] ?? '').length + 2 // 页与页之间按两个换行分隔
+    }
+    return { start, text: parts[sectionIndex] ?? '' }
   }
 
+  /**
+   * 一次批改的收尾：落进 session（按页存）、写进练习记录、清掉一次性的界面状态。
+   *
+   * ⚠️ `target` 必须由调用方在**发起请求之前**取好并传进来。
+   * 这个函数在 `await` 之后才跑，而那时 App 可能已经因为用户翻页/切题而重渲染过：
+   * 直接读外层的 `exercise.id` / `session.sectionIndex` 会把结果记到**别人头上**——
+   * 批改要十几秒，而这十几秒里用户完全可能已翻到下一页或切去别的题。
+   */
   function commit(
+    target: { exerciseId: string; sectionIndex: number; topic: string; direction: Direction },
     judging_: JudgeDraft,
-    submittedSections: JudgeSectionInput[],
+    pageAnswer: string,
     attemptLevel: PolishLevel,
   ): void {
-    dispatchSession({ type: 'resultCommitted', exerciseId: exercise.id, draft: judging_ })
+    dispatchSession({
+      type: 'pageGraded',
+      exerciseId: target.exerciseId,
+      sectionIndex: target.sectionIndex,
+      draft: judging_,
+      answer: pageAnswer,
+    })
     setSelection(null)
     setOpenRecord(null)
     setRecords((previous) => {
@@ -400,20 +453,21 @@ export function App(): JSX.Element {
        *   2. "第几次作答"更不能用"现有条数 + 1"，否则丢过旧记录之后次数会倒退。
        * 因此改成时间戳编号 + 按该题已存记录里的最大次序号加一。
        */
-      const attempts = previous.filter((item) => item.exerciseId === exercise.id).map((item) => item.attempt)
+      const attempts = previous.filter((item) => item.exerciseId === target.exerciseId).map((item) => item.attempt)
       const nextAttempt = (attempts.length > 0 ? Math.max(...attempts) : 0) + 1
       const now = new Date()
       const next: RecordView[] = [
         ...previous,
         {
           id: `record-${now.getTime()}-${nextAttempt}`,
-          exerciseId: exercise.id,
+          exerciseId: target.exerciseId,
           mode,
-          direction: exercise.direction,
-          topic: exercise.topic,
+          direction: target.direction,
+          topic: target.topic,
           attempt: nextAttempt,
+          sectionIndex: target.sectionIndex,
           level: attemptLevel,
-          answer: submittedSections.map((section) => section.text).join('\n\n'),
+          answer: pageAnswer,
           correction: judging_.correction,
           validated: judging_.validated,
           source: judging_.source,
@@ -426,13 +480,30 @@ export function App(): JSX.Element {
     })
   }
 
-  async function submitLive(): Promise<void> {
-    if (judging || !allFilled) return
+  /**
+   * 提交**某一页**去批改。
+   *
+   * `sectionIndex` 由调用方给：翻页时的自动提交要在"切页之前"把旧页交出去，
+   * 因此不能读"当前页号"——那一刻它可能已经被改掉了。
+   * 返回是否真的批成了，翻页那条路径据此决定要不要继续切（没批成就留在原地，别把内容弄丢）。
+   */
+  async function submitPage(sectionIndex: number): Promise<boolean> {
+    if (judging) return false
+    const pageAnswer = drafts[sectionIndex] ?? ''
+    if (pageAnswer.trim().length === 0) return false
+
+    // 发起之前先把"这一次批的是谁"钉下来（见 commit 的注释）
+    const target = {
+      exerciseId: exercise.id,
+      sectionIndex,
+      topic: exercise.topic,
+      direction: exercise.direction,
+    }
     setJudging(true)
     setError(null)
     setNotice(null)
 
-    const answerSections = buildAnswerSections()
+    const answerSections = [answerSectionOf(sectionIndex)]
     const outcome = await requestJudgment({
       source: currentSource,
       direction: exercise.direction,
@@ -446,7 +517,7 @@ export function App(): JSX.Element {
 
     if (!outcome.ok) {
       setError({ kind: outcome.kind, message: outcome.message })
-      return
+      return false
     }
 
     if (outcome.attempts > 1) setNotice('AI 有几次返回没通过位置校验，已自动重试并修正。')
@@ -454,6 +525,7 @@ export function App(): JSX.Element {
       setNotice(`有 ${outcome.repaired.length} 处批注因位置与译文对不上而未标出——位置校验拦住了它们。`)
     }
     commit(
+      target,
       {
         correction: outcome.correction,
         validated: outcome.validated,
@@ -462,9 +534,35 @@ export function App(): JSX.Element {
         sectionCount: outcome.sectionCount,
         raw: outcome.raw,
       },
-      answerSections,
+      pageAnswer,
       level,
     )
+    return true
+  }
+
+  /**
+   * 翻到另一页。
+   *
+   * 用户要求的规矩（逐页批改的核心）：
+   *   - 离开一页时，**刚写完、还没批过**的那一页自动交出去批；
+   *   - 已经批过的页翻回去看结果，**不重新提交**（批改要十几秒、还可能给出不一样的结果）；
+   *   - 批过之后又被「返回编辑」放开改过的页，**绝不自动提交**——
+   *     用户还没改完，替他交一次等于偷偷花掉一次调用。改完自己按「提交批改」。
+   *
+   * 自动提交没成功（模型返回不合格、网络断了）时**停在原地**：
+   * 这时切走，用户会以为那一页已经交过了。
+   */
+  async function goToSection(nextIndex: number): Promise<void> {
+    if (nextIndex === sectionIndex) return
+    if (judging) return
+    const withinRange = nextIndex >= 0 && nextIndex < sourceSections.length
+    if (!withinRange) return
+
+    if (pageState === 'pending' && currentAnswer.trim().length > 0) {
+      const ok = await submitPage(sectionIndex)
+      if (!ok) return
+    }
+    setSection(nextIndex)
   }
 
   /** 离线演示：用内置示例的批改结果，不调 API。 */
@@ -479,6 +577,7 @@ export function App(): JSX.Element {
     setError(null)
     setNotice('这是内置示例的批改结果，不是 AI 现场批改的。')
     commit(
+      { exerciseId: exercise.id, sectionIndex, topic: exercise.topic, direction: exercise.direction },
       {
         correction: fixture,
         validated: checked,
@@ -488,11 +587,18 @@ export function App(): JSX.Element {
         // 内置示例没有"模型原始文本"这回事，就按 AI 的字段形状把它还原出来
         raw: JSON.stringify(toAiShape(fixture), null, 2),
       },
-      [{ start: 0, text: currentAnswer }],
+      currentAnswer,
       level,
     )
   }
 
+  /**
+   * 右上栏、右下栏、左下栏要显示的那一份批改。
+   *
+   * 两种来源：练习记录里点开的那一条，或**当前这一页**刚批出来的结果。
+   * 后者的译文取 `pageResult.answer`（提交当时的那段文字），**不是** drafts：
+   * 用户改过一个字之后批注的位置就全对不上了，所以显示的必须是被批的那一版。
+   */
   const shown = openRecord
     ? {
         correction: openRecord.correction,
@@ -504,23 +610,18 @@ export function App(): JSX.Element {
         source: openRecord.source,
         raw: openRecord.raw,
       }
-    : result && view === 'result'
+    : pageResult && !editing
       ? {
-          correction: result.correction,
-          validated: result.validated,
-          answer: buildAnswerSections()
-            .map((section) => section.text)
-            .join('\n\n'),
-          level: result.level,
+          correction: pageResult.draft.correction,
+          validated: pageResult.draft.validated,
+          answer: pageResult.answer,
+          level: pageResult.draft.level,
           attempt: caseRecords.length,
-          sectionCount: result.sectionCount,
-          source: result.source,
-          raw: result.raw,
+          sectionCount: pageResult.draft.sectionCount,
+          source: pageResult.draft.source,
+          raw: pageResult.draft.raw,
         }
       : null
-
-  /** 有上一次的结果、且当前停在作答框上（点了「返回修改」但还没改字） */
-  const canReturnToResult = Boolean(result) && view === 'answer'
 
   /**
    * 术语题的逐条判分结果。
@@ -532,10 +633,9 @@ export function App(): JSX.Element {
    */
   const termVerdicts = useMemo(() => {
     if (!isTermExercise) return null
-    if (!result && view !== 'result') return null
-    if (!result) return null
+    if (!pageResult) return null
     return judgeTerms(activeTerms, activeTerms.map((_, index) => drafts[index] ?? ''))
-  }, [isTermExercise, result, view, activeTerms, drafts])
+  }, [isTermExercise, pageResult, activeTerms, drafts])
 
   /**
    * 术语题提交：**本地判分，不调 AI**。
@@ -547,10 +647,14 @@ export function App(): JSX.Element {
    */
   function submitTerms(): void {
     if (!isTermExercise) return
-    const verdicts = judgeTerms(activeTerms, activeTerms.map((_, index) => drafts[index] ?? ''))
+    const answers = activeTerms.map((_, index) => drafts[index] ?? '')
+    const verdicts = judgeTerms(activeTerms, answers)
     const { correction, validated } = correctionFromVerdicts(verdicts)
     const wrong = verdicts.filter((verdict) => !verdict.correct).length
+    // 术语题没有分页，它的"一页"就是这五条，合起来当作被批的那段文字（与练习记录一致）
+    const pageAnswer = answers.join('\n')
     commit(
+      { exerciseId: exercise.id, sectionIndex, topic: exercise.topic, direction: exercise.direction },
       {
         correction,
         validated,
@@ -569,7 +673,7 @@ export function App(): JSX.Element {
           2,
         ),
       },
-      [{ start: 0, text: activeTerms.map((_, index) => drafts[index] ?? '').join('\n') }],
+      pageAnswer,
       level,
     )
     setNotice(
@@ -706,6 +810,7 @@ export function App(): JSX.Element {
               multiSection={multiSection}
               sourceSectionCount={sourceSections.length}
               sectionIndex={sectionIndex}
+              gradedPages={gradedPages}
               currentSection={currentSection}
               currentSource={currentSource}
               currentReference={currentReference}
@@ -726,7 +831,7 @@ export function App(): JSX.Element {
             {/*
               术语题走**另一条渲染路径**：它一次给五条术语、逐条作答、由程序本地对照判分
               （见 term-exercise.ts）。它没有"整段作答文本"，因此不画勾画，
-              也不需要视图切换、修改档位、提交全篇这些为整篇译文准备的东西。
+              也不需要视图切换、修改档位、逐页提交这些为整篇译文准备的东西。
               与其它题型刻意分开渲染，而不是往 AnswerPane 里塞一堆 if——
               那会让两个本来不同的交互在一个组件里互相牵制。
             */}
@@ -751,8 +856,8 @@ export function App(): JSX.Element {
                     onChange={(row, value) => updateAnswerAt(row, value)}
                     onSubmit={submitTerms}
                     onReset={() => {
-                      // 重新作答：把这一组的结果作废（清空判分），作答本身**留着**让人改
-                      dispatchSession({ type: 'resultCleared', exerciseId: exercise.id })
+                      // 重新作答：作废这一组的结果，作答本身**留着**让人改（与逐页批改里的「返回编辑」同一个动作）
+                      dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
                       setNotice(null)
                       setSelection(null)
                     }}
@@ -770,29 +875,27 @@ export function App(): JSX.Element {
               error={error}
               notice={notice}
               isFixtureAnswer={isFixtureAnswer}
-              canReturnToResult={canReturnToResult}
+              editing={editing}
+              pageState={pageState}
               multiSection={multiSection}
               sectionIndex={sectionIndex}
               sectionCount={sourceSections.length}
-              filledSections={filledSections}
               currentAnswer={currentAnswer}
               onSelect={toggleSelection}
               onSettingsChange={updateSettings}
-              onBackToAnswer={() => {
-                // 回到作答状态：**结果留着**，输入框重新出现（文字还在 drafts 里）。
-                // 只要没改字，右上角就多一个「查看上次批改」能点回来
-                dispatchSession({ type: 'viewChanged', exerciseId: exercise.id, view: 'answer' })
+              onUnlock={() => {
+                // 「返回编辑」：作废这一页的结果、放开这一页重写（文字还在 drafts 里）。
+                // 放开之后这一页**不再自动提交**，改完自己按「提交批改」。
+                dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
                 setOpenRecord(null)
                 setSelection(null)
+                setNotice('这一页已可以修改。改完请点「提交批改」——这一页不会再自动提交。')
               }}
-              onViewLastResult={() =>
-                dispatchSession({ type: 'viewChanged', exerciseId: exercise.id, view: 'result' })
-              }
               onLevelChange={setLevel}
-              onSubmit={() => void submitLive()}
+              onSubmit={() => void submitPage(sectionIndex)}
               onSubmitFixture={submitFixture}
               onAnswerChange={updateAnswer}
-              onSectionChange={setSection}
+              onSectionChange={(next) => void goToSection(next)}
             />
             )}
 

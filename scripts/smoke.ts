@@ -20,14 +20,14 @@ import { renderApp } from './render-probe'
 import { DIRECTION_LABEL, KIND_LABEL, type Direction, type Mode } from '../src/domain/types'
 import { ARTICLE_DOMAINS } from '../src/domain/articles'
 import { CATEGORY_LABEL, CATEGORY_PRIORITY, ERROR_CATEGORY_SPECS, HARD_CATEGORIES } from '../src/domain/types'
-import { directionOf, modeOf } from '../src/domain/custom'
+import { directionOf, loadCustom, modeOf } from '../src/domain/custom'
 import { classifyFailure } from '../vite-plugin-judge-api'
 import { clearDir } from './lib/clear-dir'
 // 探针那份"按顶边归并成行"的实现（注入页面去跑的那一份）。
 // 与 src/domain/row-merge.ts 是刻意的两份实现，由下面的断言保证它们一致。
 import { mergeRowsOnTopEdge as mergePageRows } from './lib/row-merge.mjs'
 import { mergeRowsOnTopEdge } from '../src/domain/row-merge'
-import { INITIAL_SESSIONS, sessionOf, sessionReducer, type ExerciseSession } from '../src/components/session'
+import { INITIAL_SESSIONS, pageResultOf, sessionOf, sessionReducer, type ExerciseSession } from '../src/components/session'
 import type { RecordView } from '../src/components/RecordsView'
 import path from 'node:path'
 
@@ -455,9 +455,90 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(rendered.text.includes('表达问题'), '左下角区分了表达问题')
     check(!rendered.html.includes('总体评语'), '批改结果里没有 AI 写的总体评语')
     check(!rendered.html.includes('分项评语'), '批改结果里没有 AI 写的分项评语')
+
+    /*
+     * 逐页批改：填一页 → 交一页 → 翻一页。
+     * 上面那次渲染已经按这套流程走过一遍，这里核对它留下的观察数据。
+     * 这道题只有一页，因此"翻页"那几条要在下面用一篇多段的原文另跑一遍。
+     */
+    check(rendered.perPage.length > 0, `逐页流程走通了（${rendered.perPage.length} 页）`)
+    check(
+      rendered.judgeCalls === rendered.perPage.length,
+      `每一页各交了一次（${rendered.perPage.length} 页 / 批改调用 ${rendered.judgeCalls} 次）`,
+    )
+    check(rendered.revisit.showsResult, '提交完这一页，右上角显示的就是带批注的译文')
+    check(!rendered.revisit.hasInput, '批过之后是只读的，输入框不在了')
+    check(
+      rendered.revisit.judgeCalls === 0,
+      `翻回已批过的页没有重新提交（多调用了 ${rendered.revisit.judgeCalls} 次）`,
+    )
+
     // 还原探针改过的全局对象，否则后续依赖 fetch 的检查会误报
     rendered.restore()
     check(typeof globalThis.fetch === 'function', '渲染探针已还原全局 fetch')
+
+    /*
+     * 逐页批改的**多页**那一半：上面那道题只有一页，翻页这件事根本没被走到。
+     * 自己贴一篇三段原文来跑——它按自然段切、自动判成文章题，
+     * 于是「下一页」会自动把这一页交出去、翻回去只是看结果。
+     */
+    console.log('\n[界面渲染 · 逐页批改] 一篇多段原文：填一页 / 交一页 / 翻一页')
+    const multiPageText = [
+      '生态文明建设是一场涉及生产方式、生活方式、思维方式和价值观念的深刻变革，需要全社会共同行动，久久为功。',
+      '我们把绿色发展摆在更加突出的位置，推动产业结构和能源结构加快调整，让良好生态环境成为高质量发展的支撑点。',
+      '下一步将健全生态保护补偿机制，完善相关法律法规，让保护者受益、使用者付费、破坏者赔偿真正落到实处。',
+    ].join('\n\n')
+    /*
+     * 多段原文从**界面**贴进去（走「自定义」那一栏的贴题流程）：
+     * 探针会点「重新贴一篇」→ 填文本 → 「开始练习」，然后停在那道题上。
+     * 这样不依赖"探针挂载之前先把存档写好"这种时序假设——
+     * `useState(() => loadCustom())` 只在挂载那一刻读一次存档。
+     */
+    const multi = await renderApp({ checkCustom: multiPageText })
+    check(multi.perPage.length === 3, `这篇原文分成 ${multi.perPage.length} 页`)
+    check(
+      multi.perPage.every((page) => page.state.includes('待批改')),
+      '每一页交出去之前都是"待批改"（还没批过就是还没批过）',
+      multi.perPage.map((page) => `${page.page}:${page.state}`).join(' | '),
+    )
+    /*
+     * 「点下一页时把刚写完的这一页交出去批」这条规矩，用**练习记录**来验：
+     * 逐页批改下一条记录 = 一页，因此"每一页都留下了自己的那条记录"
+     * 就等于"翻走之前它真的被提交过一次"。
+     *
+     * 为什么不去读界面上那句状态：那句话要等 React 再画一帧才更新，
+     * 探针读到的往往是上一帧（"人已经翻走了、那一页还写着待批改"），
+     * 拿它做断言会间歇性地假红。落盘的记录没有这个时机问题。
+     */
+    {
+      const { loadRecords: loadForMulti } = await import('../src/components/records-store')
+      const multiRecords = loadForMulti().filter((record) => record.exerciseId === loadCustom()?.id)
+      const recordedPages = multiRecords.map((record) => record.sectionIndex).sort((a, b) => a - b)
+      check(
+        recordedPages.join(',') === '0,1,2',
+        `三页各留下了一条持久化记录（实际页号：${recordedPages.join(',') || '(无)'}）`,
+        JSON.stringify(multiRecords.map((record) => ({ page: record.sectionIndex, answer: record.answer.slice(0, 12) }))),
+      )
+      check(
+        new Set(multiRecords.map((record) => record.answer)).size === multiRecords.length,
+        '每一页记录里的作答各不相同（说明每页各写各的，没有串页）',
+      )
+    }
+    check(
+      multi.perPage.at(-1)?.stateAfterLeave === '(末页，翻不过去)',
+      '末页没有「下一页」可点（那一页只能手动交）',
+      multi.perPage.at(-1)?.stateAfterLeave,
+    )
+    check(
+      multi.judgeCalls === 3,
+      `三页各交一次、不多不少（批改调用 ${multi.judgeCalls} 次）`,
+    )
+    check(multi.revisit.showsResult && !multi.revisit.hasInput, '翻回第 1 页看到的是当时的结果，且是只读的')
+    check(
+      multi.revisit.judgeCalls === 0,
+      `翻回已批过的页没有重新提交（多调用了 ${multi.revisit.judgeCalls} 次）`,
+    )
+    multi.restore()
 
     // 再用一道有批注的句子题单独验批注交互：
     // 默认题是文章，示例里只有一处亮点，没有 errors 条目可点。
@@ -846,18 +927,21 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
     generateProbe.restore()
 
-    // 返回修改 → 查看上次批改（不重新提交）；四栏边界可拖动
-    console.log('\n[界面渲染 · 面板] 返回上次结果与拖动边界')
+    // 逐页批改：批过的页只读、「返回编辑」才放开、放开后不再自动提交；四栏边界可拖动
+    console.log('\n[界面渲染 · 逐页批改] 只读的批阅态、返回编辑、拖动边界')
     const panelProbe = await renderApp({ exerciseId: 'sentence-001', checkPanels: true })
     const panels = panelProbe.panels
     check(Boolean(panels), '面板交互探针跑通了')
     if (panels) {
       check(panels.hasSplitter, '四栏之间是可见可拖的分隔条')
       check(panels.manualApplied, '拖动之后切换成手动比例（split-manual）')
-      check(panels.editorShown, '点「返回修改」回到作答框')
-      check(panels.canReturnToResult, '作答框旁边出现「查看上次批改」')
-      check(panels.resultBack, '点它就回到上次的批改结果（内容与之前一致）')
-      check(panels.judgeCallsAfterReturn === 1, `回到上次结果没有重新调用接口（调用 ${panels.judgeCallsAfterReturn} 次）`)
+      check(panels.canReturnToResult, '批过的页是只读的（没有输入框、也没有提交按钮），但给着「返回编辑」')
+      check(panels.editorShown, '点「返回编辑」回到作答框，可以接着改')
+      check(panels.resultBack, '放开之后提交按钮变成手动的「提交批改（手动）」')
+      check(
+        panels.judgeCallsAfterReturn === 0,
+        `改过又翻页，没有自动提交（多调用了 ${panels.judgeCallsAfterReturn} 次）`,
+      )
     }
     panelProbe.restore()
 
@@ -1454,44 +1538,45 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
    * 会话 reducer（"每一道题各自的状态"）。
    *
    * 这个 reducer 取代了原先六个按题号索引的 useState 与三处手写的"清空清单"，
-   * 因此它必须自己被固定住：跨题互不影响、换原文只清当前这道、改动作答作废旧结果。
+   * 因此它必须自己被固定住：跨题互不影响、换原文只清当前这道、
+   * 以及**逐页批改**那几条规矩（结果按页存、翻页不该动别人的结果、改过的页不再自动提交）。
    */
   try {
     let sessions = INITIAL_SESSIONS
     const at = (id: string): ExerciseSession => sessionOf(sessions, id)
 
-    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第一段' })
-    check(at('a').drafts[0] === '第一段', '写入作答进 drafts')
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第一页' })
+    check(at('a').drafts[0] === '第一页', '写入作答进 drafts')
 
     sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 2 })
-    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第三段' })
-    check(at('a').drafts[2] === '第三段', '换段之后的作答写进那一段')
-    check(at('a').drafts[0] === '第一段', '先写的那一段没被覆盖')
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第三页' })
+    check(at('a').drafts[2] === '第三页', '换页之后的作答写进那一页')
+    check(at('a').drafts[0] === '第一页', '先写的那一页没被覆盖')
 
     /*
-     * 真实交互的顺序是「点下一段 → 在新的一段里打字」，而不是「先切段、再打字」。
-     * 第一版 reducer 的 `answerChanged` 复用了"换原文"那套清空逻辑，顺手把段号也归零，
-     * 于是每打一个字人就被弹回第一段：界面显示"第 2 / 4 段"，但写进去的却是第 1 段，
-     * 四段永远填不满、提交按钮一直禁用。
+     * 真实交互的顺序是「点下一页 → 在新的一页里打字」，而不是「先切页、再打字」。
+     * 第一版 reducer 的 `answerChanged` 复用了"换原文"那套清空逻辑，顺手把页号也归零，
+     * 于是每打一个字人就被弹回第一页：界面显示"第 2 / 4 页"，但写进去的却是第 1 页，
+     * 四页永远填不满、提交按钮一直禁用。
      *
-     * 上面那两条断言**抓不到**它——它们先切段、紧接着就打字，把段号归零这一步给"用掉了"。
-     * 下面这条专门盯住它：切段之后先再打一次字，段号必须纹丝不动。
+     * 上面那两条断言**抓不到**它——它们先切页、紧接着就打字，把页号归零这一步给"用掉了"。
+     * 下面这条专门盯住它：切页之后先再打一次字，页号必须纹丝不动。
      */
     sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 3 })
-    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四段' })
-    check(at('a').sectionIndex === 3, '在新的一段里打字后，段号不会被弹回第一段')
-    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四段改' })
-    check(at('a').sectionIndex === 3, '在同一段里连续打字，段号保持不动')
-    check(at('a').drafts[3] === '第四段改', '连续打字覆盖的是同一段，而不是写回第一段')
-    check(at('a').drafts[2] === '第三段', '第三段的内容没有被后面的打字冲掉')
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四页' })
+    check(at('a').sectionIndex === 3, '在新的一页里打字后，页号不会被弹回第一页')
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四页改' })
+    check(at('a').sectionIndex === 3, '在同一页里连续打字，页号保持不动')
+    check(at('a').drafts[3] === '第四页改', '连续打字覆盖的是同一页，而不是写回第一页')
+    check(at('a').drafts[2] === '第三页', '第三页的内容没有被后面的打字冲掉')
 
     // 跨题目互不影响：这正是原先六个 useState 要各自维护、容易漏的地方
     sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'b', text: '另一道题' })
-    check(at('a').drafts[0] === '第一段', '另一道题的改动不影响这一道')
+    check(at('a').drafts[0] === '第一页', '另一道题的改动不影响这一道')
     check(at('b').drafts[0] === '另一道题', '另一道题自己存住了')
     check(at('c').drafts !== undefined, '没碰过的题号返回空会话而不是 undefined')
 
-    // 提交结果 → 画面切到结果那一面
+    // 提交结果 → 结果记在**提交的那一页**上（不是"这道题的一个结果"）
     const draft = {
       correction: { errors: [], highlights: [] },
       validated: { errors: [], highlights: [], rejections: [] },
@@ -1500,26 +1585,42 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       sectionCount: 1,
       raw: '{}',
     }
-    sessions = sessionReducer(sessions, { type: 'resultCommitted', exerciseId: 'a', draft })
-    check(at('a').result !== null, '提交后存下了结果')
-    check(at('a').view === 'result', '提交后切到结果那一面')
+    sessions = sessionReducer(sessions, {
+      type: 'pageGraded',
+      exerciseId: 'a',
+      sectionIndex: 3,
+      draft,
+      answer: '第四页改',
+    })
+    check(pageResultOf(at('a'), 3) !== undefined, '提交后结果记在那一页上')
+    check(pageResultOf(at('a'), 0) === undefined, '别的页没有结果（不会被这一页的提交牵连）')
+    check(pageResultOf(at('a'), 3)?.answer === '第四页改', '结果里存着**提交当时**那段文字（改过之后批注还认得它）')
 
-    // 「返回修改」只切视图，结果要留着（否则要重新提交、花十几秒）
-    sessions = sessionReducer(sessions, { type: 'viewChanged', exerciseId: 'a', view: 'answer' })
-    check(at('a').view === 'answer', '「返回修改」切到作答框')
-    check(at('a').result !== null, '「返回修改」之后结果仍然留着')
-    check(at('a').drafts[0] === '第一段', '「返回修改」之后作答也还在')
+    /*
+     * 逐页批改的两条硬规矩，都在下一页身上：
+     *   1. 翻页**不动**已提交的结果——否则用户翻回去看时只能重新提交（十几秒 + 结果可能不一样）；
+     *   2. 批过之后被「返回编辑」放开过的页，翻页**不能**自动提交（那一页还没改完）。
+     *      这里只测 reducer 那一半：unlocked 记下来了、结果真的没了、草稿还在。
+     */
+    sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 0 })
+    sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 3 })
+    check(pageResultOf(at('a'), 3) !== undefined, '翻走再翻回来，那一页的结果还在（不需要重新提交）')
 
-    // 改动作答 → 旧结果作废
-    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '改过了' })
-    check(at('a').result === null, '改动作答后旧结果作废（不再对应这段文字）')
-    check(at('a').view === 'result', '改动作答后视图回到结果那一面')
+    sessions = sessionReducer(sessions, { type: 'pageUnlocked', exerciseId: 'a' })
+    check(pageResultOf(at('a'), 3) === undefined, '「返回编辑」作废这一页的结果')
+    check(at('a').unlocked.includes(3), '这一页记下"已放开"，据此**不再自动提交**')
+    check(at('a').drafts[3] === '第四页改', '「返回编辑」之后作答还留着（人是回来改字的）')
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四页再改' })
+    check(at('a').drafts[3] === '第四页再改', '放开之后能接着写')
+    check(at('a').unlocked.includes(3), '接着写不会把"已放开"这条标记弄丢')
+    check(pageResultOf(at('a'), 0) === undefined, '放开这一页不影响别的页')
 
     // 换原文 → 只清当前这道题的作答与结果，别的题不受影响
     sessions = sessionReducer(sessions, { type: 'sourceRotated', exerciseId: 'a', variantIndex: 1 })
     check(at('a').variantIndex === 1, '换原文后记下用的是第几份')
     check(Object.keys(at('a').drafts).length === 0, '换原文后这道题的作答已清空')
-    check(at('a').result === null, '换原文后这道题的结果已清空')
+    check(Object.keys(at('a').pages).length === 0, '换原文后这道题的逐页结果已清空')
+    check(at('a').unlocked.length === 0, '换原文后"已放开"的页也清了（旧页号没有意义）')
     check(at('b').drafts[0] === '另一道题', '换原文不影响别的题')
 
     // 用一篇 AI 生成的题：存进池子、切过去、清掉旧的作答
@@ -1542,7 +1643,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     // sectionChanged 不该顺手把作答清掉
     sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: 'x' })
     sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 1 })
-    check(at('a').drafts[0] === 'x', '仅切换段落不会清掉已写的作答')
+    check(at('a').drafts[0] === 'x', '仅切换页不会清掉已写的作答')
   } catch (error) {
     check(false, '会话 reducer 可以验证', error instanceof Error ? error.message : String(error))
   }
@@ -1625,6 +1726,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       direction: 'en-to-zh',
       topic: '测试',
       attempt: n,
+      // 逐页批改：一条记录 = 一页，页号是必填的（记录里没有它就不知道该归到哪一页）
+      sectionIndex: 0,
       level: 'polish',
       answer: `第 ${n} 次作答`,
       correction: { errors: [], highlights: [] },
@@ -1635,7 +1738,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     })
 
     // 干净起点
-    window.localStorage.removeItem('translation-practice.records.v1')
+    window.localStorage.removeItem('translation-practice.records.v2')
 
     const three = [makeRecord(1), makeRecord(2), makeRecord(3)]
     const stored = saveRecords(three)
@@ -1662,19 +1765,45 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     )
 
     // 坏数据：整份不是数组 / 某一条坏掉
-    window.localStorage.setItem('translation-practice.records.v1', '{不是 JSON')
+    window.localStorage.setItem('translation-practice.records.v2', '{不是 JSON')
     check(loadRecords().length === 0, '内容不是 JSON 时当作"没有记录"，不抛错')
-    window.localStorage.setItem('translation-practice.records.v1', JSON.stringify({ a: 1 }))
+    window.localStorage.setItem('translation-practice.records.v2', JSON.stringify({ a: 1 }))
     check(loadRecords().length === 0, '内容不是数组时也当作"没有记录"')
     window.localStorage.setItem(
-      'translation-practice.records.v1',
+      'translation-practice.records.v2',
       JSON.stringify([
-        { id: 'ok', exerciseId: 'x', answer: 'a', createdAt: new Date().toISOString(), correction: {}, validated: {} },
+        {
+          id: 'ok',
+          exerciseId: 'x',
+          answer: 'a',
+          sectionIndex: 0,
+          createdAt: new Date().toISOString(),
+          correction: {},
+          validated: {},
+        },
         { id: 'bad' },
       ]),
     )
     const filtered = loadRecords()
     check(filtered.length === 1 && filtered[0]?.id === 'ok', '坏的那一条被跳过，好的那条留住')
+    /*
+     * 缺页号的那一条也算坏数据：逐页批改之后"这是哪一页"是必填的，
+     * 猜一个页号会让人翻回记录时看到一段对不上的译文。
+     */
+    window.localStorage.setItem(
+      'translation-practice.records.v2',
+      JSON.stringify([
+        {
+          id: 'no-page',
+          exerciseId: 'x',
+          answer: 'a',
+          createdAt: new Date().toISOString(),
+          correction: {},
+          validated: {},
+        },
+      ]),
+    )
+    check(loadRecords().length === 0, '没有页号的旧记录被当作坏数据丢掉（而不是瞎猜一页）')
 
     /*
      * 写不下时**丢掉最旧的再重试**，而且返回的必须是真写进去的那些（不谎报）。
@@ -1695,7 +1824,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
     let writes = 0
     storageProto.setItem = function patched(this: Storage, key: string, value: string): void {
-      if (key === 'translation-practice.records.v1') {
+      if (key === 'translation-practice.records.v2') {
         writes += 1
         if (writes <= 2) failAlways()
       }
