@@ -169,7 +169,11 @@ try {
   check(bar.domainLabel === '经济建设', `老按钮条已去掉、领域显示默认值（${bar.domainLabel}）`)
   check(bar.dirButtons.join(',') === '中译英,英译中', `中间是方向切换：${bar.dirButtons.join(' / ')}`)
   check(bar.dirActive === '英译中', `默认方向为英译中（${bar.dirActive}）`)
-  check(bar.dirDisabled[0] === true && bar.dirDisabled[1] === false, '中译英暂无文章 → 该侧禁用，英译中可点', JSON.stringify(bar.dirDisabled))
+  check(
+    bar.dirDisabled.includes(false),
+    '至少有一个方向是可点的（不是两边都灰着）',
+    JSON.stringify(bar.dirDisabled),
+  )
   check(bar.hasPickButton === true, '有「选择文章」入口')
   check(bar.topbarHasSettings === true, '「设置」仍在顶栏（每一栏都够得着）')
   check(bar.noOldCaseStrip === true && bar.noOldCaseTabs === true, '旧的一排题目按钮已彻底移除')
@@ -271,27 +275,48 @@ try {
   check(picked.hasInput === true, '可以开始作答（输入框在）')
   check(picked.referenceShown === false, '文章库没有参考译文，那一栏不摆空壳子')
 
-  console.log('\n=== 5. 方向切换确实换了一批文章 ===')
-  const before = await cdp.evaluate("(document.querySelector('.pane-source .source-text')?.textContent ?? '').slice(0, 40)")
+  console.log('\n=== 5. 方向切换确实换了一批文章（中译英现在也有文章了）===')
+  const englishSource = await cdp.evaluate(
+    "(document.querySelector('.pane-source .source-text')?.textContent ?? '').slice(0, 40)",
+  )
   await cdp.evaluate(
     `[...document.querySelectorAll('.dir-btn')].find((b) => b.textContent.trim() === '中译英').click()`,
   )
-  await sleep(600)
+  await sleep(700)
   const afterDir = await cdp.evaluate(
     `({
        dirActive: document.querySelector('.dir-btn-active')?.textContent?.trim() ?? null,
        source: (document.querySelector('.pane-source .source-text')?.textContent ?? '').slice(0, 40),
      })`,
   )
-  // 中译英文章尚未入库，因此切过去应当切不动（禁用），保持英译中
-  check(
-    afterDir.dirActive === '英译中',
-    '中译英暂无文章时点不动（保持英译中），不会切到空白',
-    `当前=${afterDir.dirActive}`,
-  )
-  void before
+  check(afterDir.dirActive === '中译英', `切到中译英（当前 ${afterDir.dirActive}）`)
+  check(afterDir.source.length > 10, '中译英方向也有原文可练', afterDir.source)
+  check(afterDir.source !== englishSource, '换方向确实换了另一批文章（不是同一篇）')
+  // 中译英的原文应当是中文
+  check(/[\u4e00-\u9fff]/.test(afterDir.source), '中译英方向的原文是中文', afterDir.source)
 
-  console.log('\n=== 6. 页面错误 ===')
+  console.log('\n=== 6. 中译英方向也能选文章 ===')
+  await cdp.evaluate(
+    `[...document.querySelectorAll('.article-bar .btn')].find((b) => b.textContent.includes('选择文章')).click()`,
+  )
+  await sleep(600)
+  const zhModal = await cdp.evaluate(
+    `({
+       cards: [...document.querySelectorAll('.article-card')].map((c) => c.querySelector('.article-card-title')?.textContent?.trim() ?? ''),
+       units: [...document.querySelectorAll('.article-card-units')].map((s) => s.textContent.trim()),
+     })`,
+  )
+  check(zhModal.cards.length === 3, `中译英方向也有 3 张卡片（实际 ${zhModal.cards.length}）`)
+  check(
+    zhModal.units.every((u) => /字/.test(u)),
+    '中译英的篇幅按「字」计（不是词）',
+    zhModal.units.join(' ｜ '),
+  )
+  console.log(`      示例卡片：${zhModal.cards[0] ?? ''}　${zhModal.units[0] ?? ''}`)
+  await cdp.evaluate("document.querySelector('.raw-modal-close')?.click()")
+  await sleep(300)
+
+  console.log('\n=== 7. 页面错误 ===')
   check(cdp.errors.length === 0, '全程没有页面异常', cdp.errors.join(' ｜ '))
 
   const failed = results.filter((r) => !r.ok).length
