@@ -74,6 +74,19 @@ export interface RenderProbe {
     secondMark: string
     secondNotes: string
     secondBubble: string
+    /** 小卡片是不是**挂在 document.body 上**（而不是在译文栏那棵子树里） */
+    bubbleOutsideRoot: boolean
+    /** 小卡片的内联 top（像素）与当时的视口高度——用来验"它没有被画到视口外面" */
+    bubbleTop: number
+    bubbleViewportHeight: number
+    /** 卡片有没有翻到那一行上面（下面放不下时的退路，箭头跟着移到下沿） */
+    bubbleFlipped: boolean
+    /** 点**小卡片正文**之后：卡片还在不在（用户要求：点卡片不关） */
+    bubbleAfterInsideBubble: string
+    notesAfterInsideBubble: string
+    /** 点**右下角那张卡片的正文**之后：两张卡都还在不在 */
+    bubbleAfterInsideDetail: string
+    notesAfterInsideDetail: string
     /** 右下栏里有几张详情卡片（应当恒为 1，而不是全量清单） */
     selectedDetailCount: number
     /** 点勾画之外的地方之后，右下栏的文字（应当回到提示） */
@@ -89,15 +102,15 @@ export interface RenderProbe {
     /** 点开之后，弹窗里的完整文本 */
     rawModalText: string
   }
-  /** 精修档：整篇逐句重写 + 逐句解释 + AI 总评，而且只给对照（见 domain/refine.ts） */
+  /** 大改档：整篇逐句重写 + 逐句解释 + AI 总评，而且只给对照（见 domain/refine.ts） */
   refine?: {
     /** 按「返回编辑」把批过的那一页放开（作答还在） */
     reUnlock: boolean
     editorBack: boolean
-    /** 档位切到「精修」 */
+    /** 档位切到「大改」 */
     levelPicked: boolean
     activeLevel: string
-    /** 精修那一次提交打到了 /api/refine 几次 */
+    /** 大改那一次提交打到了 /api/refine 几次 */
     refineCalls: number
     refineRequestBody: string
     /** 只给对照：对照列表在、勾画不在 */
@@ -105,11 +118,15 @@ export interface RenderProbe {
     hasAnnotatedLines: boolean
     lineCount: number
     noteText: string
+    /** 解释里带圈号的行数与圈号本身（用户要求：大改的解释按分号断行 + 圈号） */
+    noteLineCount: number
+    noteCircled: string[]
+    noteBreaks: number
     correctedText: string
     /** 视图开关保留但禁用，并注明为什么 */
     viewButtonsDisabled: boolean
     lockedNote: string
-    /** 分数是 AI 总评，而且写着"不与润色档可比" */
+    /** 分数是 AI 总评，而且写着"不与精修档可比" */
     scorePaneText: string
     scoreChip: string[]
     /** 右下角说清"不逐处批改" */
@@ -180,6 +197,12 @@ export interface RenderProbe {
   }>
   /** 逐页批改：翻回第 1 页（已批过）时，批改结果是直接显示出来的，还是被重新提交了 */
   revisit: { showsResult: boolean; hasInput: boolean; judgeCalls: number }
+  /**
+   * 「返回编辑」没改字就翻页：回来时是批改界面还是作答框（用户要求必须是批改界面）。
+   * 另一头：改过字再翻页，回来该是作答框（结果那时已经作废了）。
+   */
+  unlockRoundTrip?: { unlockedShown: boolean; gradingBack: boolean; stateAfterBack: string }
+  editedRoundTrip?: { hasInput: boolean; hasResult: boolean }
   /** 「自定义」那一栏：自己贴一篇原文来练 */
   custom?: {
     /** 导航栏里的标签 */
@@ -372,7 +395,7 @@ function makeJudgeFetch(options: { judgeDelayMs?: number } = {}): {
     }
     if (pathname === '/api/refine') {
       /*
-       * 精修档：回一份**与提交文字自洽**的重写结果。
+       * 大改档：回一份**与提交文字自洽**的重写结果。
        *
        * 重写只改一个字符（句首大写），这样 `minimizeChange` 能算出最小不同项、
        * 对照视图上只染那一个字——结构断言才验证得了"只染真正变了的字"这件事。
@@ -570,7 +593,7 @@ export async function renderApp(
     checkRecords?: boolean
     checkGenerate?: boolean
     checkPanels?: boolean
-    /** 走一遍精修档：整篇逐句重写 + AI 总评 + 只给对照（见 domain/refine.ts） */
+    /** 走一遍大改档：整篇逐句重写 + AI 总评 + 只给对照（见 domain/refine.ts） */
     checkRefine?: boolean
     checkViews?: boolean
     /** 先在浏览器里存一篇自定义题（模拟"上次贴过"），贴题流程用它做起点 */
@@ -1181,6 +1204,44 @@ export async function renderApp(
     hasInput: container.querySelector('.answer-input') !== null,
     judgeCalls: judgeFetch.calls() - callsBeforeRevisit,
   }
+
+  /*
+   * 用户要求："假如当前页面处于批改后的状态，那么切换其他页，再切换回来时，
+   * 也需要在批改界面，不能回到编辑界面。"
+   *
+   * 两种情形各量一次，因为正确答案是相反的：
+   *   ① **按了「返回编辑」但一个字没改**就翻走 → 回来该看到批改结果（结果还在，没理由退回作答框）；
+   *   ② 放开之后**真的改了一个字**再翻走 → 回来该是作答框（结果那时已经作废了）。
+   *
+   * ⚠️ 必须**只在多页题上跑**：单页题没有"另一页"可翻，这一段里的 `typeInto` 会直接写进
+   * 这一页的作答框，把主流程刚提交出来的结果顶成"正在编辑"（加这段时实际踩过，
+   * 表现是主流程那几条"右上角有批注"的断言一起变红）。
+   */
+  let unlockRoundTrip: RenderProbe['unlockRoundTrip']
+  let editedRoundTrip: RenderProbe['editedRoundTrip']
+  if (sectionsToFill.length > 1) {
+    await ensureEditable()
+    const unlockedShown = container.querySelector('.answer-input') !== null
+    await clickNav('next')
+    await clickNav('prev')
+    unlockRoundTrip = {
+      unlockedShown,
+      gradingBack:
+        container.querySelector('.answer-input') === null &&
+        container.querySelector('.pane-answer .annotated-lines') !== null,
+      stateAfterBack: pageStateNow(),
+    }
+
+    // 这一页现在仍是"已批改"（那个标记被收回了），先放开、改一个字，再翻走又翻回来
+    await ensureEditable()
+    await typeInto('（改一个字再翻走）')
+    await clickNav('next')
+    await clickNav('prev')
+    editedRoundTrip = {
+      hasInput: container.querySelector('.answer-input') !== null,
+      hasResult: container.querySelector('.pane-answer .annotated-lines') !== null,
+    }
+  }
   // 停在最后一页收场：后面那些断言看的是"刚提交完"的样子
   await clickNav('next')
 
@@ -1242,7 +1303,14 @@ export async function renderApp(
    * 再点另一处，右下角必须跟着换。
    */
   const notesText = (): string => textOf('.pane-notes')
-  const bubbleText = (): string => textOf('.pane-answer .ann-bubble').trim()
+  /*
+   * ⚠️ 小卡片现在挂在 `document.body` 上（`position: fixed`，见 AnnotationText 的 createPortal），
+   * 因此**不能**再在 `#root` 里面找它——它已经从那一棵子树里搬出去了。
+   * 这正是"不被下面的栏目挡住"那条要求的实现方式：译文栏的正文盒子是滚动容器，
+   * 滚动容器会把超出它的内容剪掉，卡片留在里面就一定会被剪。
+   */
+  const bubbleNode = (): HTMLElement | null => dom.window.document.querySelector<HTMLElement>('.ann-bubble')
+  const bubbleText = (): string => (bubbleNode()?.textContent ?? '').trim()
   const markNodes = (): HTMLElement[] => [...container.querySelectorAll<HTMLElement>('.pane-answer [data-mark-id]')]
   const clickMark = async (index: number): Promise<void> => {
     const node = markNodes()[index]
@@ -1261,7 +1329,12 @@ export async function renderApp(
   await clickMark(0)
   const firstNotes = notesText()
   const firstBubble = bubbleText()
-  const firstBubbleHtml = container.querySelector('.pane-answer .ann-bubble')?.innerHTML ?? ''
+  const firstBubbleHtml = bubbleNode()?.innerHTML ?? ''
+  /** 小卡片是不是**挂到 body 上**了（它必须在译文栏那棵子树之外，否则会被滚动容器剪掉） */
+  const bubbleOutsideRoot = bubbleNode() !== null && container.querySelector('.ann-bubble') === null
+  const bubbleTop = Number.parseFloat(bubbleNode()?.style.top ?? '') || 0
+  const bubbleViewportHeight = dom.window.innerHeight || 768
+  const bubbleFlipped = bubbleNode()?.className.includes('ann-bubble-above') === true
   /*
    * 原文栏里"这一处对应的地方"（用户要求）：点了译文上的某一处之后，
    * 左边原文栏里对应的那一小段也要用同一个颜色标出来；收起卡片就消失。
@@ -1298,6 +1371,27 @@ export async function renderApp(
   await clickMark(1)
   const secondNotes = notesText()
   const secondBubble = bubbleText()
+
+  /*
+   * 用户要求："点击任意卡片都不会关掉这两个卡片，当且仅当点击这两个卡片之外的地方才消失。"
+   *
+   * 两张卡片各点一次**卡片正文**（不是按钮）：都必须还在。
+   * 早先的判据是一张类名清单，只放行了卡片里的标题与按钮，点到正文就等于点了外面——
+   * 用户看到的就是"点卡片它也会消失"。现在两张卡各带一个 `data-card` 标记，
+   * 判定按整张卡走。两个标记都在点外面那一段（下面）之前量，顺序不能倒。
+   */
+  const clickInside = async (node: Element | null | undefined): Promise<void> => {
+    if (!node) return
+    await act(async () => {
+      node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+  }
+  await clickInside(bubbleNode()?.querySelector('.ann-bubble-why'))
+  const bubbleAfterInsideBubble = bubbleText()
+  const notesAfterInsideBubble = notesText()
+  await clickInside(container.querySelector('.pane-notes .detail-body'))
+  const bubbleAfterInsideDetail = bubbleText()
+  const notesAfterInsideDetail = notesText()
 
   // 点勾画之外的地方：气泡应当消失、右下角回到提示。
   // 坐标特意给一个大值——探针把所有元素的 rect 都桩成固定方块，
@@ -1360,6 +1454,14 @@ export async function renderApp(
           secondMark,
           secondNotes,
           secondBubble,
+          bubbleOutsideRoot,
+          bubbleTop,
+          bubbleViewportHeight,
+          bubbleFlipped,
+          bubbleAfterInsideBubble,
+          notesAfterInsideBubble,
+          bubbleAfterInsideDetail,
+          notesAfterInsideDetail,
           selectedDetailCount,
           notesAfterOutsideClick,
           bubbleAfterOutsideClick,
@@ -1753,10 +1855,10 @@ export async function renderApp(
   const submittedAnswer = answerSections.map((section) => section.text).join('\n\n')
 
   /*
-   * 精修档：**整篇逐句重写 + 逐句解释 + AI 总评**，而且只给对照（用户要求）。
+   * 大改档：**整篇逐句重写 + 逐句解释 + AI 总评**，而且只给对照（用户要求）。
    *
    * 跑在主流程之后：那时这一页刚批过、是只读的，于是这一段先按「返回编辑」放开它
-   * （作答还在），再把档位切到「精修」，重新提交一次——正好是把真实用法的顺序走了一遍。
+   * （作答还在），再把档位切到「大改」，重新提交一次——正好是把真实用法的顺序走了一遍。
    */
   let refine: RenderProbe['refine']
   if (options.checkRefine) {
@@ -1771,10 +1873,10 @@ export async function renderApp(
       return true
     }
 
-    // 1) 放开这一页，再把档位切到精修
+    // 1) 放开这一页，再把档位切到大改
     const reUnlock = await clickByTextIn('.pane-answer .btn', '返回编辑')
     const editorBack = container.querySelector('.answer-input') !== null
-    const levelPicked = await clickByTextIn('.level-btn', '精修')
+    const levelPicked = await clickByTextIn('.level-btn', '大改')
     const activeLevel = container.querySelector('.level-btn-active')?.textContent?.trim() ?? ''
 
     // 2) 重新提交：这一次走的是 /api/refine
@@ -1789,7 +1891,7 @@ export async function renderApp(
       editorBack,
       levelPicked,
       activeLevel,
-      /** 精修的那一次提交打到了 /api/refine（而不是 /api/judge）+ 那一次的请求体 */
+      /** 大改的那一次提交打到了 /api/refine（而不是 /api/judge）+ 那一次的请求体 */
       refineCalls,
       refineRequestBody: judgeFetch.lastBody(),
       /** 只给对照：对照列表在、勾画不在 */
@@ -1798,11 +1900,21 @@ export async function renderApp(
       /** 一句原译、一句改后、下面跟一句解释 */
       lineCount: container.querySelectorAll('.pane-answer .compare-line').length,
       noteText: container.querySelector('.pane-answer .compare-note')?.textContent?.trim() ?? '',
+      /*
+       * 大改的解释也要**按分号断行、每行带圈号**（用户要求："大改模式下，解释部分也要
+       * 按照分号进行圈一圈二的序号标注分行"）。判据与小卡片那份是同一个
+       * （explain-lines.tsx），因此这里直接数带圈号的行，并比对纯文本（圈号去掉后拼回来）。
+       */
+      noteLineCount: container.querySelectorAll('.pane-answer .compare-note .explain-line').length,
+      noteCircled: [...container.querySelectorAll('.pane-answer .compare-note .explain-num')].map(
+        (node) => node.textContent?.trim() ?? '',
+      ),
+      noteBreaks: container.querySelectorAll('.pane-answer .compare-note br').length,
       correctedText: textOf('.pane-answer .compare-corrected'),
       /** 视图开关保留但禁用，并注明为什么 */
       viewButtonsDisabled: switchButtons.length > 0 && switchButtons.every((button) => button.disabled),
       lockedNote: textOf('.pane-answer .view-switch'),
-      /** 分数是 AI 总评，而且写着"不与润色档可比" */
+      /** 分数是 AI 总评，而且写着"不与精修档可比" */
       scorePaneText: textOf('.pane-score'),
       scoreChip: [...container.querySelectorAll('.pane-score .chip')].map((node) => node.textContent?.trim() ?? ''),
       /** 右下角说清"不逐处批改" */
@@ -1816,6 +1928,8 @@ export async function renderApp(
     perPage,
     submits,
     revisit,
+    unlockRoundTrip,
+    editedRoundTrip,
     flow: { text: flowText, answer: submittedAnswer, matches: flowText === submittedAnswer },
     panels,
     refine,

@@ -36,9 +36,9 @@ export interface GradeHistoryEntry {
   ordinal: number
   createdAt: Date
   level: PolishLevel
-  /** 这一次的总分（精修档是 AI 总评，润色档是程序按错误算的） */
+  /** 这一次的总分（大改档是 AI 总评，精修档是程序按错误算的） */
   score: number
-  /** 这一次是不是精修档：列表上要标出来，否则两种分数看起来是一回事 */
+  /** 这一次是不是大改档：列表上要标出来，否则两种分数看起来是一回事 */
   refined: boolean
 }
 
@@ -118,7 +118,7 @@ export function GradeHistoryPicker({
                   }}
                 >
                   第 {entry.ordinal} 次 · {timeLabel(entry.createdAt)} · {entry.score} 分
-                  {entry.refined && <span className="record-refine">精修 · AI 评分</span>}
+                  {entry.refined && <span className="record-refine">大改 · AI 评分</span>}
                   {entry.level === 'refine' && !entry.refined && (
                     <span className="record-refine">{LEVEL_LABEL[entry.level].split('（')[0]}</span>
                   )}

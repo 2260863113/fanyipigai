@@ -42,12 +42,20 @@ export function DetailPanel({ selection, validated, answer, onClose, embedded, o
   const color = MARK_COLOR_VALUE[summary.color]
 
   return (
-    <aside className={embedded ? 'detail detail-embedded' : 'detail'} style={{ borderColor: color }}>
-      {/*
-        `detail-head` 与 `detail-actions` 这两个类名同时是**"点这里不要收起小卡片"的标记**：
-        AnnotationText 的文档级点击处理会跳过它们（见那边的注释）。
-        这个栏说的就是"当前选中的这一处"，点它里面的按钮不该等于取消选中。
-      */}
+    /*
+     * `data-card="detail"` 是**"点这里不算点外面"的标记**：AnnotationText 的文档级点击处理
+     * 只放行带 `data-card` 的地方（另一处是小卡片自己的 `data-card="bubble"`）。
+     *
+     * ⚠️ 早先放的是一张类名清单（`.detail-head` / `.detail-actions`），于是点到这张卡片的
+     * **正文**（改前 / 改后 / 说明那几行）就把它关掉了——用户报的正是这个："点击任意卡片
+     * 都不会关掉这两个卡片，当且仅当点击这两个卡片之外的地方才消失"。
+     * 现在是"整张卡片"一个标记，卡片里加了什么新东西都不会再漏。
+     */
+    <aside
+      className={embedded ? 'detail detail-embedded' : 'detail'}
+      data-card="detail"
+      style={{ borderColor: color }}
+    >
       <header className="detail-head" style={{ background: MARK_BG_VALUE[summary.color] }}>
         <span className="detail-kind" style={{ color }}>
           {summary.typeLabel} · {summary.categoryLabel}

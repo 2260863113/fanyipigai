@@ -49,8 +49,8 @@ export interface ShownCorrection {
    */
   direction: import('../domain/types').Direction
   /**
-   * 精修档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数。
-   * **有它就走精修那条渲染路径**（只给对照、不画勾画、分数显示 AI 总评）。
+   * 大改档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数。
+   * **有它就走大改那条渲染路径**（只给对照、不画勾画、分数显示 AI 总评）。
    */
   refine?: RefineResult
 }
@@ -159,7 +159,7 @@ export function AnswerPane({
    *     这时即使这一页正放开着写，也要让位给"看一眼那一次"。
    */
   const showResult = shown !== null && (!editing || fromHistory)
-  /** 这是一份**精修档**的结果：只给对照、不逐处批改 */
+  /** 这是一份**大改档**的结果：只给对照、不逐处批改 */
   const refine = shown?.refine
   /** 这一页已经交出去、结果还没回来：作答框只读，免得批注画在对不上的文字上 */
   const frozen = pageState === 'judging'
@@ -187,7 +187,7 @@ export function AnswerPane({
         <h2>我的译文</h2>
         <div className="head-meta">
           {/*
-            精修档没得选：改写遍布每一句，勾画只会糊成一片（用户要求"精修只能看对照"）。
+            大改档没得选：改写遍布每一句，勾画只会糊成一片（用户要求"大改只能看对照"）。
             按用户选的做法，开关**保留但禁用**并注明原因，而不是藏起来（藏起来会让人以为设置丢了）。
           */}
           {showResult && <AnswerViewSwitch view={settings.answerView} onChange={onSettingsChange} locked={refine !== undefined} />}
@@ -279,7 +279,7 @@ export function AnswerPane({
 
         {showResult && shown ? (
           refine ? (
-            /* 精修档：只有一种看法——逐句「原译 / 改后」+ 每句的解释 */
+            /* 大改档：只有一种看法——逐句「原译 / 改后」+ 每句的解释 */
             <RefineView refine={refine} />
           ) : settings.answerView === 'compare' ? (
             /*

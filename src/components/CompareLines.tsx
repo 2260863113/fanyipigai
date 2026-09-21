@@ -2,21 +2,22 @@
  * 「一句原译 / 一句改后」这两行的渲染。
  *
  * 为什么单独一个组件：**两份数据、同一个渲染形状**——
- *   - 润色档由 `buildCompareLines`（每处错误所在的那一句）算出来；
- *   - 精修档由 `buildRefineLines`（AI 重写过的那一句）算出来。
+ *   - 精修档由 `buildCompareLines`（每处错误所在的那一句）算出来；
+ *   - 大改档由 `buildRefineLines`（AI 重写过的那一句）算出来。
  * 两边的排版、颜色、点击行为必须一模一样，否则"对照视图"在两种档位下会长得不一样。
  *
  * 两行的分工（来自实际使用要求）：
  *   - **原文那一行**：被改过的那一段加**荧光底色 + 同色文字**——荧光只出现在原译文上；
  *   - **修改后的那一行**：只给文字上色，不加底色（那是"改成了什么"，不是被改内容）。
  * 点两行里任意一段都能在右下角看到那一处的说明；颜色沿用同一套
- * （红＝硬性错误、橙＝表达问题、绿＝表达优秀）。精修档一律橙色——它不分类。
+ * （红＝硬性错误、橙＝表达问题、绿＝表达优秀）。大改档一律橙色——它不分类。
  */
 
 import type { JSX } from 'react'
 import type { CompareLine, CompareSpan } from '../domain/compare'
 import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 import type { Selection } from './annotation-summary'
+import { withCircledBreaks } from './explain-lines'
 
 export function CompareLines({
   lines,
@@ -100,10 +101,14 @@ export function CompareLines({
             )}
           </p>
           {/*
-            精修档的逐句解释（用户要求"每一句都给出修改的解释"）。
+            大改档的逐句解释（用户要求"每一句都给出修改的解释"）。
             直接印在那一对的下面，而不是藏在点击里：一次性读完才知道他为什么这么改。
+
+            ⚠️ 解释**按分号断行、每行带一个圈号**（用户要求："大改模式下，解释部分也要按照
+            分号进行圈一圈二的序号标注分行"）。判据与小卡片那份是同一个
+            （见 explain-lines.tsx）——不然同一段说明在小卡片里是①②③、在这里又是一整段。
           */}
-          {line.note !== undefined && <p className="compare-note">{line.note}</p>}
+          {line.note !== undefined && <p className="compare-note">{withCircledBreaks(line.note)}</p>}
         </li>
       ))}
     </ol>

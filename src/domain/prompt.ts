@@ -54,12 +54,12 @@ const GENRE_HINT: Record<Genre, string> = {
 }
 
 const LEVEL_HINT: Record<PolishLevel, string> = {
-  polish: '润色档：只指出硬性错误（术语、漏译、多译、语法、标点）与严重表达不当。能读懂的表达不要为了"更好"去改，错误总数通常较少。',
+  polish: '精修档：只指出硬性错误（术语、漏译、多译、语法、标点）与严重表达不当。能读懂的表达不要为了"更好"去改，错误总数通常较少。',
   /**
-   * 精修档**不走这套提示词**：它由 `buildRefineSystemPrompt` 另起一套（整篇逐句重写 + 逐句解释 + 总评），
+   * 大改档**不走这套提示词**：它由 `buildRefineSystemPrompt` 另起一套（整篇逐句重写 + 逐句解释 + 总评），
    * 输出形状也完全不同。这一条留着只为"档位名"在本文件里仍然完整可读，判分链路上用不到它。
    */
-  refine: '精修档：不走这份提示词——精修由另一套提示词把整篇译文逐句重写，界面只给对照（见 refine.ts）。',
+  refine: '大改档：不走这份提示词——大改由另一套提示词把整篇译文逐句重写，界面只给对照（见 refine.ts）。',
 }
 
 /**
@@ -487,7 +487,7 @@ export function buildRetryPrompt(problems: string[]): string {
   ].join('\n')
 }
 
-/** 精修档的重试消息：与批改那份分开，因为要它补齐的是另一组字段。 */
+/** 大改档的重试消息：与批改那份分开，因为要它补齐的是另一组字段。 */
 export function buildRefineRetryPrompt(problems: string[]): string {
   return [
     `上一次返回的结果没有通过校验，问题如下：`,
@@ -503,12 +503,12 @@ export function buildRefineRetryPrompt(problems: string[]): string {
   ].join('\n')
 }
 
-/* ── 精修档：整篇逐句重写 ────────────────────────────────── */
+/* ── 大改档：整篇逐句重写 ────────────────────────────────── */
 
 /**
- * 精修档的系统提示。
+ * 大改档的系统提示。
  *
- * 与润色档那套**完全分开**：润色是"逐处挑错"，精修是"整篇重写 + 逐句解释 + 总评"，
+ * 与精修档那套**完全分开**：精修是"逐处挑错"，大改是"整篇重写 + 逐句解释 + 总评"，
  * 输出形状都不一样（见 domain/refine.ts）。合在一份提示词里会让两件事互相牵制。
  *
  * 三条来自用户的硬要求都写在里面：
@@ -543,7 +543,7 @@ export function buildRefineSystemPrompt(): string {
 - **不漏译、不增译**：原文有的信息都要有；不要添加原文没有的内容。
 - **语法必须正确**：冠词、时态、单复数、介词、主谓一致、句子结构。
 - **表达要地道**：不用逐字硬译，允许重组句式、调整语序；符合该文体的正式程度。
-- **不要改变原意**。读得懂但不够好的地方，也要改成更好的写法——这正是精修的意义。
+- **不要改变原意**。读得懂但不够好的地方，也要改成更好的写法——这正是大改的意义。
 
 ## 总体分数
 - score：0–100 的整数，按比赛评分标准给**整篇**打一个总分（不必与错误处数挂钩）。
@@ -566,7 +566,7 @@ export function buildRefineSystemPrompt(): string {
 `.trim()
 }
 
-/** 精修档的用户消息：与润色档同一套上下文，只是不再提"批注标在哪"。 */
+/** 大改档的用户消息：与精修档同一套上下文，只是不再提"批注标在哪"。 */
 export function buildRefineUserPrompt(request: CorrectionRequest, sectionNote?: string): string {
   return [
     `## 翻译方向`,

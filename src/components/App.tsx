@@ -904,7 +904,7 @@ export function App(): JSX.Element {
           answer: pageAnswer,
           correction: judging_.correction,
           validated: judging_.validated,
-          // 精修档那一次也照实存下来：练习记录要能回看"当时怎么改的、给了几分"
+          // 大改档那一次也照实存下来：练习记录要能回看"当时怎么改的、给了几分"
           ...(judging_.refine ? { refine: judging_.refine } : null),
           source: judging_.source,
           raw: judging_.raw,
@@ -977,7 +977,7 @@ export function App(): JSX.Element {
     }
 
     /*
-     * 精修档走**另一条链路**：产物是"整篇逐句重写 + 逐句解释 + AI 总评"，
+     * 大改档走**另一条链路**：产物是"整篇逐句重写 + 逐句解释 + AI 总评"，
      * 不是逐处批注（见 domain/refine.ts）。请求形状完全一样，只是打到 /api/refine 上，
      * 因此逐页批改、分段校验、失败分类这些下游代码一行都不用改。
      */
@@ -992,7 +992,7 @@ export function App(): JSX.Element {
       commit(
         target,
         {
-          // 精修不逐处批改：correction 是空壳，真正的内容在 refine 里
+          // 大改不逐处批改：correction 是空壳，真正的内容在 refine 里
           correction: { errors: [], highlights: [] },
           validated: { errors: [], highlights: [], rejections: [] },
           refine: refined.refine,
@@ -1170,7 +1170,7 @@ export function App(): JSX.Element {
           source: openRecord.source,
           raw: openRecord.raw,
           direction: openRecord.direction,
-          // 记录里若是精修档的那一次，回看时同样只能看对照
+          // 记录里若是大改档的那一次，回看时同样只能看对照
           ...(openRecord.refine ? { refine: openRecord.refine } : null),
         }
       : pageResult && pageState === 'graded'
@@ -1184,7 +1184,7 @@ export function App(): JSX.Element {
             source: pageResult.draft.source,
             raw: pageResult.draft.raw,
             direction: exercise.direction,
-            // 精修档：有它界面就走"只给对照"那条路径（见 AnswerPane 的 refine 分支）
+            // 大改档：有它界面就走"只给对照"那条路径（见 AnswerPane 的 refine 分支）
             ...(pageResult.draft.refine ? { refine: pageResult.draft.refine } : null),
           }
         : null
@@ -1195,7 +1195,7 @@ export function App(): JSX.Element {
    *
    * 位置来自 AI 给的 `sourceText`——解析时程序按文字把它定位到原文里，落在 `error.sourceAnchor` 上。
    * **AI 给不出就不标**：语法、表达一类问题常常指不出具体原文片段，那是正常情形，不是缺陷。
-   * 精修档没有逐处批注，因此这里自然是空的。
+   * 大改档没有逐处批注，因此这里自然是空的。
    */
   const sourceMark = useMemo(() => {
     if (selection?.kind !== 'error' || !shown) return null

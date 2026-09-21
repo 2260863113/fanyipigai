@@ -96,14 +96,14 @@ export async function requestJudgment(request: JudgeRequest): Promise<JudgeResul
   }
 }
 
-/* ── 精修档：整篇逐句重写 ────────────────────────────────── */
+/* ── 大改档：整篇逐句重写 ────────────────────────────────── */
 
 export type RefineResultPayload =
   | { ok: true; refine: RefineResult; attempts: number; raw: string }
   | { ok: false; kind: JudgeFailureKind | 'bad-request'; message: string; rawExcerpt?: string }
 
 /**
- * 精修档：把这一段译文交给模型逐句重写。
+ * 大改档：把这一段译文交给模型逐句重写。
  *
  * 请求形状与批改**完全一样**（同一份 JudgeRequest），只是打到另一条路径上——
  * 服务端据此换一套提示词与解析器（见 vite-plugin-judge-api.ts 的 /api/refine）。
@@ -149,7 +149,7 @@ export async function requestRefine(request: JudgeRequest): Promise<RefineResult
   return {
     ok: false,
     kind: failure.kind ?? 'bad-output',
-    message: failure.message ?? '精修未能完成',
+    message: failure.message ?? '大改未能完成',
     ...(failure.rawExcerpt !== undefined ? { rawExcerpt: failure.rawExcerpt } : null),
   }
 }

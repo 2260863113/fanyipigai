@@ -53,11 +53,11 @@ export interface JudgeDraft {
   /** AI 原样返回的完整文本 */
   raw: string
   /**
-   * 精修档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数。
+   * 大改档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数。
    *
-   * **有它就是精修档的那一次批改**（此时 `correction` 是空壳——精修不逐处批改、
+   * **有它就是大改档的那一次批改**（此时 `correction` 是空壳——大改不逐处批改、
    * 也就没有 errors），界面据此走另一条渲染路径（见 domain/refine.ts 的文件头）。
-   * 润色档与内置示例批改没有这个字段。
+   * 精修档与内置示例批改没有这个字段。
    */
   refine?: RefineResult
 }
@@ -247,8 +247,30 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
         drafts: { ...session.drafts, [action.row]: action.text },
       })
 
-    case 'sectionChanged':
-      return withSession(state, action.exerciseId, { ...session, sectionIndex: action.sectionIndex })
+    case 'sectionChanged': {
+      /*
+       * 翻页时把**离开的那一页**上"已放开重写"这个标记收回来——只要它一个字都没改。
+       *
+       * 用户要求："假如当前页面处于批改后的状态，那么切换其他页，再切换回来时，
+       * 也需要在批改界面，不能回到编辑界面。" 他说的情况是：按过「返回编辑」之后
+       * 没改字就翻走了，回来却停在作答框上——而那一页的批改结果**明明还在**
+       * （结果只在"真的改了一个字"时才作废，见 answerChanged），
+       * 因此回来时该看到的仍是那份批改。
+       *
+       * 于是「返回编辑」的语义收紧成一句好懂的话：**它只管你人还站在这一页上的时候**。
+       * 没改字就翻走 = 反悔了，这一页回到"已批改"；改过字再走，结果早已作废
+       * （`pages` 里没有它了），这一页就是一道真正待提交的题，标记留着。
+       */
+      const leaving = session.sectionIndex
+      const left = session.pages[leaving]
+      const leftDraft = session.drafts[leaving] ?? ''
+      const unchanged = left !== undefined && leftDraft === left.answer
+      return withSession(state, action.exerciseId, {
+        ...session,
+        sectionIndex: action.sectionIndex,
+        unlocked: unchanged ? session.unlocked.filter((index) => index !== leaving) : session.unlocked,
+      })
+    }
 
     case 'pageGraded':
       return withSession(state, action.exerciseId, {

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import type { AnnotatedLayout, ReorderGroup, TextSegment } from '../domain/layout'
 import type { ValidatedCorrection } from '../domain/validate'
 import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 import { summarize, type AnnotationSummary, type Selection } from './annotation-summary'
 import { FixLayer, type FixItem } from './FixLayer'
+import { withCircledBreaks } from './explain-lines'
 
 export type { Selection } from './annotation-summary'
 
@@ -297,31 +299,8 @@ interface Bubble {
   left: number
   width: number
   arrowLeft: number
-}
-
-/**
- * 小卡片里的「为什么」按**分号**断行，每行前面带一个圈号（①②③…）。
- *
- * AI 写的说明常是"第一人称代词 I 必须大写；主语 I 搭配的 be 动词是 am，不是 is"这种
- * 两三个分句挤在一句里，卡片又窄，一处不看头就找不到第二处——所以在分号处断开，
- * 并给每一行编上号，一眼能数出有几条。分号本身留着：它是句子的标点。
- */
-const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩']
-
-function withSemicolonBreaks(text: string): JSX.Element[] {
-  const parts = text.split('；').filter((part) => part.trim().length > 0)
-  if (parts.length <= 1) return [<span key="only">{text}</span>]
-  return parts.flatMap((part, index) => {
-    const marker = CIRCLED[index] ?? `${index + 1}.`
-    const text = index === parts.length - 1 ? part : `${part}；`
-    const line = (
-      <span key={`line-${index}`} className="ann-bubble-line">
-        <span className="ann-bubble-num">{marker}</span>
-        {text}
-      </span>
-    )
-    return index === parts.length - 1 ? [line] : [line, <br key={`br-${index}`} />]
-  })
+  /** 卡片翻到了这一行**上面**（下面放不下时），箭头跟着移到卡片下沿 */
+  flipped: boolean
 }
 
 /**
@@ -422,45 +401,87 @@ export function AnnotationText({
       return
     }
 
-    const base = container.getBoundingClientRect()
+    /*
+     * ⚠️ 坐标一律用**视口**坐标（`position: fixed`），不是"相对译文栏"的坐标。
+     *
+     * 原因就是用户报的那一条："小卡片应该位于最上层，不能被下面的区域栏目所挡住"。
+     * 小卡片原先画在译文栏里面（`position: absolute`），而译文栏的正文盒子是
+     * `overflow-y: auto` 的滚动容器——**滚动容器会把超出它的内容剪掉**，
+     * 于是一处靠近栏底部的批注，气泡画到一半就被切口截断，看着就像被下面那两栏压住了。
+     * 剪裁不是 z-index 能解决的，只能把卡片挪出那个容器：现在它挂到 `document.body` 上
+     * （见下面 createPortal），用视口坐标定位，因此栏怎么滚、怎么剪都与它无关。
+     */
     const rect = target.getBoundingClientRect()
     // 行高取计算值：气泡要落在**这一行下面**，而不是压在字上
     const lineHeight = Number.parseFloat(getComputedStyle(lines).lineHeight) || rect.height || 40
+    const lineTop = rect.top + rect.height / 2 - lineHeight / 2
     const lineBottom = rect.top + rect.height / 2 + lineHeight / 2
-    const width = Math.max(180, Math.min(380, container.clientWidth - 8))
-    const center = rect.left - base.left + rect.width / 2
-    const left = Math.max(4, Math.min(center - width / 2, container.clientWidth - width - 4))
+    const viewport = window.innerWidth || 1024
+    const viewportHeight = window.innerHeight || 768
+    const width = Math.max(180, Math.min(380, Math.min(container.clientWidth, viewport) - 8))
+    const center = rect.left + rect.width / 2
+    const left = Math.max(8, Math.min(center - width / 2, viewport - width - 8))
+
+    /*
+     * 高度只能**估**：这一次量的时候卡片还没画出来。用上一帧量的高度，没有就按四行估。
+     * 估错的余地由下面的夹取吸收（多出来的部分顶在视口边界上，不会跑到屏幕外）。
+     */
+    const height = bubbleRef.current?.offsetHeight || 120
+    /*
+     * 下面放不下就**翻到这一行上面**。
+     *
+     * 卡片现在是固定定位（见上），因此不再有"滚动容器替它留位置"这回事：
+     * 一处靠近窗口底部的批注，卡片照旧往下画就会整块落到视口外面——
+     * 用户看到的仍然是"卡片没出来"。真实浏览器验收里量到过：卡片中心落在视口之外。
+     * 翻上去之后箭头也跟着移到卡片下沿（见样式表里的 .ann-bubble-above）。
+     */
+    const below = lineBottom + 6
+    const above = lineTop - 6 - height
+    const flipped = below + height > viewportHeight - 8 && above >= 8
     setBubble({
       summary,
-      top: lineBottom - base.top + 6,
+      top: flipped ? Math.max(8, above) : Math.min(below, Math.max(8, viewportHeight - height - 8)),
       left,
       width,
       arrowLeft: Math.max(14, Math.min(center - left, width - 14)),
+      flipped,
     })
   }, [answer, selection, validated])
 
   useLayoutEffect(() => {
     measureBubble()
     window.addEventListener('resize', measureBubble)
-    return () => window.removeEventListener('resize', measureBubble)
+    /*
+     * 滚动时重新量一次：卡片是固定定位的，不跟着滚就会"留在原地、与那一处脱开"。
+     * 用捕获阶段挂在 window 上，所有滚动容器（译文栏正文、整页）都会冒到这里。
+     */
+    window.addEventListener('scroll', measureBubble, true)
+    return () => {
+      window.removeEventListener('resize', measureBubble)
+      window.removeEventListener('scroll', measureBubble, true)
+    }
   }, [measureBubble, layout])
 
   /*
-   * 点气泡卡片之外的地方，就把气泡收起来。
+   * 点卡片（小卡片与右下角那张大卡片）**之外**的地方，才把这一处收起来。
    *
    * 三个例外：
    *   - 点到**勾画**本身（含调序弧线）：交给它自己的点击处理去切换选中，这里不插手；
    *   - 点到**上方补写的字**（`.fix-text`）：它同样代表这一处，点它也该把小卡片打开
    *     （它自己的点击处理已经选了，这里再关一次就等于"点了没反应"——实际踩过）；
-   *   - 点到气泡的范围内：气泡不接管鼠标事件（pointer-events: none），
-   *     所以那一击其实落在它下面的文字上，但用户的意思显然是"我要看这个气泡"。
-   *     因此按坐标判断一次，落在气泡里就不关。
+   *   - 点到**任意一张卡片**里：一律不关。
    *
-   * ⚠️ 还有一处**不属于"外面"**：右下角详情栏里的按钮（「收藏」、关闭）。
-   * 它们说的是"当前选中的这一处"，点了就把选中清掉的话，小卡片会跟着一起消失——
-   * 用户报的正是这个（"点击收藏，卡片不消失"）。收藏按钮自己就在卡片里，
-   * 因此点它绝不能顺手把卡片关掉。判定放在最前面，比坐标判断更可靠：
-   * 收藏之后卡片会重排（按钮文案变「已收藏」），坐标可能已经落在卡片外了。
+   * ⚠️ 最后那条是用户点名要求的："点击任意卡片都不会关掉这两个卡片，
+   * 当且仅当点击这两个卡片之外的地方才消失。" 两张卡片因此都带 `data-card` 标记
+   * （小卡片 `data-card="bubble"`、右下角那张 `data-card="detail"`），
+   * 这里只认这个标记——**不再逐个类名去数**：早先只放行了 `.detail-actions` 与
+   * `.detail-head`，于是点到大卡片自己的正文（"说明"那几行）就把它关掉了，
+   * 用户看到的就是"点卡片也会消失"。
+   *
+   * 另一条必要的配套改动在样式表里：小卡片整张改成 `pointer-events: auto`。
+   * 它原先是 `none`（免得挡住底下的勾画），那一击会**穿过卡片落到下面的元素上**，
+   * 于是"点卡片"在浏览器看来就是"点了外面"。坐标兜底仍然留着——
+   * jsdom 里没有命中测试，探针只能靠坐标走这条路。
    */
   useEffect(() => {
     if (!selection) return
@@ -471,9 +492,7 @@ export function AnnotationText({
         (target.closest('[data-mark-id]') ||
           target.closest('.arc-group') ||
           target.closest('.fix-text') ||
-          target.closest('.ann-bubble') ||
-          target.closest('.detail-actions') ||
-          target.closest('.detail-head'))
+          target.closest('[data-card]'))
       ) {
         return
       }
@@ -525,53 +544,62 @@ export function AnnotationText({
         />
       )}
 
-      {bubble && (
-        <div
-          className="ann-bubble"
-          ref={bubbleRef}
-          style={{ top: bubble.top, left: bubble.left, width: bubble.width }}
-          role="note"
-        >
-          <span className="ann-bubble-arrow" style={{ left: bubble.arrowLeft }} />
-          <span className="ann-bubble-head">
-            <span className="ann-bubble-kind" style={{ color: MARK_COLOR_VALUE[bubble.summary.color] }}>
-              {bubble.summary.typeLabel}
+      {/*
+        小卡片**挂到 document.body 上**、用固定定位（见 measureBubble 里的说明）：
+        只有这样它才不会被译文栏那个滚动容器剪掉，也才压得住下面那两栏。
+        `data-card` 是"点它不算点外面"的标记（见 onDocumentClick）。
+      */}
+      {bubble &&
+        createPortal(
+          <div
+            className={bubble.flipped ? 'ann-bubble ann-bubble-above' : 'ann-bubble'}
+            ref={bubbleRef}
+            data-card="bubble"
+            style={{ top: bubble.top, left: bubble.left, width: bubble.width }}
+            role="note"
+          >
+            <span className="ann-bubble-arrow" style={{ left: bubble.arrowLeft }} />
+            <span className="ann-bubble-head">
+              <span className="ann-bubble-kind" style={{ color: MARK_COLOR_VALUE[bubble.summary.color] }}>
+                {bubble.summary.typeLabel}
+              </span>
+              <span className="ann-bubble-cat">{bubble.summary.categoryLabel}</span>
+              {/* 序号用这一处自己的颜色，与译文上的颜色对得上 */}
+              <span className="ann-bubble-order" style={{ color: MARK_COLOR_VALUE[bubble.summary.color] }}>
+                （{bubble.summary.order}）
+              </span>
             </span>
-            <span className="ann-bubble-cat">{bubble.summary.categoryLabel}</span>
-            {/* 序号用这一处自己的颜色，与译文上的颜色对得上 */}
-            <span className="ann-bubble-order" style={{ color: MARK_COLOR_VALUE[bubble.summary.color] }}>
-              （{bubble.summary.order}）
+            {/*
+              这里**不写**"某某 → 某某"：改前改后本来就画在译文上（荧光带 + 上方小字），
+              卡片再抄一遍反而占地方。卡片只说"这是什么问题、为什么"，完整说明在右下角。
+              说明按分号断行、每行带圈号（与"大改"档的逐句解释同一份判据，见 explain-lines.tsx）。
+            */}
+            <span className="ann-bubble-why">{withCircledBreaks(bubble.summary.why)}</span>
+            {/*
+              小卡片自己带一颗「收藏」（用户要求）。
+              整张卡片都收鼠标事件（样式表里 `pointer-events: auto`）、并且带 `data-card`，
+              因此点卡片里任何地方都不会把它或右下角那张关掉——用户要求"点外面才消失"。
+            */}
+            <span className="ann-bubble-foot">
+              {onToggleFavorite ? (
+                <button
+                  type="button"
+                  className={favorited ? 'btn btn-primary btn-tiny' : 'btn btn-tiny'}
+                  onClick={onToggleFavorite}
+                  title={
+                    favorited
+                      ? '这一处已经在收藏里了；再点一次就取消收藏'
+                      : '把这一处连同改前/改后/为什么存进收藏，以后在顶栏的「收藏」里看'
+                  }
+                >
+                  {favorited ? '已收藏' : '收藏'}
+                </button>
+              ) : null}
+              <span className="ann-bubble-more">完整说明见右下角</span>
             </span>
-          </span>
-          {/*
-            这里**不写**"某某 → 某某"：改前改后本来就画在译文上（荧光带 + 上方小字），
-            卡片再抄一遍反而占地方。卡片只说"这是什么问题、为什么"，完整说明在右下角。
-          */}
-          <span className="ann-bubble-why">{withSemicolonBreaks(bubble.summary.why)}</span>
-          {/*
-            小卡片自己带一颗「收藏」（用户要求）。
-            与右下角那颗是同一个开关，因此点这里同样**不会**把卡片关掉——
-            点外面才关（见上面 onDocumentClick 里对 .ann-bubble / .detail-actions 的例外）。
-          */}
-          <span className="ann-bubble-foot">
-            {onToggleFavorite ? (
-              <button
-                type="button"
-                className={favorited ? 'btn btn-primary btn-tiny' : 'btn btn-tiny'}
-                onClick={onToggleFavorite}
-                title={
-                  favorited
-                    ? '这一处已经在收藏里了；再点一次就取消收藏'
-                    : '把这一处连同改前/改后/为什么存进收藏，以后在顶栏的「收藏」里看'
-                }
-              >
-                {favorited ? '已收藏' : '收藏'}
-              </button>
-            ) : null}
-            <span className="ann-bubble-more">完整说明见右下角</span>
-          </span>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

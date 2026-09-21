@@ -47,7 +47,7 @@ export interface RecordView {
   raw: string
   createdAt: Date
   /**
-   * 精修档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数（见 domain/refine.ts）。
+   * 大改档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数（见 domain/refine.ts）。
    * 有它的记录回看时只能看对照视图，分数显示 AI 总评、没有逐处批注。
    */
   refine?: RefineResult
@@ -178,8 +178,8 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                       <span className="record-top">
                         <span className="record-attempt">
                           {KIND_LABEL[record.mode]} · 第 {record.attempt} 次 · 第 {record.sectionIndex + 1} 页
-                          {/* 精修档的分数是 AI 总评，与润色档的程序算分不是一回事，列表上就要标出来源 */}
-                          {record.refine && <span className="record-refine">精修 · AI 评分</span>}
+                          {/* 大改档的分数是 AI 总评，与精修档的程序算分不是一回事，列表上就要标出来源 */}
+                          {record.refine && <span className="record-refine">大改 · AI 评分</span>}
                         </span>
                         <span className="record-score">
                           {(record.refine ? record.refine.score : scoreCorrection(record.correction, record.answer, record.direction).total)} 分
@@ -187,7 +187,7 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                       </span>
                       <span className="record-meta">
                         {DIRECTION_LABEL[record.direction]} · {record.topic} ·{' '}
-                        {record.level === 'polish' ? '润色' : '精修'} · 错误{' '}
+                        {record.level === 'polish' ? '精修' : '大改'} · 错误{' '}
                         {record.validated.errors.length} 处
                         {record.source === 'fixture' && ' · 示例'}
                       </span>
@@ -292,7 +292,7 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
               </header>
               <div className="pane-body">
                 {openRecord.refine ? (
-                  /* 精修档：回看时同样只有一种看法——逐句「原译 / 改后」+ 每句的解释 */
+                  /* 大改档：回看时同样只有一种看法——逐句「原译 / 改后」+ 每句的解释 */
                   <RefineView refine={openRecord.refine} />
                 ) : settings.answerView === 'compare' ? (
                   /* 对照视图：与练习页同一套排版（一句原译、一句改后，各占一行） */

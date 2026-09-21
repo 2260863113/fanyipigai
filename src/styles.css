@@ -1617,10 +1617,22 @@ button {
   border-radius: 3px;
 }
 
-/* 点击勾画后，在**那一行下面**浮出的小气泡。只做简要说明，完整说明在右下栏。 */
+/*
+ * 点击勾画后，在**那一行下面**浮出的小气泡。只做简要说明，完整说明在右下栏。
+ *
+ * ⚠️ **它挂在 document.body 上、用固定定位**（见 AnnotationText 的 createPortal）。
+ * 从前它画在译文栏里面，而译文栏的正文盒子是 `overflow-y: auto` 的滚动容器——
+ * 滚动容器会**剪掉**超出它的内容，于是一处靠近栏底的批注，气泡画到一半就被切口截断，
+ * 看着就像"被下面那两栏挡住了"（用户报的正是这个）。剪裁不是 z-index 能解决的，
+ * 只能把卡片挪出那个容器。
+ */
 .ann-bubble {
-  position: absolute;
-  z-index: 6;
+  position: fixed;
+  /*
+   * 层级：四栏（0）< 填补层（5）< **小卡片（20）** < 顶栏（30）< 通知条（50）< 弹窗（100）。
+   * 小卡片压得住四栏里的任何东西，但顶栏与弹窗仍然在它之上——它只是个提示，不该盖住站级控件。
+   */
+  z-index: 20;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1633,16 +1645,14 @@ button {
   font-size: 12px;
   line-height: 1.55;
   /*
-   * 不接管鼠标事件：气泡可能盖住下一行的字，
-   * 但用户仍然应该能直接点到那行字上的勾画。
+   * 整张卡片**收**鼠标事件（用户要求："点击任意卡片都不会关掉这两个卡片"）。
    *
-   * ⚠️ 这条规则正是"小卡片里的「收藏」点不动"的原因：`pointer-events: none`
-   * 会让**整棵子树**（包括里面的按钮）都收不到点击——那一下会穿到气泡底下的文字上，
-   * 于是收藏按钮永远点不到（用户报过两次）。所以下面 `.ann-bubble-foot` 单独把事件收回来。
-   * 光靠浏览器探针发现不了这个：jsdom 不做命中测试，`pointer-events` 在它那里形同不存在，
-   * 脚本里点那颗按钮照样是"成功的"。守着它的只能是样式表断言（见 scripts/smoke.ts）。
+   * ⚠️ 早先这里是 `pointer-events: none`（免得卡片挡住底下的勾画），
+   * 而那一击会**穿过卡片落到下面的元素上**——在"点外面才关"的判定看来，
+   * 点卡片与点外面是同一件事，于是"点卡片它也会消失"。现在整张卡收回来，
+   * 代价是卡片正下方那几个字上的勾画点不到了（卡片不高，用户明确选了这个取舍）。
    */
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .ann-bubble-arrow {
@@ -1654,6 +1664,17 @@ button {
   border-left: 1px solid var(--line-strong);
   border-top: 1px solid var(--line-strong);
   transform: rotate(45deg);
+}
+
+/*
+ * 卡片翻到那一行**上面**时（下面放不下，见 AnnotationText 的 measureBubble）：
+ * 箭头跟着挪到卡片下沿、并且转过头朝下。
+ * 只改箭头，卡片本体不用动——它本来就只是一块圆角纸片。
+ */
+.ann-bubble-above .ann-bubble-arrow {
+  top: auto;
+  bottom: -5px;
+  transform: rotate(225deg);
 }
 
 .ann-bubble-head {
@@ -1685,11 +1706,11 @@ button {
 }
 
 /* 说明按分号断成几行，每行开头一个圈号（与这一处的颜色一致） */
-.ann-bubble-line {
+.explain-line {
   display: inline;
 }
 
-.ann-bubble-num {
+.explain-num {
   color: inherit;
   margin-right: 3px;
 }
@@ -1697,16 +1718,15 @@ button {
 /*
  * 卡片脚下那一行（「收藏」按钮 + 右侧小字）。
  *
- * **必须把事件收回来**：整张卡片是 `pointer-events: none`（见上），
- * 不收回来的话按钮点不动——那一击会穿到卡片底下的文字上，表现是"点收藏没反应"。
- * 只收回这一行而不是整张卡片：卡片正文仍然不该挡住底下的勾画。
+ * 整张卡片现在都收鼠标事件（见上面 .ann-bubble），因此这一行**不再需要**单独把事件收回来。
+ * 早先整张卡是 `pointer-events: none`，只有这一行写回 `auto`，否则"点收藏没反应"——
+ * 那段历史留在注释里，是因为用户为它报过两次（见 README 的踩坑记录）。
  */
 .ann-bubble-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  pointer-events: auto;
 }
 
 .ann-bubble-more {
@@ -1838,10 +1858,16 @@ button {
 
 /* ── AI 完整返回内容（屏幕中央的弹窗）─────────────── */
 
+/*
+ * 弹窗在最上层：**必须压过一切**（含右下角的批改完成通知与小卡片）。
+ *
+ * 层级口径统一在这里写清楚（全站只有这几档，新加浮层请照这个表挑一个值）：
+ *   四栏内容 0 ｜ 填补层 5 ｜ 小卡片 20 ｜ 顶栏 30 ｜ 批改完成通知 50 ｜ 弹窗 100
+ */
 .raw-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 100;
   background: rgba(20, 24, 32, 0.42);
   display: flex;
   align-items: center;

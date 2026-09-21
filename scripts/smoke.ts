@@ -815,7 +815,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   }
 
   /*
-   * 精修档：**整篇逐句重写 + 逐句解释 + AI 总评**（见 domain/refine.ts）。
+   * 大改档：**整篇逐句重写 + 逐句解释 + AI 总评**（见 domain/refine.ts）。
    *
    * 用户对这一档的要求与原话："让 ai 将整个翻译重新写，修改单位为每句，
    * 让 AI 说明他修改的某一句对应的是哪一句……不统计，不逐处批改，
@@ -825,9 +825,9 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
    *   1. 解析：分数、评语、逐句三个字段缺一不可，格式不对就整份重试；
    *   2. **定位**：原句由程序按文字找位置（AI 不数序号），找不到就报错重试；
    *   3. 对照行：一句原译、一句改后、下面跟着这一句的解释；
-   *   4. **颜色一律橙色**：精修不分类，没有依据说哪一处算硬性错误。
+   *   4. **颜色一律橙色**：大改不分类，没有依据说哪一处算硬性错误。
    */
-  console.log('\n[精修档] 整篇逐句重写：解析、定位、对照行')
+  console.log('\n[大改档] 整篇逐句重写：解析、定位、对照行')
   try {
     const { parseRefine, buildRefineLines, changedSentenceCount } = await import('../src/domain/refine')
 
@@ -844,7 +844,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       }),
       answer,
     )
-    check(ok.ok, '一份合法的精修返回能解析出来', ok.ok ? '' : ok.problems.join('；'))
+    check(ok.ok, '一份合法的大改返回能解析出来', ok.ok ? '' : ok.problems.join('；'))
     if (ok.ok) {
       check(ok.refine.score === 88, `分数照收（${ok.refine.score}）`)
       check(ok.refine.comment.length > 0, '评语照收')
@@ -869,11 +869,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       check(lines[0]?.note === 'I 要大写；主语 I 用 am。', '这一句的解释跟着这一对一起给出来')
       check(
         lines[0]?.corrected.some((part) => part.color === 'orange') === true,
-        '改动过的字带橙色（精修不分类，一律按"表达问题"显示）',
+        '改动过的字带橙色（大改不分类，一律按"表达问题"显示）',
       )
       check(
         lines.every((line) => line.corrected.every((part) => part.color !== 'red')),
-        '精修里不会出现红色（那一档没有"硬性错误"这回事）',
+        '大改里不会出现红色（那一档没有"硬性错误"这回事）',
       )
     }
 
@@ -920,7 +920,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
 
     /*
-     * **写得好的句子标绿**（用户要求：精修也让 AI 分析表达很好的句子）。
+     * **写得好的句子标绿**（用户要求：大改也让 AI 分析表达很好的句子）。
      * 判据取"整句标绿 + 下面那一行说明说的是它好在哪"。
      */
     const praised = parseRefine(
@@ -978,7 +978,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     )
     check(!emptyExplanation.ok, '少一句解释也算不合格（用户要求每一句都给解释）')
   } catch (error) {
-    check(false, '精修档的解析与对照可以验证', error instanceof Error ? error.message : String(error))
+    check(false, '大改档的解析与对照可以验证', error instanceof Error ? error.message : String(error))
   }
 
 
@@ -1596,6 +1596,27 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       multi.revisit.judgeCalls === 0,
       `翻回已批过的页没有重新提交（多调用了 ${multi.revisit.judgeCalls} 次）`,
     )
+    /*
+     * 用户要求："假如当前页面处于批改后的状态，那么切换其他页，再切换回来时，
+     * 也需要在批改界面，不能回到编辑界面。"
+     *
+     * 两个方向都量：按过「返回编辑」但**一个字没改**就翻走 → 回来仍是批改界面；
+     * 改过字再翻走 → 回来是作答框（那时结果已经作废，它是一道待提交的题）。
+     */
+    check(
+      multi.unlockRoundTrip?.unlockedShown === true,
+      '按「返回编辑」之后这一页确实变成了作答框（前置条件成立）',
+    )
+    check(
+      multi.unlockRoundTrip?.gradingBack === true,
+      `没改字就翻走再翻回来，看到的是批改界面而不是作答框（实际状态：${multi.unlockRoundTrip?.stateAfterBack}）`,
+      JSON.stringify(multi.unlockRoundTrip),
+    )
+    check(
+      multi.editedRoundTrip?.hasInput === true && multi.editedRoundTrip?.hasResult === false,
+      '改过字再翻走又翻回来，仍是作答框（那一页的结果已经作废了）',
+      JSON.stringify(multi.editedRoundTrip),
+    )
     multi.restore()
 
     // 再用一道有批注的句子题单独验批注交互：
@@ -1629,9 +1650,36 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         '再点另一处，右下角内容跟着换成那一处（不是全量清单）',
       )
       check(it.secondBubble !== it.firstBubble, '再点另一处，气泡内容也跟着换')
+      /*
+       * 用户要求："点击任意卡片都不会关掉这两个卡片，当且仅当点击这两个卡片之外的地方才消失。"
+       * 点**卡片正文**（不是按钮）也必须在——早先只放行了卡片里的标题与按钮，点正文就算点外面。
+       */
+      check(
+        it.bubbleAfterInsideBubble.length > 0 && it.notesAfterInsideBubble.includes('说明'),
+        '点小卡片的正文，小卡片与右下角那张卡片都还在（不算点外面）',
+        JSON.stringify(it.bubbleAfterInsideBubble.slice(0, 24)),
+      )
+      check(
+        it.bubbleAfterInsideDetail.length > 0 && it.notesAfterInsideDetail.includes('说明'),
+        '点右下角那张卡片的正文，两张卡片也都还在',
+        JSON.stringify({ 气泡: it.bubbleAfterInsideDetail.slice(0, 16) }),
+      )
+      check(
+        it.bubbleOutsideRoot,
+        '小卡片挂在 document.body 上（不在译文栏那棵子树里，因此不会被滚动容器剪掉、也不会被下面两栏压住）',
+      )
+      /*
+       * 卡片必须**落在视口之内**：它是固定定位的，算错了就会整块画到屏幕外面
+       * （真实浏览器验收里量到过：卡片中心落在视口之外，用户看到的就是"卡片没出来"）。
+       * 放不下时它会翻到那一行上面——`bubbleFlipped` 记录走的是哪条路。
+       */
+      check(
+        it.bubbleTop >= 0 && it.bubbleTop <= it.bubbleViewportHeight - 8,
+        `小卡片的 top 落在视口之内（top ${it.bubbleTop}，视口高 ${it.bubbleViewportHeight}）`,
+      )
       check(
         it.bubbleAfterOutsideClick === '' && !it.notesAfterOutsideClick.includes('第 1 处'),
-        '点勾画之外的地方，气泡消失、右下角回到提示',
+        '点两张卡片**之外**的地方，气泡消失、右下角回到提示',
       )
       /*
        * 原文栏里"这一处对应的地方"（用户要求）：点译文上的某一处 → 原文里对应那一段标同色；
@@ -1691,9 +1739,9 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         `改前 ${stored?.beforeStart}–${stored?.beforeEnd} ／ 改后 ${stored?.afterStart}–${stored?.afterEnd}`,
       )
       check(
-        /ann-bubble-num[^>]*>[①②③]/.test(it.firstBubbleHtml),
+        /explain-num[^>]*>[①②③]/.test(it.firstBubbleHtml),
         '小卡片里说明的每一行开头带圈号（①②…）',
-        (it.firstBubbleHtml.match(/<span class="ann-bubble-num"[^>]*>[^<]*</) ?? ['（没找到圈号）'])[0],
+        (it.firstBubbleHtml.match(/<span class="explain-num"[^>]*>[^<]*</) ?? ['（没找到圈号）'])[0],
       )
     }
 
@@ -2104,21 +2152,21 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     panelProbe.restore()
 
     /*
-     * 精修档在**真界面**里走一遍：整篇逐句重写 + 逐句解释 + AI 总评，而且只给对照。
+     * 大改档在**真界面**里走一遍：整篇逐句重写 + 逐句解释 + AI 总评，而且只给对照。
      *
      * 为什么必须走界面：这一档有一串"只有跑起来才看得见"的约定——
      * 提交打的是 /api/refine 而不是 /api/judge、视图开关**保留但禁用**并注明原因、
-     * 分数栏写的是"AI 总评"并声明与润色档不可比、右下角说清"不逐处批改"。
+     * 分数栏写的是"AI 总评"并声明与精修档不可比、右下角说清"不逐处批改"。
      */
-    console.log('\n[界面渲染 · 精修档] 逐句重写 + AI 总评 + 只给对照')
+    console.log('\n[界面渲染 · 大改档] 逐句重写 + AI 总评 + 只给对照')
     const refineProbe = await renderApp({ exerciseId: 'sentence-001', checkRefine: true })
     const refine = refineProbe.refine
-    check(Boolean(refine), '精修档探针跑通了')
+    check(Boolean(refine), '大改档探针跑通了')
     if (refine) {
       check(refine.reUnlock && refine.editorBack, '先按「返回编辑」放开这一页（作答还在），再换档位')
-      check(refine.levelPicked && refine.activeLevel === '精修', `档位切到精修（实际 ${refine.activeLevel}）`)
-      check(refine.refineCalls === 1, `精修那一次提交打到 /api/refine 一次（实际 ${refine.refineCalls} 次）`)
-      check(refine.refineRequestBody.includes('answerSections'), '精修的请求形状与批改同源（照旧发分段）')
+      check(refine.levelPicked && refine.activeLevel === '大改', `档位切到大改（实际 ${refine.activeLevel}）`)
+      check(refine.refineCalls === 1, `大改那一次提交打到 /api/refine 一次（实际 ${refine.refineCalls} 次）`)
+      check(refine.refineRequestBody.includes('answerSections'), '大改的请求形状与批改同源（照旧发分段）')
       check(refine.hasCompareList && !refine.hasAnnotatedLines, '只给对照：对照列表在、勾画不在')
       check(refine.lineCount >= 1, `一句原译、一句改后（${refine.lineCount} 对）`)
       check(
@@ -2136,12 +2184,26 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       )
       check(refine.scoreChip.includes('AI 总评'), `分数栏挂着「AI 总评」的来源标记（${refine.scoreChip.join('／')}）`)
       check(
-        refine.notesPaneText.includes('精修说明') && refine.notesPaneText.includes('没有"逐处批注"可点'),
-        '右下角说清"精修不逐处批改"',
+        refine.notesPaneText.includes('大改说明') && refine.notesPaneText.includes('没有"逐处批注"可点'),
+        '右下角说清"大改不逐处批改"',
       )
       check(
         !refine.paneHtml.includes('mk-replace') && !refine.paneHtml.includes('fix-text'),
         '译文栏里一处勾画、一处补写都没有（这正是"不逐处批改"）',
+      )
+      /*
+       * 大改的解释也要**按分号断行、每行带圈号**（用户要求）。
+       * 桩里那句解释是"句首字母要大写；其余保持不变。"——一个分号，因此两行、一个换行，
+       * 圈号从 ① 开始。判据与小卡片那份同一个（explain-lines.tsx）。
+       */
+      check(
+        refine.noteLineCount >= 2 && refine.noteBreaks >= 1 && refine.noteCircled[0] === '①',
+        `大改的逐句解释按分号断成带圈号的行（${refine.noteLineCount} 行，圈号 ${refine.noteCircled.join('')}）`,
+        JSON.stringify({ 行数: refine.noteLineCount, 换行: refine.noteBreaks, 圈号: refine.noteCircled }),
+      )
+      check(
+        refine.noteCircled[1] === '②',
+        `第二行也带圈号（实际 ${JSON.stringify(refine.noteCircled[1] ?? '(没有)')}）`,
       )
     }
     refineProbe.restore()
@@ -2522,23 +2584,40 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
 
     /*
-     * 小卡片里那颗「收藏」必须真的点得动（用户报过两次"点不了"）。
+     * 小卡片的**层级与事件**（这一轮的两条用户要求，都是样式问题，只能在这里验）。
      *
-     * 根因不在 JS：整张卡片是 `pointer-events: none`（免得挡住底下的勾画），
-     * 而它是**继承给整棵子树**的——里面的按钮一起收不到点击，那一下会穿到卡片底下的文字上。
-     * 所以卡片脚下那一行必须把事件收回来。
+     * ① "小卡片应该位于最上层，不能被下面的区域栏目所挡住"：
+     *    它从前画在译文栏里（absolute），而译文栏的正文盒子是 `overflow-y: auto`——
+     *    滚动容器会**剪掉**超出它的内容，所以靠近栏底的气泡会被切口截断。
+     *    现在它挂到 body 上、用固定定位，并且 z-index 高过四栏。
+     * ② "点击任意卡片都不会关掉这两个卡片"：卡片必须**收得到**点击，
+     *    否则那一击会穿过它落到下面的元素上，判定看来就是"点了外面"。
+     */
+    const bubbleRule = /\.ann-bubble\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+    check(/position:\s*fixed/.test(bubbleRule), '小卡片是固定定位（挂在 body 上，不被译文栏的滚动容器剪掉）', bubbleRule.trim())
+    check(/pointer-events:\s*auto/.test(bubbleRule), '小卡片整张收鼠标事件（点它才不会算成"点外面"）', bubbleRule.trim())
+    {
+      const zIndex = Number(/z-index:\s*(\d+)/.exec(bubbleRule)?.[1] ?? '0')
+      check(zIndex > 5, `小卡片的层级高过四栏与填补层（z-index ${zIndex}）`, bubbleRule.trim())
+      const modalRule = /\.raw-modal-backdrop\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
+      const modalZ = Number(/z-index:\s*(\d+)/.exec(modalRule)?.[1] ?? '0')
+      check(
+        modalZ > zIndex,
+        `弹窗仍然压在小卡片之上（弹窗 ${modalZ} > 卡片 ${zIndex}）`,
+        modalRule.trim(),
+      )
+    }
+    /*
+     * 卡片里那颗「收藏」必须真的点得动（用户报过两次"点不了"）。
      *
      * ⚠️ 这个 bug 用浏览器探针抓不到：jsdom 不做命中测试，`pointer-events` 在它那里
      * 形同不存在，脚本点那颗按钮照样"成功"（verify-per-page.mjs 就一直是绿的）。
-     * 能守住它的只有这条样式表断言。
+     * 能守住它的只有这条样式表断言——现在整张卡片都是 auto，因此按钮自然也在里面。
      */
-    const bubbleRule = /\.ann-bubble\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
-    const bubbleFootRule = /\.ann-bubble-foot\s*\{([^}]*)\}/s.exec(css)?.[1] ?? ''
-    check(/pointer-events:\s*none/.test(bubbleRule), '气泡本身不接管鼠标事件（不挡住底下的勾画）', bubbleRule.trim())
     check(
-      /pointer-events:\s*auto/.test(bubbleFootRule),
-      '气泡脚下那一行把事件收回来（否则卡片里的「收藏」永远点不动）',
-      bubbleFootRule.trim() || '样式表里找不到 .ann-bubble-foot',
+      /pointer-events:\s*auto/.test(bubbleRule),
+      '卡片里的「收藏」点得动（整张卡片收事件，包括脚下那一行）',
+      bubbleRule.trim(),
     )
 
     /*
@@ -2918,6 +2997,39 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     sessions = sessionReducer(sessions, { type: 'pageLocked', exerciseId: 'a', sectionIndex: 3 })
     check(!at('a').unlocked.includes(3), '提交成功之后这一页收回只读（回到"已批改"那一档）')
     check(pageResultOf(at('a'), 3) !== undefined, '收回只读之后结果还在')
+
+    /*
+     * 用户要求："假如当前页面处于批改后的状态，那么切换其他页，再切换回来时，
+     * 也需要在批改界面，不能回到编辑界面。"
+     *
+     * 他说的情况是：按过「返回编辑」、**一个字都没改**就翻走了，回来却停在作答框上——
+     * 而那一页的批改结果明明还在（结果只在"真的改了一个字"时才作废）。
+     * 于是「返回编辑」的语义收紧成一句好懂的话：**它只管你人还站在这一页上的时候**。
+     */
+    sessions = sessionReducer(sessions, { type: 'pageUnlocked', exerciseId: 'a' })
+    check(at('a').unlocked.includes(3), '按「返回编辑」之后这一页是可写的')
+    sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 0 })
+    check(
+      !at('a').unlocked.includes(3),
+      '没改字就翻走：「返回编辑」这个标记被收回（回来时该看到批改结果，而不是作答框）',
+    )
+    check(pageResultOf(at('a'), 3) !== undefined, '翻走时那一页的结果也还在')
+    sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 3 })
+    check(
+      !at('a').unlocked.includes(3) && pageResultOf(at('a'), 3) !== undefined,
+      '翻回来仍是"已批改"那一档（用户报的正是这里回到了编辑界面）',
+    )
+    /*
+     * 反过来：**改过字**再翻走，这一页就该保持可写——那时结果已经作废，
+     * 它是一道真正待提交的题，把标记收回会让人回来时对着只读的空壳。
+     */
+    sessions = sessionReducer(sessions, { type: 'pageUnlocked', exerciseId: 'a' })
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四页又改' })
+    check(pageResultOf(at('a'), 3) === undefined, '改过字之后结果作废')
+    sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 0 })
+    check(at('a').unlocked.includes(3), '改过字再翻走：这一页保持可写（回来接着改）')
+    sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 3 })
+    check(at('a').drafts[3] === '第四页又改', '翻回来草稿还在')
 
     /*
      * 术语栏的「重新作答」要的是**另一件事**：把这一页的结果真的丢掉。

@@ -637,23 +637,77 @@ try {
        document.querySelector('.pane-source')?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 5, clientY: 5 }));
        await sleep(200);
 
-       // 「返回编辑」：放开这一页重写（结果作废、可以接着改）
+       /*
+        * 小卡片现在**挂在 document.body 上**（position: fixed，见 AnnotationText 的 createPortal），
+        * 因此要在 document 上找它——它已经从各栏那棵子树里搬出去了。这正是
+        * "小卡片应该位于最上层，不能被下面的区域栏目所挡住"那条要求的实现方式：
+        * 译文栏的正文盒子是 overflow-y: auto 的滚动容器，卡片留在里面一定会被剪掉。
+        *（⚠️ 这段整块躺在一个模板字符串里，注释里**不能出现反引号**。）
+        */
+       const bubbleEl = () => document.querySelector('.ann-bubble');
        const mark = document.querySelector('.pane-answer [data-mark-id]');
        if (mark) mark.click();
        await sleep(400);
        const bubbleBefore = {
-         卡片在: !!document.querySelector('.pane-answer .ann-bubble'),
-         收藏按钮: (document.querySelector('.pane-answer .ann-bubble button')?.textContent || '').trim(),
+         卡片在: !!bubbleEl(),
+         收藏按钮: (document.querySelector('.ann-bubble button')?.textContent || '').trim(),
        };
-       const bubbleFavorite = document.querySelector('.pane-answer .ann-bubble button');
+
+       /*
+        * ── 卡片的两条规矩（这一轮的用户要求）──
+        *   ① 点**卡片里任何地方**都不关（只有点两张卡片之外才关）；
+        *   ② 小卡片在最上层，不被下面的栏目盖住。
+        * ② 只能用**真实命中测试**来验：jsdom 没有命中测试，样式表断言也只证明
+        * "写了 position: fixed 与 z-index"；而"有没有被别的栏盖住"终究是排版问题。
+        */
+       const 卡片几何 = (() => {
+         const node = bubbleEl();
+         if (!node) return null;
+         const rect = node.getBoundingClientRect();
+         const paneBody = document.querySelector('.pane-answer .pane-body')?.getBoundingClientRect() ?? null;
+         const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+         return {
+           定位: getComputedStyle(node).position,
+           挂在body下: node.parentElement === document.body,
+           /* 卡片底边超出译文栏多少像素——正数说明它确实画到了栏外（而栏里那两栏没盖住它） */
+           底边超出译文栏: paneBody ? Math.round(rect.bottom - paneBody.bottom) : null,
+           卡片中心命中的是卡片: hit ? node.contains(hit) : null,
+           命中到什么: hit ? (hit.className || hit.tagName) : '(视口外)',
+         };
+       })();
+       // 点小卡片的**正文**（用命中测试拿到的元素点，等于真实鼠标）
+       const whyNode = document.querySelector('.ann-bubble-why');
+       if (whyNode) {
+         const whyRect = whyNode.getBoundingClientRect();
+         const hit = document.elementFromPoint(whyRect.left + 2, whyRect.top + 2) || whyNode;
+         hit.click();
+         await sleep(250);
+       }
+       const 点小卡片之后 = {
+         卡片还在: !!bubbleEl(),
+         右下角还在: !!document.querySelector('.pane-notes .detail-list'),
+       };
+       // 点右下角那张**大卡片**的正文（说明那几行）
+       const detailBody = document.querySelector('.pane-notes .detail-body');
+       if (detailBody) {
+         detailBody.click();
+         await sleep(250);
+       }
+       const 点大卡片之后 = {
+         卡片还在: !!bubbleEl(),
+         右下角还在: !!document.querySelector('.pane-notes .detail-list'),
+       };
+
+       const bubbleFavorite = document.querySelector('.ann-bubble button');
        /*
         * 点它之前先确认"它真的能收到点击"。
         *
-        * 气泡本身是 pointer-events: none（免得挡住底下的勾画），而那条规则是**整棵子树**
+        * 卡片从前整张是 pointer-events: none（免得挡住底下的勾画），而那条规则是**整棵子树**
         * 一起生效的——里面的按钮曾因此永远点不动（用户报过两次"小卡片无法点击收藏"）。
+        * 现在整张卡片都收事件（点卡片才不算点外面），按钮自然也在里面；
         * 这里沿 DOM 往上走一遍，确认没有任何一层把鼠标事件关掉。
         *
-        * ⚠️ 只用 .click() 是查不出来的：那是脚本直接调方法，**绕过了命中测试**，
+        * ⚠️ 只用 .click() 是查不出来的：那是脚本直接调方法、**绕过了命中测试**，
         * jsdom 里更是压根没有命中测试（所以这个 bug 在原来的脚本里一直是绿的）。
         */
        const 指针事件链 = (() => {
@@ -684,8 +738,8 @@ try {
        if (bubbleFavorite) bubbleFavorite.click();
        await sleep(400);
        const bubbleAfter = {
-         卡片在: !!document.querySelector('.pane-answer .ann-bubble'),
-         收藏按钮: (document.querySelector('.pane-answer .ann-bubble button')?.textContent || '').trim(),
+         卡片在: !!bubbleEl(),
+         收藏按钮: (document.querySelector('.ann-bubble button')?.textContent || '').trim(),
          能收到点击,
          指针事件链,
          命中,
@@ -762,6 +816,8 @@ try {
          有批改记录下拉: [...document.querySelectorAll('.pane-answer .domain-trigger')].some(
            (b) => (b.textContent || '').includes('批改记录'),
          ),
+         /* 两档修改风格的**界面名**（用户改过：润色→精修、精修→大改） */
+         档位按钮: [...document.querySelectorAll('.pane-answer .level-btn')].map((b) => (b.textContent || '').trim()),
        };
 
        // 改一个字，再翻到下一页：翻页**不该**提交（自动提交已经取消了）
@@ -811,6 +867,10 @@ try {
          favoriteCount,
          favoriteStored,
          returnToResult,
+         /* 卡片的两条规矩（点卡片不关 + 小卡片在最上层）的观测点 */
+         卡片几何,
+         点小卡片之后,
+         点大卡片之后,
          requests: window.__judgeCalls.map((call) => ({
            start: call.start,
            text: call.text.slice(0, 30),
@@ -1003,6 +1063,36 @@ try {
   )
   check(walked.bubbleAfter.卡片在, '点小卡片里的「收藏」之后，卡片**不消失**（点它不算"点外面"）')
   check(walked.bubbleAfter.收藏按钮 === '已收藏', '收藏之后按钮文案变成「已收藏」', walked.bubbleAfter.收藏按钮)
+  /*
+   * ── 卡片的两条规矩（这一轮用户要求）──
+   * ① "点击任意卡片都不会关掉这两个卡片，当且仅当点击这两个卡片之外的地方才消失"；
+   * ② "小卡片应该位于最上层，不能被下面的区域栏目所挡住"。
+   */
+  console.log('小卡片几何 =', JSON.stringify(walked.卡片几何))
+  check(
+    walked.卡片几何?.定位 === 'fixed' && walked.卡片几何?.挂在body下 === true,
+    '小卡片是固定定位、挂在 document.body 上（不在译文栏那棵子树里，因此不被滚动容器剪掉）',
+    JSON.stringify(walked.卡片几何),
+  )
+  check(
+    walked.卡片几何?.卡片中心命中的是卡片 === true,
+    '小卡片中心点上的就是卡片本身（没有被下面任何一栏盖住）',
+    JSON.stringify({ 命中: walked.卡片几何?.命中到什么, 超出译文栏: walked.卡片几何?.底边超出译文栏 }),
+  )
+  check(
+    walked.点小卡片之后?.卡片还在 === true && walked.点小卡片之后?.右下角还在 === true,
+    '点小卡片的**正文**，两张卡片都还在（用真实命中测试拿到的元素点，不是 .click() 直调）',
+    JSON.stringify(walked.点小卡片之后),
+  )
+  check(
+    walked.点大卡片之后?.卡片还在 === true && walked.点大卡片之后?.右下角还在 === true,
+    '点右下角那张**大卡片的正文**（说明那几行），两张卡片也都还在',
+    JSON.stringify(walked.点大卡片之后),
+  )
+  check(
+    (walked.afterUnlock.档位按钮 ?? []).join('/') === '精修/大改',
+    `两档修改风格的界面名是「精修」「大改」（实际 ${JSON.stringify(walked.afterUnlock.档位按钮)}）`,
+  )
   check(walked.favoriteCount === 1, `收藏落盘了（localStorage 里 ${walked.favoriteCount} 条）`)
   check(
     Boolean(walked.favoriteStored?.id) && (walked.favoriteStored?.why ?? '').length > 0 && (walked.favoriteStored?.整句 ?? '').length > 0,
