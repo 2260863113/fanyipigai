@@ -16,12 +16,20 @@
  *
  * - `。！？；…` 与换行：本身就是句末，中英文都算；
  * - `!` `?`：一律算（不必像 `.` 那样再看后面）；
- * - `.`：要"收得住"才算句末，三种算、两种不算：
+ * - `.`：要"收得住"才算句末，四种算、两种不算：
  *   1. 点号后面是空白或结尾（`… total. Then…`）→ 算；
  *   2. 点号后面**紧跟一个收尾引号**（`… fds ."` / `… fds .”`）→ 算。
  *      这就是用户两次报过的那一条：句子以引号收尾时引号后面往往没有空格；
- *   3. 点号后面紧跟数字（`3.5`）→ 不算（小数点）；
- *   4. 点号后面紧跟字母（`U.S.`、`e.g.` 里的点）→ 不算（缩写/小数点更常见）。
+ *   3. 点号后面**紧跟大写字母、而点号前面是小写字母或数字**（`… livelihood.The…`）→ 算。
+ *      这是用户第三次报的那一条：**句号后面漏了空格**。同一件事在提示词里也写着——
+ *      "逗号、句号后面与下一个词之间有没有空格，一律忽略"（见 domain/prompt.ts）：
+ *      AI 不许因为少一个空格扣分，那么程序自己也不该因为少一个空格就把三句读成一句。
+ *   4. 点号后面紧跟数字（`3.5`）→ 不算（小数点）；
+ *   5. 点号后面紧跟字母、但**不满足第 3 条**（`U.S.`、`e.g.` 里的点）→ 不算（缩写更常见）。
+ *
+ * 第 3 条为什么要求"点号前面是小写字母或数字"：`U.S.A` 这种缩写里，
+ * 点号前面是大写字母，照旧不切。代价是 `Mr.Smith` 会被切开，
+ * 与下面那条 `e.g.` 的取舍是同一类——缩写表不值得引，多切一刀只是少给一点上下文。
  *
  * ## 不重不漏靠"一次只切一刀 + 收尾引号归前一句"
  *
@@ -77,12 +85,29 @@ export function splitSentenceSpans(text: string, options: SplitSentenceOptions =
   const endsAt = (index: number): boolean => {
     const char = text[index] ?? ''
     if (ALWAYS_END.test(char) || LATIN_END.test(char)) return true
-    if (commas && COMMA_END.test(char)) return true
+    if (commas && COMMA_END.test(char)) {
+      /*
+       * 数字里的千位分隔符（`82,000`）不是一句的结尾。
+       *
+       * 收藏按逗号断句（"那一小截"），而用户那段里正好有 `82,000,offering`
+       * ——不排除的话收藏会收下一个以 `82,` 结尾的碎片，看着像把数字截断了。
+       */
+      const insideNumber = /[0-9]/.test(text[index - 1] ?? '') && /[0-9]/.test(text[index + 1] ?? '')
+      return !insideNumber
+    }
     if (char !== '.') return false
     const after = text[index + 1]
     if (after === undefined) return true
     if (/[0-9]/.test(after)) return false // 3.5
-    return /\s/.test(after) || quoteCloses(index)
+    if (/\s/.test(after) || quoteCloses(index)) return true
+    /*
+     * 句号后面漏了空格：`… livelihood.The meeting…`。
+     *
+     * 判据是"后面紧跟大写字母、而前面是小写字母或数字"——句首大写是最强的收句信号，
+     * 而前面那个小写字母把 `U.S.A`（前面是大写）这类缩写排除在外。
+     * 用户第三次报的就是这一条：他那段三句话全被读成了一句，对照视图上就是一整段。
+     */
+    return /[A-Z]/.test(after) && /[a-z0-9]/.test(text[index - 1] ?? '')
   }
 
   const spans: SentenceSpan[] = []

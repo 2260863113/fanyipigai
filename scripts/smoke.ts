@@ -226,6 +226,74 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       splitSentenceSpans(comma).length === 3,
       '收藏里逗号断句（要的是"那一小截"）',
     )
+    /*
+     * 句号后面**漏了空格**时也必须断开（用户第三次报的那条）。
+     *
+     * 用户给的是他自己那段译文，三句话的句号全粘在下一个句子的首字母上
+     * （`…livelihood.The meeting…`、`…cities and villages.Meanwhile,…`），
+     * 于是对照视图上整段被当成**一句**，看上去"还是一段一段的"。
+     *
+     * 判据必须与提示词的口径一致：提示词里写着"逗号、句号后面与下一个词之间有没有空格，
+     * 一律忽略"（见 domain/prompt.ts，AI 不许因为少一个空格扣分），
+     * 那么程序自己也不该因为少一个空格就把三句读成一句。
+     */
+    const glued =
+      "In March, 2026, the fourth session of the 14th National People's Congress held a press meeting themed people's livelihood." +
+      'The meeting introduced that the number of senior meal assistance spots had reached 82,000,' +
+      'offering meal assistance services to 4 million old people daily, and initially formed a meal assistance services network covering cities and villages.' +
+      'Meanwhile, the relevant department propose to raise the coverage rate of community elderly care services institutions and facilities to over 70 percent during the 15th Five-Year period.'
+    {
+      const pieces = splitSentences(glued).map((item) => glued.slice(item.start, item.end))
+      check(
+        pieces.length === 3,
+        `句号后面漏了空格也切得开（用户报的那一段，实际 ${pieces.length} 句）`,
+        JSON.stringify(pieces.map((piece) => piece.slice(0, 24))),
+      )
+      check(pieces.join('') === glued, '切开之后首尾相接、不重不漏', JSON.stringify(pieces))
+      check(
+        pieces[1]?.startsWith('The meeting introduced') === true,
+        `第二句从 The meeting introduced 开始（实际 ${JSON.stringify(pieces[1]?.slice(0, 24))}）`,
+      )
+      check(
+        pieces[2]?.startsWith('Meanwhile') === true,
+        `第三句从 Meanwhile 开始（实际 ${JSON.stringify(pieces[2]?.slice(0, 24))}）`,
+      )
+      // 与"本来是带空格的正常文本"给出完全一样的切点——漏空格不该改变任何结果
+      //（带空格那版的下一句会以那个空格开头，因此两边都 trim 掉再比）
+      const spaced = glued.replace(/\.([A-Z])/g, '. $1')
+      check(
+        JSON.stringify(splitSentences(spaced).map((item) => spaced.slice(item.start, item.end).trim())) ===
+          JSON.stringify(pieces.map((piece) => piece.trim())),
+        '同一段加上空格之后切出来的句子与不加空格时一致',
+        JSON.stringify(splitSentences(spaced).map((item) => spaced.slice(item.start, item.end).trim().slice(0, 20))),
+      )
+    }
+    /*
+     * 反过来：**缩写不能被切开**——漏空格那条规则不能伤到 `U.S.` 这类写法。
+     * 判据落在"点号前面是不是小写字母/数字"上，因此这里正反各量一次。
+     */
+    check(splitSentences('The U.S.A is a country.The next sentence.').length === 2, 'U.S.A 里的点不算句末，而 livelihood.The 后面那个算')
+    check(splitSentences('It costs 3.5 euros.The total is 5.5 dollars.').length === 2, '小数点不会被当成句末（3.5 / 5.5）')
+    /*
+     * 收藏按逗号断句，但**数字里的千位分隔符不算**（`82,000`）。
+     * 用户那段里正好有 `82,000,offering`：以前会收下一截以 `82,` 结尾的碎片。
+     */
+    {
+      const withNumber = 'The number of senior meal assistance spots had reached 82,000,offering services daily.'
+      const cuts = splitSentenceSpans(withNumber).map((span) => withNumber.slice(span.from, span.to))
+      check(cuts.join('') === withNumber, '带千位分隔符的那段按逗号切开之后仍然不重不漏', JSON.stringify(cuts))
+      check(
+        cuts.some((piece) => piece.includes('82,000')),
+        `千位分隔符完整地留在同一截里（实际 ${JSON.stringify(cuts)}）`,
+        JSON.stringify(cuts),
+      )
+      // 修之前第一截会停在 `…had reached 82,` 上——数字被从中间截断
+      check(
+        cuts.every((piece) => !/82,$/.test(piece)),
+        '没有一截停在"82,"上（数字没有被逗号截断）',
+        JSON.stringify(cuts),
+      )
+    }
   } catch (error) {
     check(false, '对照视图的分句可以验证', error instanceof Error ? error.message : String(error))
   }
@@ -511,6 +579,62 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       check(lines[0]?.original === 'i is a form of human progress.', '原文那一句原样保留')
     } else {
       check(false, '对照视图用例可以被解析', parsed.problems.join('；'))
+    }
+
+    /*
+     * 用户报的那一段（句号后面漏了空格）**在对照视图里必须是三行**。
+     *
+     * 他当时看到的是"一整段占一行"，据此怀疑"是不是把一段误认为一句"——诊断下来正是：
+     * 段里两个句号都粘在下一句的首字母上（`…livelihood.The meeting…`），
+     * 断句那一层把三句读成了一句，于是对照视图只有一行。
+     * 这一组直接从**对照行**上验，而不是只验断句函数（那一步已经在上面验过）。
+     */
+    {
+      const gluedAnswer =
+        "In March, 2026, the fourth session of the 14th National People's Congress held a press meeting themed people's livelihood." +
+        'The meeting introduced that the number of senior meal assistance spots had reached 82,000,offering meal assistance services to 4 million old people daily.' +
+        'Meanwhile, the relevant department propose to raise the coverage rate to over 70 percent during the 15th Five-Year period.'
+      const gluedParsed = parseCorrection(
+        JSON.stringify({
+          errors: [
+            {
+              id: 'g1',
+              type: 'replace',
+              category: 'grammar',
+              oldText: 'the relevant department propose',
+              targetText: 'the relevant department proposed',
+              explanation: '主谓一致',
+            },
+          ],
+          highlights: [],
+        }),
+        gluedAnswer,
+        'zh-to-en',
+      )
+      if (gluedParsed.ok) {
+        const gluedLines = buildCompareLines(
+          validateCorrection(gluedParsed.correction.errors, gluedParsed.correction.highlights, gluedAnswer, 'zh-to-en'),
+          gluedAnswer,
+        )
+        check(
+          gluedLines.length === 3,
+          `句号漏空格的那一段在对照视图里出三行（实际 ${gluedLines.length} 行）`,
+          JSON.stringify(gluedLines.map((line) => line.original.slice(0, 26))),
+        )
+        check(
+          gluedLines[2]?.original.startsWith('Meanwhile') === true &&
+            gluedLines[2]?.corrected.some((part) => part.color !== undefined) === true,
+          '那一处改动落在第三行上（不是落在整段上）',
+          JSON.stringify(gluedLines[2]),
+        )
+        check(
+          gluedLines[1]?.original.includes('82,000') === true,
+          '第二行完整地含 82,000（千位分隔符没把它截断）',
+          JSON.stringify(gluedLines[1]?.original),
+        )
+      } else {
+        check(false, '漏空格那段用例可以被解析', gluedParsed.problems.join('；'))
+      }
     }
   } catch (error) {
     check(false, '对照视图的纯函数可以执行', error instanceof Error ? error.message : String(error))

@@ -208,6 +208,8 @@ console.log('\n=== 4. 分页：一页 = 一个自然段（不足 50 单位与相
   const lost = []
   const wrongShape = []
   const tiny = []
+  /** 句号后面漏了空格的连写（用户报过的那种，见下面那段注释） */
+  const gluedSentences = []
   const pageCounts = new Map()
   let pages = 0
   let singleParagraphPages = 0
@@ -284,6 +286,24 @@ console.log('\n=== 4. 分页：一页 = 一个自然段（不足 50 单位与相
     const joined = articlePages.map((page) => page.text.replace(/\s+/g, ' ').trim()).join(' ')
     if (joined !== item.text.replace(/\s+/g, ' ').trim()) lost.push(item.id)
 
+    /*
+     * **句号后面不许漏空格**（`…livelihood.The meeting…`）。
+     *
+     * 用户报过一次"对照视图里一整段占一行"，诊断下来正是这种连写：断句那一层把三句读成了一句。
+     * 断句现在自己也扛得住这种写法（见 domain/sentences.ts 的第 3 条），
+     * 但**生成出来的数据不该有这种毛病**——它还会影响字数统计的口径与人的阅读。
+     * 这里对原文与参考译文都扫一遍，万一 build-articles.mjs 的拼段规则哪天改坏了，能立刻发现。
+     */
+    for (const [label, value] of [
+      ['原文', item.text],
+      ['参考译文', item.reference],
+    ]) {
+      const glued = value.match(/[a-z0-9]\.[A-Z][a-z]/g)
+      if (glued) {
+        gluedSentences.push(`${item.id} 的${label}：${glued.slice(0, 3).join(' ')}`)
+      }
+    }
+
     if (!brief) {
       const sizes = articlePages.map((page) => countUnits(page.text, item.direction))
       console.log(
@@ -296,6 +316,11 @@ console.log('\n=== 4. 分页：一页 = 一个自然段（不足 50 单位与相
   check(tiny.length === 0, `没有不足 ${mergeBelow} 单位的小页（${tiny.length} 处）`, tiny.slice(0, 6).join('；'))
   check(misaligned.length === 0, `每一页的译文都逐段对上了（${misaligned.length} 处）`, misaligned.slice(0, 6).join('；'))
   check(lost.length === 0, `所有页拼起来一字不丢（出问题的：${lost.length} 篇）`, lost.slice(0, 6).join('；'))
+  check(
+    gluedSentences.length === 0,
+    `原文与参考译文里没有"句号漏空格"的连写（${gluedSentences.length} 处）`,
+    gluedSentences.slice(0, 4).join('；'),
+  )
   const distribution = [...pageCounts.values()].reduce((acc, count) => acc.set(count, (acc.get(count) ?? 0) + 1), new Map())
   const shape = [...distribution.entries()]
     .sort((a, b) => a[0] - b[0])
