@@ -5,7 +5,7 @@
  *
  * 用户的要求是「原文分成上下五栏，一栏一个术语，一共 5 行，译文区也是相同的五栏，
  * 一次在每一栏里翻译五个术语」。因此一道术语题就是**一组 5 条**，
- * 而不是一条一题——这样一次练习能覆盖更多固定表述，也免得为了练 69 条术语点 69 次。
+ * 而不是一条一题——这样一次练习能覆盖更多固定表述，也免得为了练几十条术语点几十次。
  *
  * ## 为什么自带批改、不走 AI
  *
@@ -29,7 +29,7 @@
 
 import { CATEGORY_LABEL, type Correction, type ErrorObject, type Exercise } from './types'
 import { TERMS_BY_DOMAIN, isTermCorrect, normalizeAnswer, type Term } from './terms'
-import { labelOfDomain, type ArticleDomain } from './articles'
+import { ARTICLE_DOMAINS, labelOfDomain, type ArticleDomain } from './articles'
 import type { ValidatedCorrection, ValidatedError, ValidatedHighlight } from './validate'
 
 /** 一道术语题一组几条。用户要的是「五栏」，所以是 5。 */
@@ -58,18 +58,22 @@ export function termsForExercise(domain: ArticleDomain, sequence: number): reado
 }
 
 /**
- * 术语题的题号形如 `term-<领域>-<第几组>`，例如 `term-ecology-2`。
+ * 术语题的题号形如 `term-v2-<领域>-<第几组>`，例如 `term-v2-ecology-2`。
  *
  * 为什么把"第几组"编进题号：题号是本站的通用键——作答、批改结果、练习记录、
  * 收藏全都按它索引。把领域与组号编进去之后，这四样东西一行都不用改就能支持术语库。
+ *
+ * 为什么带 `v2`：领域表从八个收敛到五个、术语库随之删掉 26 条之后，
+ * **同一个题号会指向另一组术语**（旧 `term-economy-1` 排出来的是另一批词）。
+ * 加了代次标记，旧题号一律解析失败，旧记录不会张冠李戴。
  */
 export function termExerciseId(domain: ArticleDomain, group: number): string {
-  return `term-${domain}-${group}`
+  return `term-v2-${domain}-${group}`
 }
 
-/** 从题号解析出领域与组号；不是术语库的题号就返回 null。 */
+/** 从题号解析出领域与组号；不是术语库当前代次的题号就返回 null。 */
 export function parseTermExerciseId(id: string): { domain: ArticleDomain; group: number } | null {
-  const match = /^term-([a-z]+)-(\d+)$/.exec(id)
+  const match = /^term-v2-([a-z]+)-(\d+)$/.exec(id)
   if (!match) return null
   const domain = match[1] as ArticleDomain
   if (!(domain in TERMS_BY_DOMAIN)) return null
@@ -109,9 +113,10 @@ export function exerciseOfTerms(id: string, terms: readonly Term[]): Exercise {
     // 术语库给的是中文术语、要求译成英文
     direction: 'zh-to-en',
     mode: 'term',
-    // 这些术语绝大多数是政治文献里的固定表述
+    // 这些术语绝大多数是政论与官方文献里的固定表述
     genre: 'political',
-    topic: labelOfDomain(parseTermExerciseId(id)?.domain ?? 'politics'),
+    // 题号解析不出来时落到第一个板块（社会）；领域表里已经没有 politics 了
+    topic: labelOfDomain(parseTermExerciseId(id)?.domain ?? ARTICLE_DOMAINS[0].id),
     source: terms.map((term) => term.zh).join('\n'),
     // 参考译文就是标准译法，逐条显示在下方；这里留空，免得与逐条对照重复
     referenceTranslation: '',

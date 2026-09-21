@@ -540,15 +540,6 @@ button {
   color: var(--ink-faint);
 }
 
-.article-card-source {
-  color: var(--ink-soft);
-}
-
-/* 篇幅不符赛制区间时标出来——用户据此判断这题值不值得练 */
-.article-card-units-off {
-  color: #b06a00;
-}
-
 /*
  * 「已完成」：整篇（每一页）都批过了。
  * 它排在列表最后、也不再被当作打开网页时的落点，因此这里只是**如实告知**，
@@ -860,6 +851,46 @@ button {
   white-space: pre-wrap;
 }
 
+/*
+ * 「对照译文」铺出来的样子：一对一对，**一段原文、一段译文**交替。
+ *
+ * 为什么要留白 + 分隔线：原文与译文都是衬线体、字号也接近，只靠紧挨着排是分不清
+ * "哪一行是原文、哪一行是译文"的。这里给译文换一种颜色并在两对之间画一条虚线，
+ * 一眼就能看出每段的边界在哪。一页可能由两个短自然段并成（见 sections.ts），
+ * 那时会是 A1 / T1 / A2 / T2 四行，同一个规则照样成立。
+ */
+.pair-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.pair {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pair + .pair {
+  border-top: 1px dashed var(--line-strong);
+  padding-top: 18px;
+}
+
+.pair-source,
+.pair-reference {
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.9;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.pair-reference {
+  color: var(--ink-soft);
+  border-left: 3px solid var(--line-strong);
+  padding-left: 12px;
+}
+
 .source-term {
   font-size: 28px;
   line-height: 1.5;
@@ -867,6 +898,10 @@ button {
   padding: 32px 0;
 }
 
+/*
+ * 参考译文的折叠块：现在只出现在**练习记录页**（练习页换成了标题栏的「对照译文」开关）。
+ * 记录页是只读的复盘视图，折起来更省地方。
+ */
 .reference {
   border-top: 1px dashed var(--line-strong);
   padding-top: 10px;
@@ -1038,6 +1073,13 @@ button {
   font-size: 12.5px;
   color: var(--accent);
   border-color: var(--line-strong);
+}
+
+/* 「对照译文」按下去之后的样子：这颗按钮是开关，得看得出它现在是开的 */
+.btn-ghost-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 /* 小卡片里那颗按钮：卡片本来就窄，用常规尺寸会把说明挤成两三行 */

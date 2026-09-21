@@ -362,9 +362,18 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     for (const [needle, label] of specChecks) {
       check(genSystem.includes(needle), label, `提示词里找不到「${needle}」`)
     }
-    // 领域预设要覆盖"五位一体"，别把学生往偏题上引
-    for (const domain of ['经济建设', '政治建设', '文化建设', '社会建设', '生态文明建设']) {
-      check(GENERATION_TOPICS.includes(domain), `出题领域预设覆盖五位一体：${domain}`)
+    // 领域预设要覆盖站里的五个板块，别把学生往偏题上引
+    for (const domain of ['社会', '经济', '文化', '生态', '科技']) {
+      check(GENERATION_TOPICS.includes(domain), `出题领域预设覆盖五大板块：${domain}`)
+    }
+    // 预设与文章库的领域表必须**完全一致**：两处口径不一样，用户会看到两个领域清单
+    {
+      const { ARTICLE_DOMAINS } = await import('../src/domain/articles')
+      const labels = ARTICLE_DOMAINS.map((item) => item.label)
+      check(
+        labels.length === GENERATION_TOPICS.length && labels.every((label) => GENERATION_TOPICS.includes(label)),
+        `出题领域预设与文章库的板块表逐个对齐（预设 ${GENERATION_TOPICS.join('/')} ／ 文章库 ${labels.join('/')}）`,
+      )
     }
 
     for (const direction of ['en-to-zh', 'zh-to-en'] as const) {
@@ -522,7 +531,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     )
     const { TERMS_BY_DOMAIN } = await import('../src/domain/terms')
     const { sentencePair } = await import('../src/domain/favorites')
-    const terms = TERMS_BY_DOMAIN.politics.slice(0, 5)
+    const terms = TERMS_BY_DOMAIN.society.slice(0, 5)
     check(terms.length === 5, `术语库能取到一组 5 条（实际 ${terms.length}）`)
     const first = terms[0]
     const fourth = terms[3]
@@ -610,47 +619,75 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   }
 
   /*
-   * 文章**分页**：用户给的三条数字（每页 100–200、不足 100 与下一段并、超过 300 就切）。
+   * 文章**分页**：用户的口径是「把每个文章进行分段，文章模式下，一段一段的出」，
+   * 外加"不足 50 单位就算太短、与相邻段并"。
    *
-   * 为什么值得单测：分页决定了"用户一次看到多少原文"，而它的三条规则会互相打架
-   * （并进来会超上限、切开会把一句话切成两半、尾巴只剩两行）。这里有两条硬约束：
-   * **任何一页都不超过 300**、**最后一页不是小尾巴**——整库 96 篇都靠它们把关
-   * （见 scripts/check-articles.mjs），这里用小样本把边界固定下来。
+   * 为什么值得单测：分页决定了"用户一次看到多少原文"。这一轮的规则比上一轮简单，
+   * 但**边界更硬**，两条都要钉住：
+   *   - 够长的自然段必须**独占一页**（那正是"一段一段出"本身）；
+   *   - 不足下限的自然段**不许独自成页**（否则会出现一行就翻页的碎片）。
+   * 整库 48 篇都靠这两条把关（见 scripts/check-articles.mjs），这里用小样本把边界固定下来。
    */
-  console.log('\n[文章分页] 每页 100–200，不足 100 并下一段，超过 300 按句切开')
+  console.log('\n[文章分页] 一页 = 一个自然段，不足 50 单位的与相邻段合并')
   try {
-    const { countUnits, paginateArticle, PAGE_RULE } = await import('../src/domain/sections')
+    const { countUnits, paginateArticle, splitSections, PAGE_RULE } = await import('../src/domain/sections')
     const { articleById, articlesOf } = await import('../src/domain/articles')
 
     check(countUnits('The report said the economy grew.', 'en-to-zh') === 6, '英译中按词数计（标点不算词）')
     check(countUnits('绿水青山就是金山银山。GDP 增长 5%。', 'zh-to-en') === 12, '中译英按汉字数计（标点、数字、字母都不算）')
 
-    // 三段短段落（各 30 字左右）→ 并成一页（用户的"不足一百字就并下一段"）
+    // 三段短段落（各 22 字）→ 并成一页（用户的"不足下限就与相邻段并"）
     const short = Array.from({ length: 3 }, () => '生态文明的说明文字占位符大约三十个汉字凑一凑。').join('\n\n')
-    const shortPages = paginateArticle(short, 'zh-to-en')
+    const shortPages = paginateArticle(short, '', 'zh-to-en')
     check(
       shortPages.length === 1,
-      `三段都不到 ${PAGE_RULE.min} 字 → 并成一页（实际 ${shortPages.length} 页）`,
+      `三段都不到 ${PAGE_RULE.mergeBelow} 字 → 并成一页（实际 ${shortPages.length} 页）`,
       JSON.stringify(shortPages.map((page) => countUnits(page.text, 'zh-to-en'))),
     )
 
-    // 整篇的硬约束：任何一页不超过 300、最后一页不是小尾巴、首尾相接、text 与区间自洽
-    const article = articleById('art-economy-1') ?? articlesOf('economy', 'en-to-zh')[0]
+    // 整篇的硬约束：页边界落在自然段上、首尾相接、text 与区间自洽、译文逐段对齐
+    const article = articleById('art-economy-en-to-zh-1') ?? articlesOf('economy', 'en-to-zh')[0]
     check(Boolean(article), '文章库里取得到一篇文章')
     if (article) {
-      const pages = paginateArticle(article.excerpt, article.direction)
+      const paragraphs = splitSections(article.text)
+      const pages = paginateArticle(article.text, article.reference, article.direction)
       const units = pages.map((page) => countUnits(page.text, article.direction))
       check(pages.length >= 2, `这一篇切成了多页（${pages.length} 页：[${units.join(', ')}]）`)
       check(
-        units.every((value) => value <= PAGE_RULE.splitAbove),
-        `没有一页超过绝对上限 ${PAGE_RULE.splitAbove}（实际 [${units.join(', ')}]）`,
+        pages.every((page) => page.pairs.length === splitSections(page.text).length),
+        '每一页的"原文/译文对"数与该页的自然段数一致',
       )
       check(
-        units[units.length - 1] !== undefined && (units[units.length - 1] ?? 0) >= PAGE_RULE.min,
-        `最后一页不是小尾巴（${units[units.length - 1]} 单位）`,
+        pages.every(
+          (page) =>
+            page.pairs.map((pair) => pair.source).join(' ').replace(/\s+/g, ' ').trim() ===
+            page.text.replace(/\s+/g, ' ').trim(),
+        ),
+        '把每一页的对拼起来就是这一页的原文（「对照」铺的就是它们）',
       )
       check(
-        pages.every((page) => page.text === article.excerpt.slice(page.start, page.end)),
+        pages.every((page) => page.pairs.every((pair) => pair.reference.length > 0)),
+        '每一页的每一段都有对应的参考译文（文章库的译文与原文逐段对齐）',
+      )
+      /*
+       * 两条硬约束：够长的段独占一页、太短的段不独自成页。
+       * 判据用**自然段本身的单位数**去比，而不是页的单位数——页的单位数是被并过之后的，
+       * 拿它比等于把结论当条件。
+       */
+      const longAlone = paragraphs.every((paragraph) => {
+        const size = countUnits(paragraph.text, article.direction)
+        if (size < PAGE_RULE.mergeBelow) return true
+        return pages.some(
+          (page) => page.pairs.length === 1 && page.pairs[0]?.source === paragraph.text,
+        )
+      })
+      check(longAlone, `每个够 ${PAGE_RULE.mergeBelow} 单位的自然段都独占一页`)
+      const noTinyPage =
+        paragraphs.length === 1 ||
+        pages.every((page) => countUnits(page.text, article.direction) >= PAGE_RULE.mergeBelow)
+      check(noTinyPage, `没有不足 ${PAGE_RULE.mergeBelow} 单位的小页（不该出现"一行就翻页"）`)
+      check(
+        pages.every((page) => page.text === article.text.slice(page.start, page.end)),
         '每一页的 text 与它的 start/end 自洽（批注序号换算靠这个）',
       )
       /*
@@ -660,32 +697,29 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
        */
       check(
         pages.every((page, index) =>
-          index === 0 || /^\s*$/.test(article.excerpt.slice(pages[index - 1]?.end ?? 0, page.start)),
+          index === 0 || /^\s*$/.test(article.text.slice(pages[index - 1]?.end ?? 0, page.start)),
         ),
         '页与页之间只隔空白（没有正文掉在缝里）',
       )
       check(
         pages
           .map((page) => page.text.replace(/\s+/g, ' ').trim())
-          .join(' ') === article.excerpt.replace(/\s+/g, ' ').trim(),
+          .join(' ') === article.text.replace(/\s+/g, ' ').trim(),
         '所有页拼起来（空白归一之后）正好是整篇原文，一个字都不丢',
         `${pages.length} 页`,
       )
     }
 
-    // 超长段落：按句子切开，因此切点落在句末标点上
-    const zhLong = (sentences: number): string =>
-      Array.from({ length: sentences }, (_, index) => `这是第${index + 1}句话用来占位置说明情况。`).join('')
-    const long = zhLong(30) + '\n\n' + zhLong(30)
-    const longPages = paginateArticle(long, 'zh-to-en')
+    /*
+     * 长自然段**不切**：本轮的口径里"页"就是自然段，没有上限那回事了
+     * （旧口径"超过 300 按句切"已随 ADR 0010 作废）。
+     */
+    const longParagraph = Array.from({ length: 30 }, (_, index) => `这是第${index + 1}句话用来占位置说明情况。`).join('')
+    const longPages = paginateArticle(longParagraph, '', 'zh-to-en')
+    check(longPages.length === 1, `一段超长的自然段原样当一页，不从中间切开（实际 ${longPages.length} 页）`)
     check(
-      longPages.every((page) => countUnits(page.text, 'zh-to-en') <= PAGE_RULE.splitAbove),
-      `超长段落切完之后仍然没有超过上限（[${longPages.map((page) => countUnits(page.text, 'zh-to-en')).join(', ')}]）`,
-    )
-    check(
-      longPages.slice(0, -1).every((page) => /[。！？；，]$/.test(page.text.trim())),
-      '切点落在句末标点上（不会把一句话切成两半）',
-      JSON.stringify(longPages.slice(0, -1).map((page) => page.text.trim().slice(-8))),
+      longPages[0]?.text === longParagraph,
+      `那一页就是这一段本身（${countUnits(longParagraph, 'zh-to-en')} 字，没有被切）`,
     )
   } catch (error) {
     check(false, '分页可以验证', error instanceof Error ? error.message : String(error))
@@ -700,7 +734,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const { clearGraded, firstUngraded, gradedCount, isCompleted, markGraded, orderForPicker } = await import(
       '../src/components/article-progress'
     )
-    const { pageSourceOf, pageCountOf } = await import('../src/domain/exercise-source')
+    const { pageReferenceOf, pageSourceOf, pageCountOf } = await import('../src/domain/exercise-source')
     const { articleById } = await import('../src/domain/articles')
 
     let map = {}
@@ -719,8 +753,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       '同一页重复提交不会记两笔',
     )
 
-    const articleA = articleById('art-economy-1')
-    const articleB = articleById('art-economy-2')
+    const articleA = articleById('art-economy-zh-to-en-1')
+    const articleB = articleById('art-economy-zh-to-en-2')
     if (articleA && articleB) {
       const totalA = pageCountOf(articleA.id)
       let done = {}
@@ -735,13 +769,27 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
 
     // 记录页/收藏页的"原文"：文章题取**那一页**，句子题取那一句
-    const page0 = pageSourceOf('art-economy-1', 0)
-    const page1 = pageSourceOf('art-economy-1', 1)
-    const whole = articleA?.excerpt ?? ''
-    check(page0.length > 100 && whole.length > page0.length, `文章题取到的是"那一页"而不是整篇（第 1 页 ${page0.length} 字 ／ 全文 ${whole.length} 字）`)
-    check(page1.length > 100 && page1 !== page0, `第 2 页与第 1 页不是同一段（${page1.length} 字）`)
+    const page0 = pageSourceOf('art-economy-zh-to-en-1', 0)
+    const page1 = pageSourceOf('art-economy-zh-to-en-1', 1)
+    const whole = articleA?.text ?? ''
+    check(page0.length > 50 && whole.length > page0.length, `文章题取到的是"那一页"而不是整篇（第 1 页 ${page0.length} 字 ／ 全文 ${whole.length} 字）`)
+    check(page1.length > 50 && page1 !== page0, `第 2 页与第 1 页不是同一段（${page1.length} 字）`)
     check(
-      pageSourceOf('sentence-economy-1', 0).length > 0 && pageSourceOf('sentence-economy-1', 0).length < 400,
+      articleA !== undefined && pageSourceOf(articleA.id, 0) === page0,
+      '同一页取两次永远是同一段文字（分页是纯函数）',
+    )
+    /*
+     * 记录页还要显示**这一段对应的参考译文**（用户要求）。文章库自带逐段对齐的译文，
+     * 因此整篇有译文；而"这一段"的译文必须**短于整篇**、且与这一段对得上。
+     */
+    const ref0 = pageReferenceOf('art-economy-zh-to-en-1', 0)
+    check(
+      ref0.length > 0 && articleA !== undefined && ref0.length < articleA.reference.length,
+      `文章题取到的是"这一段的参考译文"（第 1 页 ${ref0.length} 字 ／ 全文 ${articleA?.reference.length ?? 0} 字）`,
+    )
+    check(pageReferenceOf('不存在的题号', 0) === '', '认不出来的题号不瞎给译文')
+    check(
+      pageSourceOf('sentence-v2-economy-1', 0).length > 0 && pageSourceOf('sentence-v2-economy-1', 0).length < 400,
       '句子题取到的是那一句本身（没有分页可言）',
     )
     check(pageSourceOf('不存在的题号', 0) === '', '认不出来的题号返回空串，不瞎猜')
@@ -971,7 +1019,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
      * 自己贴一篇三段原文来跑——它按自然段切、自动判成文章题，
      * 于是「下一页」会自动把这一页交出去、翻回去只是看结果。
      *
-     * ⚠️ 三段都必须**够长**（各 100 字以上）：分页规则是"不足 100 字就与下一段并成一页"
+     * ⚠️ 三段都必须**够长**（各 50 字以上）：分页规则是"不足 50 单位就与相邻段并成一页"
      * （见 domain/sections.ts 的 paginateArticle），段落太短的话整篇会被并成**一页**，
      * 翻页这件事就一步都走不到了（这条断言实际这么红过一次）。
      */

@@ -1,12 +1,11 @@
 /**
  * 选文章的弹窗：把某个「领域 × 方向」下的文章以**卡片**罗列，点一张即开始练。
  *
- * 卡片上三样：
- *   - 标题让你认出是哪一篇；
- *   - 来源让"这是哪家媒体"一目了然（文章库只收中国官方媒体，见 ADR 0007）；
- *   - **全文篇幅 + 一共几页**——文章库现在是**整篇全文**（不再截成赛制篇幅的选段），
- *     练习时按 100–200 一页切（见 domain/sections.ts），因此"共几页"才是该告诉用户的事。
- * 不在卡片上放原文摘要：那会把卡片撑得很高，而"要不要练这一篇"看标题与来源就够定了。
+ * 卡片上两样：
+ *   - **标题就是那一篇的「事件锚点」**——一行说明它讲的是哪件事，这是用户定的口径
+ *     （这批材料没有来源媒体、也没有链接，编不出真实出处就不要编，见 ADR 0010）；
+ *   - **全文篇幅 + 一共几页**——练习时"一页 = 一个自然段"，因此"共几页"才是该告诉用户的事。
+ * 不在卡片上放原文摘要：那会把卡片撑得很高，而"要不要练这一篇"看那行锚点就够定了。
  *
  * ## 顺序：没练完的在前面，练完的排到最后
  *
@@ -17,15 +16,14 @@
 
 import type { JSX } from 'react'
 import { Modal } from './Modal'
-import { articlesOf, hasArticles, labelOfDomain, type ArticleExcerpt, type ArticleDomain } from '../domain/articles'
-import { PAGE_RULE } from '../domain/sections'
+import { articlesOf, hasArticles, labelOfDomain, type Article, type ArticleDomain } from '../domain/articles'
 import { pageCountOf } from '../domain/exercise-source'
 import { DIRECTION_LABEL, type Direction } from '../domain/types'
 import { isCompleted, orderForPicker, type ProgressMap } from './article-progress'
 
-function unitsHint(item: ArticleExcerpt): string {
+function unitsHint(item: Article): string {
   const unit = item.direction === 'en-to-zh' ? '词' : '字'
-  return `全文 ${item.units} ${unit} · 共 ${pageCountOf(item.id)} 页（每页 ${PAGE_RULE.min}–${PAGE_RULE.max} ${unit}）`
+  return `全文 ${item.units} ${unit} · 共 ${pageCountOf(item.id)} 页（一段一页）`
 }
 
 export function ArticlePickerModal({
@@ -45,7 +43,7 @@ export function ArticlePickerModal({
   progress: ProgressMap
   /** 切方向（只在该方向有文章时可用） */
   onSwitchDirection: (direction: Direction) => void
-  onPick: (article: ArticleExcerpt) => void
+  onPick: (article: Article) => void
   onClose: () => void
 }): JSX.Element {
   const articles = orderForPicker(articlesOf(domain, direction), progress, (item) => pageCountOf(item.id))
@@ -105,7 +103,6 @@ export function ArticlePickerModal({
                     {done && <span className="article-card-done">已完成</span>}
                   </span>
                   <span className="article-card-meta">
-                    <span className="article-card-source">{item.source}</span>
                     <span className="article-card-units">{unitsHint(item)}</span>
                   </span>
                 </button>

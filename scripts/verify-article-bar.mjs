@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 验收「文章库」这一行的界面：领域下拉、方向切换、选文章弹窗、以及选中之后的界面。
  *
  * 为什么不能只靠冒烟测试：冒烟测试跑在 jsdom 里，Click 与下拉都是模拟事件；
@@ -177,7 +177,7 @@ try {
      })`,
   )
   check(bar.hasBar === true, '文章库那一行出现了')
-  check(bar.domainLabel === '经济建设', `老按钮条已去掉、领域显示默认值（${bar.domainLabel}）`)
+  check(bar.domainLabel === '社会', `老按钮条已去掉、领域显示默认值（${bar.domainLabel}）`)
   check(bar.dirButtons.join(',') === '中译英,英译中', `中间是方向切换：${bar.dirButtons.join(' / ')}`)
   check(bar.dirActive === '英译中', `默认方向为英译中（${bar.dirActive}）`)
   check(
@@ -209,25 +209,28 @@ try {
      })`,
   )
   check(menu.open === true, '点领域展开下拉')
-  check(menu.items.length === 8, `下拉里有八个赛制主题域（实际 ${menu.items.length}）`)
+  /*
+   * 现在是**五个板块**（社会、经济、文化、生态、科技），顺序也定了。
+   * 政治建设、教育强国、国际传播三个领域已从全站删掉（见 ADR 0010），
+   * 因此这里连"顺序"一起钉住——它是用户挑的，不该被随手改。
+   */
+  check(menu.items.length === 5, `下拉里是五个板块（实际 ${menu.items.length}）`)
   check(
-    menu.items.every((label) => label.includes('经济建设') || label.includes('政治建设') || label.includes('文化建设') ||
-      label.includes('社会建设') || label.includes('生态文明建设') || label.includes('科技创新') ||
-      label.includes('教育强国') || label.includes('国际传播')),
-    '八个领域的名字都对',
+    menu.items.join('/') === '社会/经济/文化/生态/科技',
+    '五个板块的名字与顺序都对',
     menu.items.join(' / '),
   )
 
-  // 选「生态文明建设」——按设计，选完领域会**紧接着弹出选文章的框**
+  // 选「生态」——按设计，选完领域会**紧接着弹出选文章的框**
   const clicked = await cdp.evaluate(
     `(() => {
-       const item = [...document.querySelectorAll('.domain-item')].find((b) => b.textContent.includes('生态文明建设'));
+       const item = [...document.querySelectorAll('.domain-item')].find((b) => b.textContent.trim() === '生态');
        if (!item) return 'no-item';
        item.click();
        return 'clicked';
      })()`,
   )
-  check(clicked === 'clicked', '能在下拉里点到「生态文明建设」', clicked)
+  check(clicked === 'clicked', '能在下拉里点到「生态」', clicked)
   await sleep(700)
   const afterPick = await cdp.evaluate(
     `({
@@ -250,7 +253,7 @@ try {
     console.log(String(detail).split('\n').slice(0, 14).map((line) => '      ' + line).join('\n'))
   }
   console.log(`      页面开头：${afterPick.bodyHead.replace(/\n/g, ' / ')}`)
-  check(afterPick.domain === '生态文明建设', `选完领域后显示新领域（${afterPick.domain}）`)
+  check(afterPick.domain === '生态', `选完领域后显示新领域（${afterPick.domain}）`)
   check(afterPick.pickerOpened === true, '点领域后自动弹出选文章的框（用户点领域就是为了挑文章）')
   check(afterPick.sourceTitle.length > 20, '左侧原文栏先落到该领域的第一篇', afterPick.sourceTitle)
 
@@ -267,25 +270,25 @@ try {
   )
   check(modal.open === true, '弹窗里以卡片罗列文章')
   check(modal.hasDirectionSwitch === 2, '弹窗里也能切方向（不必关掉再回那一行）')
-  check(modal.cards.length === 6, `该领域该方向下有 6 张卡片（每个领域 6+6 篇，实际 ${modal.cards.length}）`)
+  /*
+   * **生态 / 英译中 只有 3 篇**：那五组材料里第 1、2、4 组讲的是同一件事（南岭猕猴），
+   * 三篇文本相似度 87%–98%，按用户决定只留第 1 组。其余格子都是 5 篇。
+   */
+  check(modal.cards.length === 3, `生态 / 英译中 有 3 张卡片（去重后的实际篇数，实际 ${modal.cards.length}）`)
   check(
-    modal.cards.every((c) => c.title.length > 5),
-    '每张卡片都有标题',
+    modal.cards.every((c) => c.title.length > 10),
+    '每张卡片的标题就是那一篇的「事件锚点」',
     modal.cards.map((c) => c.title.slice(0, 30)).join(' ｜ '),
   )
   check(
-    modal.cards.every((c) => /\d+\s*(词|字)/.test(c.meta)),
-    '卡片上显示了来源与篇幅',
+    modal.cards.every((c) => /\d+\s*(词|字)/.test(c.meta) && /共\s*\d+\s*页/.test(c.meta)),
+    '卡片上说明了篇幅与"会切成几页"',
     modal.cards[0]?.meta ?? '',
   )
-  /*
-   * 文章库现在是**整篇全文**，练习时按 100–200 一页切（用户要求）。
-   * 卡片上要如实告诉用户"这一篇有多长、会切成几页"，因此 meta 里必须有"共 N 页"。
-   */
   check(
-    modal.cards.every((c) => /共\s*\d+\s*页/.test(c.meta)),
-    '卡片上说明了这一篇会切成几页',
-    modal.cards[0]?.meta ?? '',
+    modal.cards.every((c) => !/China Daily|Xinhua|新华社|人民日报|光明日报/.test(c.meta)),
+    '卡片上不再显示"来源媒体"（这批材料没有来源，也不该编一个）',
+    modal.cards.map((c) => c.meta).join(' ｜ '),
   )
   console.log(`      示例卡片：${modal.cards[0]?.title ?? ''}`)
   console.log(`      卡片元信息：${modal.cards[0]?.meta ?? ''}`)
@@ -298,13 +301,51 @@ try {
        modalClosed: !document.querySelector('.article-cards'),
        sourceText: (document.querySelector('.pane-source .source-text')?.textContent ?? ''),
        hasInput: !!document.querySelector('.answer-input'),
-       referenceShown: !!document.querySelector('.reference'),
+       buttons: [...document.querySelectorAll('.pane-source .pane-head .btn')].map((b) => b.textContent.trim()),
+       pairs: document.querySelectorAll('.pair-list .pair').length,
+       referenceBlock: !!document.querySelector('.reference'),
      })`,
   )
   check(picked.modalClosed === true, '选完之后弹窗自动关闭')
-  check(picked.sourceText.length > 100, `原文栏加载了选中的那一篇（${picked.sourceText.length} 字符）`)
+  check(picked.sourceText.length > 60, `原文栏加载了选中的那一页（${picked.sourceText.length} 字符）`)
   check(picked.hasInput === true, '可以开始作答（输入框在）')
-  check(picked.referenceShown === false, '文章库没有参考译文，那一栏不摆空壳子')
+  check(picked.buttons.includes('对照译文'), '原文标题栏有「对照译文」按钮（文章库自带参考译文）', picked.buttons.join(' / '))
+  check(
+    picked.pairs === 0 && picked.referenceBlock === false,
+    '默认只看原文：对照没铺开，正文下面也没有那个旧的折叠块',
+  )
+
+  console.log('\n=== 4b. 「对照译文」把这一页铺成一段原文、一段译文 ===')
+  await cdp.evaluate(
+    `[...document.querySelectorAll('.pane-source .pane-head .btn')].find((b) => b.textContent.includes('对照译文')).click()`,
+  )
+  await sleep(400)
+  const compared = await cdp.evaluate(
+    `({
+       pairs: document.querySelectorAll('.pair-list .pair').length,
+       sources: [...document.querySelectorAll('.pair-list .pair-source')].map((p) => p.textContent.trim().length),
+       references: [...document.querySelectorAll('.pair-list .pair-reference')].map((p) => p.textContent.trim().length),
+       pressed: document.querySelector('.pane-source .pane-head .btn[aria-pressed="true"]')?.textContent?.trim() ?? null,
+       plainTextGone: !document.querySelector('.pane-source .source-text'),
+     })`,
+  )
+  check(
+    compared.pairs >= 1 && compared.pairs === compared.sources.length && compared.pairs === compared.references.length,
+    `原封原文与译文一段一段交替（${compared.pairs} 对）`,
+    JSON.stringify(compared),
+  )
+  check(compared.references.every((size) => size > 0), '每一对都有译文（译文与原文逐段对齐）')
+  check(compared.pressed === '对照译文', '按钮显示为"按下"的状态')
+  check(compared.plainTextGone === true, '对照铺开时不再另画一遍纯原文（不会重复显示）')
+  // 再点一下回到只看原文，后面的检查都依赖 .source-text
+  await cdp.evaluate(
+    `[...document.querySelectorAll('.pane-source .pane-head .btn')].find((b) => b.textContent.includes('对照译文')).click()`,
+  )
+  await sleep(400)
+  const backToPlain = await cdp.evaluate(
+    `({ text: (document.querySelector('.pane-source .source-text')?.textContent ?? '').length, pairs: document.querySelectorAll('.pair-list').length })`,
+  )
+  check(backToPlain.text > 60 && backToPlain.pairs === 0, '再点一下回到只看原文')
 
   console.log('\n=== 5. 方向切换确实换了一批文章（中译英现在也有文章了）===')
   const englishSource = await cdp.evaluate(
@@ -337,7 +378,7 @@ try {
        units: [...document.querySelectorAll('.article-card-units')].map((s) => s.textContent.trim()),
      })`,
   )
-  check(zhModal.cards.length === 6, `中译英方向也有 6 张卡片（实际 ${zhModal.cards.length}）`)
+  check(zhModal.cards.length === 5, `中译英方向有 5 张卡片（每个板块 5 篇，实际 ${zhModal.cards.length}）`)
   check(
     zhModal.units.every((u) => /字/.test(u)),
     '中译英的篇幅按「字」计（不是词）',
@@ -348,14 +389,15 @@ try {
   await sleep(300)
 
   /*
-   * ── 进度：练完的排到最后、下次打开从没批完的那一段继续 ──
+   * ── 续做与记忆：两个来源，记住的那一页优先 ──
    *
-   * 两条要求都建立在"哪几页批过"这份进度上（见 components/article-progress.ts）：
-   *   ① 整篇练完的文章，"换一换"与选文章列表都把它**留到最后**，打开网页也不主动显示它；
-   *   ② 只练了一部分时，下次打开**从没有翻译完成的那一段继续**。
-   * 这里把进度写进 localStorage 再重新加载，等于模拟"用户上次练过、今天又打开"。
+   * 两条要求都建立在"哪几页批过"这份进度上（见 components/article-progress.ts），
+   * 而用户后来又加了一条「个性化记忆，下一次落到上一次关掉时的界面」
+   * （见 components/last-view.ts）。两者会同时给出一个页号，因此这一节要把**优先级**也验掉：
+   *   ① **没有记住页号时**（第一次来 / 换了台电脑）：从没有批完的那一段继续；
+   *   ② **记住了页号时**：回到那一页——哪怕它已经批过、哪怕后面还有没批的。
    */
-  console.log('\n=== 7. 没练完的从那一页继续 ===')
+  console.log('\n=== 7. 续做与记忆：没记住页号时从没批完的那一段继续 ===')
   const current = await cdp.evaluate(
     `(() => {
        const hint = (document.querySelector('.section-nav .hint') || {}).textContent || '';
@@ -368,12 +410,21 @@ try {
      })()`,
   )
   check(current.id.length > 0 && current.total >= 2, `当前这一篇是多页的（${current.id} 共 ${current.total} 页）`)
+  check(
+    current.total === 3 || current.total >= 3,
+    '一页 = 一个自然段：这一篇 3 段以上就至少 3 页',
+    `${current.id} 共 ${current.total} 页`,
+  )
 
   const partial = Math.min(3, current.total - 1)
   await cdp.evaluate(
-    `window.localStorage.setItem('translation-practice.article-progress.v1', JSON.stringify({
-       ${JSON.stringify(current.id)}: { graded: ${JSON.stringify(Array.from({ length: partial }, (_, i) => i))}, updatedAt: new Date().toISOString() },
-     }))`,
+    `(() => {
+       window.localStorage.setItem('translation-practice.article-progress.v1', JSON.stringify({
+         ${JSON.stringify(current.id)}: { graded: ${JSON.stringify(Array.from({ length: partial }, (_, i) => i))}, updatedAt: new Date().toISOString() },
+       }));
+       // 把"上次停在哪一页"擦掉，模拟第一次来这台机器
+       window.localStorage.removeItem('translation-practice.last-view.v1');
+     })()`,
   )
   await cdp.send('Page.reload')
   await sleep(2200)
@@ -401,6 +452,46 @@ try {
     resumed.chips.join(' ｜ '),
   )
   check(resumed.hasResult === false, '接着做的那一页是待批改的（不会把上一页的结果搬过来）')
+
+  console.log('\n=== 7b. 记住了页号时，回到上次关掉的那一页（优先于"没批完的那一段"）===')
+  /*
+   * 直接把 last-view 写成"停在第 2 页"，同时把这一篇的第 1、2 页都算作已批——
+   * 于是两个来源给出**互相矛盾**的答案（记忆说第 2 页，进度说第 3 页），
+   * 谁优先一目了然。用户选的是"记住的那一页优先"。
+   */
+  await cdp.evaluate(
+    `(() => {
+       window.localStorage.setItem('translation-practice.article-progress.v1', JSON.stringify({
+         ${JSON.stringify(current.id)}: { graded: [0, 1], updatedAt: new Date().toISOString() },
+       }));
+       window.localStorage.setItem('translation-practice.last-view.v1', JSON.stringify({
+         tab: 'article',
+         exerciseId: ${JSON.stringify(current.id)},
+         origin: 'article-bank',
+         sectionIndex: 1,
+       }));
+     })()`,
+  )
+  await cdp.send('Page.reload')
+  await sleep(2200)
+  const remembered = await cdp.evaluate(
+    `(() => {
+       const hint = (document.querySelector('.section-nav .hint') || {}).textContent || '';
+       const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(hint);
+       return {
+         id: document.querySelector('.app')?.getAttribute('data-exercise-id') || '',
+         page: m ? Number(m[1]) : 1,
+         tab: document.querySelector('.mode-tab-active')?.textContent?.trim() ?? '',
+       };
+     })()`,
+  )
+  check(remembered.id === current.id, '回到记住的那一篇', remembered.id)
+  check(
+    remembered.page === 2,
+    `回到记住的那一页（第 ${remembered.page} 页；进度本会把人送到第 3 页）`,
+    JSON.stringify(remembered),
+  )
+  check(remembered.tab.includes('文章'), '也回到了记住的那一栏', remembered.tab)
 
   console.log('\n=== 8. 整篇练完：不主动显示它，列表里排到最后 ===')
   await cdp.evaluate(
@@ -435,7 +526,7 @@ try {
        cards: document.querySelectorAll('.article-card').length,
      })`,
   )
-  check(ordered.cards === 6, `这一格仍然是 6 篇（实际 ${ordered.cards}）`)
+  check(ordered.cards === 5, `这一格仍然是 5 篇（实际 ${ordered.cards}）`)
   check(
     ordered.doneAt.length === 1 && ordered.doneAt[0] === ordered.cards - 1,
     '练完的那一篇排在**最后**（"以后换一换留到最后"）',
@@ -448,6 +539,25 @@ try {
   )
   await cdp.evaluate("document.querySelector('.raw-modal-close')?.click()")
   await sleep(300)
+
+  console.log('\n=== 8b. 记住的是句子栏时，打开就落在句子栏 ===')
+  await cdp.evaluate(
+    `window.localStorage.setItem('translation-practice.last-view.v1', JSON.stringify({
+       tab: 'sentence', exerciseId: 'sentence-v2-ecology-2', origin: 'sentence', sectionIndex: 0,
+     }))`,
+  )
+  await cdp.send('Page.reload')
+  await sleep(2200)
+  const sentenceLanding = await cdp.evaluate(
+    `({
+       tab: document.querySelector('.mode-tab-active')?.textContent?.trim() ?? '',
+       id: document.querySelector('.app')?.getAttribute('data-exercise-id') || '',
+       hasInput: !!document.querySelector('.answer-input'),
+     })`,
+  )
+  check(sentenceLanding.tab.includes('句子'), `打开就落在句子栏（${sentenceLanding.tab}）`)
+  check(sentenceLanding.id === 'sentence-v2-ecology-2', `落在那一道句子题上（${sentenceLanding.id}）`)
+  check(sentenceLanding.hasInput === true, '照样能直接作答')
 
   console.log('\n=== 9. 页面错误 ===')
   check(cdp.errors.length === 0, '全程没有页面异常', cdp.errors.join(' ｜ '))

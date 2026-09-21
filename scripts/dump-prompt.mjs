@@ -66,7 +66,7 @@ const banner = (title) => `\n${'='.repeat(72)}\n${title}\n${'='.repeat(72)}\n`
 const exampleGeneration = {
   direction: 'zh-to-en',
   genre: 'news',
-  topic: '生态文明建设',
+  topic: '生态',
   mode: 'article',
 }
 const generationSystem = mod.buildGenerationSystemPrompt()
@@ -83,7 +83,7 @@ const output = [
   mod.buildRetryPrompt(['errors[4] 的 category 缺了这个字段。每一个 error 都必须有 category，取值只能是：…']),
   banner('AI 出题 · 系统提示（system）'),
   generationSystem,
-  banner('AI 出题 · 用户消息（user）—— 例：中译英 · 新闻 · 生态文明建设 · 文章题'),
+  banner('AI 出题 · 用户消息（user）—— 例：中译英 · 新闻 · 生态 · 文章题'),
   generationUser,
 ].join('\n')
 

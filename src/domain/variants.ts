@@ -17,7 +17,7 @@ export interface Variant {
 }
 
 export const EXERCISE_VARIANTS: Record<string, Variant[]> = {
-  // 文章 · 英译中 · 生态文明建设（原文约 300 词，符合官方 250–350 词）
+  // 文章 · 英译中 · 生态（原文约 300 词，符合官方 250–350 词）
   'article-001': [
     {
       source:
@@ -27,7 +27,7 @@ export const EXERCISE_VARIANTS: Record<string, Variant[]> = {
     },
   ],
 
-  // 文章 · 中译英 · 生态文明建设（原文约 270 字，符合官方 200–300 字）
+  // 文章 · 中译英 · 生态（原文约 270 字，符合官方 200–300 字）
   'article-002': [
     {
       source:
@@ -56,7 +56,7 @@ export const EXERCISE_VARIANTS: Record<string, Variant[]> = {
     },
   ],
 
-  // 句子 · 英译中 · 生态文明建设
+  // 句子 · 英译中 · 生态
   'sentence-001': [
     {
       source:

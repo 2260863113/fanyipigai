@@ -4,7 +4,7 @@
  * ## 为什么从文章切，而不是另备一套句子
  *
  * 用户的要求是「句子模式可以选领域（不能选文章），出题就从这些文章里面挑选句子」。
- * 好处是句子**自带真实语境**——它就是从某篇真实新闻里来的，不是为出题硬造的；
+ * 好处是句子**自带语境**——它就是从文章库里某一篇来的，不是为出题硬造的；
  * 而文章库本来就只有 48 篇，再单独维护一套句子会多一份要同步的数据。
  *
  * ## 为什么切句是本地做的、且必须确定性
@@ -13,21 +13,17 @@
  * 返回字符区间），不调 AI：不花钱、不用等，而且**同一个题号永远得到同一个句子**——
  * 否则用户写了一半切走，回来发现题目换了。
  *
- * ## 题号
+ * ## 题号为什么带 `v2`
  *
- * 形如 `sentence-<领域>-<第几条>`，例如 `sentence-ecology-3`。
- * 题号是本站的通用键（作答、结果、练习记录、收藏都按它索引），
- * 因此把领域与序号编进去，那些下游功能一行都不用改。
+ * 题号是本站的通用键（作答、批改结果、练习记录、收藏都按它索引）。
+ * 领域表从八个收敛到五个、文章库整批换成另一份材料之后，**同一个题号会指向另一句话**——
+ * 那样旧的作答与记录就会张冠李戴地挂在无关的句子上（"我明明译的不是这句"）。
+ * 因此题号里加了代次标记：`sentence-v2-<领域>-<第几条>`。
+ * 旧题号（`sentence-politics-3` 这类）一律解析失败，旧数据自然失效。
  */
 
 import type { Direction, Exercise } from './types'
-import {
-  ARTICLE_DOMAINS,
-  ARTICLE_EXCERPTS,
-  labelOfDomain,
-  type ArticleDomain,
-  type ArticleExcerpt,
-} from './articles'
+import { ARTICLE_DOMAINS, ARTICLES, labelOfDomain, type ArticleDomain, type Article } from './articles'
 import { splitSentences } from './compare'
 
 /** 句子题里，句子长于这个长度才值得练——太短的没有可译的东西。 */
@@ -44,7 +40,7 @@ export interface SentenceItem {
   /** 句子本身 */
   text: string
   /** 出自哪一篇（给界面显示来源用） */
-  from: ArticleExcerpt
+  from: Article
   /** 在该篇里的序号（第几句） */
   indexInArticle: number
 }
@@ -52,19 +48,19 @@ export interface SentenceItem {
 /**
  * 把一篇文章切成可用的句子。
  *
- * 只保留达到最短长度的句子：真实新闻里有不少几字的小标题式短句
+ * 只保留达到最短长度的句子：真实材料里也有不少几字的小标题式短句
  * （"生产稳。"这种），拿它们当翻译题没有训练价值。
  */
-function sentencesOfArticle(article: ArticleExcerpt): SentenceItem[] {
-  return splitSentences(article.excerpt)
-    .map(({ start, end }) => article.excerpt.slice(start, end).trim())
+function sentencesOfArticle(article: Article): SentenceItem[] {
+  return splitSentences(article.text)
+    .map(({ start, end }) => article.text.slice(start, end).trim())
     .filter((text) => [...text].length >= MIN_SENTENCE_CHARS)
     .map((text, indexInArticle) => ({ text, from: article, indexInArticle }))
 }
 
 /** 某个领域下的文章（各方向都要）。 */
-function articlesOfDomainAllDirections(domain: ArticleDomain): readonly ArticleExcerpt[] {
-  return ARTICLE_EXCERPTS.filter((article) => article.domain === domain)
+function articlesOfDomainAllDirections(domain: ArticleDomain): readonly Article[] {
+  return ARTICLES.filter((article) => article.domain === domain)
 }
 
 /**
@@ -76,9 +72,9 @@ export function sentencesOfDomain(domain: ArticleDomain): readonly SentenceItem[
   return articlesOfDomainAllDirections(domain).flatMap(sentencesOfArticle)
 }
 
-/** 从题号解析出领域与序号；不是句子库的题号就返回 null。 */
+/** 从题号解析出领域与序号；不是句子库当前代次的题号就返回 null（旧题号就此失效）。 */
 export function parseSentenceExerciseId(id: string): { domain: ArticleDomain; index: number } | null {
-  const match = /^sentence-([a-z]+)-(\d+)$/.exec(id)
+  const match = /^sentence-v2-([a-z]+)-(\d+)$/.exec(id)
   if (!match) return null
   const domain = match[1] as ArticleDomain
   if (!isDomain(domain)) return null
@@ -114,7 +110,7 @@ function directionOfSentence(text: string): Direction {
 }
 
 export function sentenceExerciseId(domain: ArticleDomain, index: number): string {
-  return `sentence-${domain}-${index}`
+  return `sentence-v2-${domain}-${index}`
 }
 
 /**
@@ -128,7 +124,7 @@ export function exerciseOfSentence(id: string, item: SentenceItem): Exercise {
     id,
     direction: directionOfSentence(item.text),
     mode: 'sentence',
-    // 文章都来自新闻媒体，语体按新闻编译算（只影响提示词里的语体要求）
+    // 文章库的材料是报道体文字，语体按新闻编译算（只影响提示词里的语体要求）
     genre: 'news',
     topic: labelOfDomain(item.from.domain),
     source: item.text,

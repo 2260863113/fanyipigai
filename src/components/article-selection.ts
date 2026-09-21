@@ -1,34 +1,31 @@
 /**
- * 文章库那两栏选择（领域 + 方向）的本地存储。
+ * 文章栏那两栏选择（领域 + 方向）的本地存储。
  *
  * 为什么单独一个文件：与 settings.ts / favorites.ts / custom.ts 同一个存法
  * （localStorage + 形状校验 + 存不下就算了），放一起便于对照；
  * 直接写在组件里会让"存坏了怎么办"这件事散落在界面代码中。
  *
- * 存的东西很少——只有"你上次停在哪一格"。文章正文与清单随代码进仓库，
- * 本来就不会丢；每篇的作答与批改另有其存储（练习记录）。见 ADR 0007。
+ * 存的东西很少——只有"你上次选的是哪一格"。文章正文与清单随代码进仓库，
+ * 本来就不会丢；每篇的作答与批改另有其存储（练习记录）；"上次看到哪一篇、第几页"
+ * 另有其存储（`last-view.ts`），因为那件事对句子栏、术语栏同样成立。
  */
 
 import { ARTICLE_DOMAINS, type ArticleDomain } from '../domain/articles'
 import type { Direction } from '../domain/types'
 
-const STORAGE_KEY = 'translation-practice.article-selection.v1'
+const STORAGE_KEY = 'translation-practice.article-selection.v2'
 
 export interface ArticleSelection {
   domain: ArticleDomain
   direction: Direction
-  /**
-   * 上次看的是哪一篇（题号）。
-   *
-   * 为什么要记住它：方向与文章是**配套**的——用户选了「中译英」，
-   * 下次打开就该还在中文那一篇上，而不是又回到默认的英文第一篇。
-   * 存的不只是方向，因为"中译英"在八个领域里各有三篇，光有方向定不出是哪一篇。
-   */
-  articleId?: string
 }
 
-/** 打开页面时的落点：某一格有文章就用它，否则用第一格。 */
-export const DEFAULT_SELECTION: ArticleSelection = { domain: 'economy', direction: 'en-to-zh' }
+/**
+ * 打开页面时的落点。**只作为兜底**：正常路径由 `last-view.ts` 记住的那一格说了算，
+ * 这一份管的是"没记过 / 记的那一道已经不在了"时落在哪个格子。
+ * 按领域表的第一个板块 + 英译中（用户要求：默认落在第一个领域社会 + 英译中）。
+ */
+export const DEFAULT_SELECTION: ArticleSelection = { domain: ARTICLE_DOMAINS[0].id, direction: 'en-to-zh' }
 
 function isDomain(value: unknown): value is ArticleDomain {
   return typeof value === 'string' && ARTICLE_DOMAINS.some((domain) => domain.id === value)
@@ -50,8 +47,6 @@ export function loadSelection(): ArticleSelection {
     return {
       domain: isDomain(parsed.domain) ? parsed.domain : DEFAULT_SELECTION.domain,
       direction: isDirection(parsed.direction) ? parsed.direction : DEFAULT_SELECTION.direction,
-      // 题号只是个线索：真正用它之前会拿 articleById 核一遍，不存在就当没有
-      ...(typeof parsed.articleId === 'string' && parsed.articleId ? { articleId: parsed.articleId } : {}),
     }
   } catch {
     // 无痕模式、localStorage 被禁用、内容不是 JSON——一律当作"没存过"

@@ -19,7 +19,7 @@
  * 提交成功才记，作废就撤——进度于是永远等于"现在真的批好过哪几页"。
  */
 
-import type { ArticleExcerpt } from '../domain/articles'
+import type { Article } from '../domain/articles'
 
 const STORAGE_KEY = 'translation-practice.article-progress.v1'
 
@@ -118,12 +118,12 @@ export function gradedCount(map: ProgressMap, exerciseId: string, totalPages: nu
  * 同一档里保持文章库自己的顺序，免得每次打开都在跳。
  */
 export function orderForPicker(
-  articles: readonly ArticleExcerpt[],
+  articles: readonly Article[],
   map: ProgressMap,
-  pageCountOf: (article: ArticleExcerpt) => number,
-): ArticleExcerpt[] {
-  const unfinished: ArticleExcerpt[] = []
-  const finished: ArticleExcerpt[] = []
+  pageCountOf: (article: Article) => number,
+): Article[] {
+  const unfinished: Article[] = []
+  const finished: Article[] = []
   for (const article of articles) {
     if (isCompleted(map, article.id, pageCountOf(article))) finished.push(article)
     else unfinished.push(article)

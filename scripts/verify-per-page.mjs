@@ -286,9 +286,15 @@ try {
     await cdp.evaluate(
       `(() => {
          window.localStorage.setItem(
-           'translation-practice.article-selection.v1',
+           'translation-practice.article-selection.v2',
            JSON.stringify({ domain: 'economy', direction: 'zh-to-en' }),
          );
+         /*
+          * 还要把"上次停在哪一栏/哪一题/第几页"擦掉（见 components/last-view.ts）：
+          * 它比这张领域/方向表**优先级更高**，留着它的话落点是"上次那一篇"，
+          * 这条检查就验不到"记住的方向"了。
+          */
+         window.localStorage.removeItem('translation-practice.last-view.v1');
          return true;
        })()`,
     )
@@ -307,7 +313,7 @@ try {
        })`,
     )
     // 清掉这个"上次的选择"，后面那些检查要在默认落点上跑
-    await cdp.evaluate("(() => { window.localStorage.removeItem('translation-practice.article-selection.v1'); return true })()")
+    await cdp.evaluate("(() => { window.localStorage.removeItem('translation-practice.article-selection.v2'); window.localStorage.removeItem('translation-practice.last-view.v1'); return true })()")
     await cdp.send('Page.navigate', { url: `${base}/` })
     ready = false
     for (let i = 0; i < 40 && !ready; i += 1) {

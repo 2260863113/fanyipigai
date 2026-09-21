@@ -53,7 +53,7 @@ const replaceCase: MockCase = {
     direction: 'en-to-zh',
     mode: 'sentence',
     genre: 'news',
-    topic: '生态文明建设',
+    topic: '生态',
     source:
       'Ecological civilization is a form of human progress in which people and nature coexist in harmony, and it has become an essential component of China’s development strategy.',
     referenceTranslation:
@@ -82,7 +82,7 @@ const insertCase: MockCase = {
     direction: 'zh-to-en',
     mode: 'sentence',
     genre: 'political',
-    topic: '生态文明建设',
+    topic: '生态',
     source: '中国坚持绿水青山就是金山银山的理念，把生态文明建设放在突出地位。',
     referenceTranslation:
       'China upholds the vision that clear waters and lush mountains are invaluable assets, and gives ecological conservation a prominent place.',
@@ -110,7 +110,7 @@ const deleteCase: MockCase = {
     direction: 'en-to-zh',
     mode: 'sentence',
     genre: 'news',
-    topic: '生态文明建设',
+    topic: '生态',
     source:
       'A decade of ecological restoration has turned a once barren coastline into a popular destination for migratory birds, drawing visitors from across the country.',
     referenceTranslation:
@@ -196,7 +196,7 @@ const termCase: MockCase = {
     direction: 'zh-to-en',
     mode: 'term',
     genre: 'political',
-    topic: '生态文明建设',
+    topic: '生态',
     source: '生态文明',
     referenceTranslation: 'ecological civilization',
     suggestedMinutes: 1,
@@ -222,7 +222,7 @@ const termCompareCase: MockCase = {
     direction: 'en-to-zh',
     mode: 'term',
     genre: 'political',
-    topic: '生态文明建设',
+    topic: '生态',
     source: 'carbon neutrality',
     referenceTranslation: '碳中和',
     suggestedMinutes: 1,
@@ -248,7 +248,7 @@ const paragraphCase: MockCase = {
     direction: 'zh-to-en',
     mode: 'paragraph',
     genre: 'news',
-    topic: '生态文明建设',
+    topic: '生态',
     source:
       '过去十年，中国累计完成营造林超过七千万公顷，荒漠化和沙化土地面积连续多年净减少。三北工程区森林覆盖率由百分之五提高到近百分之十四，重点治理区的生态状况明显改善。与此同时，各地探索把生态优势转化为发展优势，生态旅游、林下经济等新业态带动了数百万农牧民增收。',
     referenceTranslation:
@@ -307,7 +307,7 @@ const articleEnCase: MockCase = {
     direction: 'en-to-zh',
     mode: 'article',
     genre: 'news',
-    topic: '生态文明建设',
+    topic: '生态',
     source:
       'Over the past decade, China has added more installed solar capacity than the rest of the world combined, and it now accounts for roughly half of global production of solar panels, wind turbines and lithium-ion batteries. The scale of that build-out has pushed down costs worldwide: the price of a solar module has fallen by more than eighty per cent since 2015, a decline that has made renewable power the cheapest source of new electricity in most markets.\n\nYet the transition remains uneven. Coal still supplies well over half of China’s electricity, and new coal plants were approved at a rapid pace in recent years to guarantee supply during peak demand. Grid operators also struggle to absorb the variable output of wind and solar farms, and curtailment — the deliberate discarding of renewable generation — persists in several provinces where transmission lines have not kept up.\n\nThe government has responded on two fronts. It is building ultra-high-voltage lines to move power from sparsely populated western regions to coastal cities, and it is expanding storage capacity so that surplus daytime generation can be used after dark. Officials describe these investments as essential to energy security rather than a departure from climate goals.\n\nAnalysts remain divided on the outlook. Some argue that the sheer volume of clean manufacturing capacity makes deeper cuts in emissions all but inevitable. Others caution that without a faster phase-down of coal, the country risks locking in emissions for decades, no matter how much solar and wind it installs.',
     referenceTranslation:
@@ -336,7 +336,7 @@ const articleZhCase: MockCase = {
     direction: 'zh-to-en',
     mode: 'article',
     genre: 'political',
-    topic: '生态文明建设',
+    topic: '生态',
     source:
       '生态文明建设是关系中华民族永续发展的根本大计。党的十八大以来，我们把生态文明建设作为统筹推进“五位一体”总体布局的重要内容，开展了一系列根本性、开创性、长远性工作，推动生态环境保护发生历史性、转折性、全局性变化。\n\n我们坚持绿水青山就是金山银山的理念，坚持山水林田湖草沙一体化保护和系统治理，生态文明制度体系更加健全，绿色、循环、低碳发展迈出坚实步伐，生态环境质量明显改善，美丽中国建设迈出重大步伐。\n\n同时也要看到，生态环境保护任务依然艰巨，结构性、根源性、趋势性压力尚未根本缓解。必须牢固树立和践行绿水青山就是金山银山的理念，站在人与自然和谐共生的高度谋划发展，协同推进降碳、减污、扩绿、增长，推进生态优先、节约集约、绿色低碳发展。',
     referenceTranslation:

@@ -4,6 +4,18 @@
  * 顶部按钮的取舍写在这里：**自己贴的那一篇不给「换一换」「AI 出题」**——
  * 换掉就不是他自己贴的那篇了，只留一个「重新贴一篇」。
  * 内置题才有备选篇目与 AI 现出的题，因此那两个按钮也在这一栏。
+ *
+ * ## 「对照」按钮（用户要求）
+ *
+ * 标题栏里那颗按钮把当前这一页**铺成「一段原文、一段译文」交替**，再点一下回到只看原文。
+ * 它在**所有带参考译文的题**上都出现（文章库、内置示例题、AI 出题的题），
+ * 而不是只有文章栏才有——同一个"看参考译文"的动作在全站只有一套交互。
+ *
+ * 因此原先正文下面那个可折叠的「参考译文」块**删掉了**：它和这颗按钮是同一件事的两种做法，
+ * 留着只会让人在两处找。参考译文**只给人看、从不发给模型**（ADR 0003）。
+ *
+ * 铺出来的"一对"是**自然段**级别的：一页可能由两个短自然段并成，
+ * 那时就是 A1 / T1 / A2 / T2 四行，谁对着谁一眼可见。
  */
 
 import type { JSX } from 'react'
@@ -25,7 +37,9 @@ export function SourcePane({
   judging,
   currentSection,
   currentSource,
-  currentReference,
+  currentPairs,
+  compare,
+  onToggleCompare,
   onRepaste,
   onRotate,
   rotateTitle,
@@ -53,7 +67,14 @@ export function SourcePane({
   judging: boolean
   currentSection: Section | undefined
   currentSource: string
-  currentReference: string
+  /**
+   * 当前这一页**逐段配好**的原文与译文（原文栏的「对照」按它一段一段地铺）。
+   * 没有参考译文的题（自己贴的、句子、术语）是空的，那颗按钮也就不出现。
+   */
+  currentPairs: ReadonlyArray<{ source: string; reference: string }>
+  /** 现在看的是原文还是对照（一段原文、一段译文交替） */
+  compare: boolean
+  onToggleCompare: (next: boolean) => void
   onRepaste: () => void
   onRotate: () => void
   /** 「换一换」的悬停说明；文章栏换的是"下一篇"，说法与换原文不同 */
@@ -72,6 +93,10 @@ export function SourcePane({
    */
   terms?: readonly Term[]
 }): JSX.Element {
+  /** 这一页确实有译文可对照时才给按钮（术语题与自定义题都没有） */
+  const pairCandidates = currentPairs.filter((pair) => pair.reference.length > 0)
+  const canCompare = mode !== 'term' && pairCandidates.length > 0
+
   return (
     <section className="pane pane-source">
       <header className="pane-head">
@@ -137,6 +162,26 @@ export function SourcePane({
               </button>
             </>
           )}
+          {/*
+            「对照译文」排在"换一篇原文"那一组之后（用户早先定过：选择文章要当这一栏的头一组按钮，
+            因此不能插到它前面），又排在两个信息芯片之前——它是一个控件，
+            而"已批 N 页 / 官方建议 30 分钟"只是如实告知。
+          */}
+          {canCompare && (
+            <button
+              type="button"
+              className={compare ? 'btn btn-ghost btn-ghost-on' : 'btn btn-ghost'}
+              onClick={() => onToggleCompare(!compare)}
+              aria-pressed={compare}
+              title={
+                compare
+                  ? '回到只看原文（译文不再铺在下面）'
+                  : '把这一页铺成「一段原文、一段译文」交替对照，方便逐段比对自己译得差在哪'
+              }
+            >
+              对照译文
+            </button>
+          )}
           {multiSection && (
             <span className="chip" title="逐页批改：点「下一页」时，刚写完的那一页会自动交去批改">
               已批 {gradedPages} 页
@@ -179,16 +224,18 @@ export function SourcePane({
               </li>
             ))}
           </ol>
+        ) : compare && canCompare ? (
+          <div className="pair-list">
+            {currentPairs.map((pair, index) => (
+              <div className="pair" key={index}>
+                <p className="pair-source">{pair.source}</p>
+                {pair.reference.length > 0 && <p className="pair-reference">{pair.reference}</p>}
+              </div>
+            ))}
+          </div>
         ) : (
           <p className="source-text">{multiSection ? (currentSection?.text ?? currentSource) : currentSource}</p>
         )}
-        {/* 自己贴的题没有参考译文，那一栏就别摆个空壳子 */}
-        {currentReference ? (
-          <details className="reference">
-            <summary>参考译文（随题固定，可折叠）</summary>
-            <p>{currentReference}</p>
-          </details>
-        ) : null}
 
         {/*
           翻页导航在**原文这一栏**（用户要求「放在原文左边一栏去」）。

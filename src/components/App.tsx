@@ -6,14 +6,13 @@ import {
   type Exercise,
   type Direction,
   type Genre,
-  type Mode,
   type PolishLevel,
 } from '../domain/types'
 import { validateCorrection } from '../domain/validate'
 import { buildLayout, type AnnotatedLayout } from '../domain/layout'
 import { toAiShape } from '../domain/parse'
 import { requestGeneration, requestJudgment, type JudgeSectionInput } from '../domain/client'
-import { paginateArticle, type Section } from '../domain/sections'
+import { paginateArticle, type ArticlePage } from '../domain/sections'
 import { variantsFor } from '../domain/variants'
 import { GENERATION_TOPICS, type GeneratedExercise } from '../domain/generate'
 import type { JudgeFailureKind } from '../domain/ai'
@@ -52,7 +51,7 @@ import {
   sentenceExerciseId,
   sentenceForExerciseId,
 } from '../domain/sentence-exercise'
-import { articleById, ARTICLE_EXCERPTS, articlesOf } from '../domain/articles'
+import { articleById, ARTICLES, articlesOf } from '../domain/articles'
 import { exerciseOfArticle } from '../domain/article-exercise'
 import {
   answeredTermCount,
@@ -74,10 +73,11 @@ import {
   orderForPicker,
   type ProgressMap,
 } from './article-progress'
-import { pageCountOf } from '../domain/exercise-source'
+import { exerciseSourceOf, pageCountOf } from '../domain/exercise-source'
 import { loadRecords, saveRecords } from './records-store'
+import { loadLastView, saveLastView, type ExerciseOrigin, type ViewTab } from './last-view'
 
-type Tab = Mode | 'records' | 'custom' | 'favorites'
+type Tab = ViewTab
 
 interface JudgeError {
   kind: JudgeFailureKind | 'bad-request'
@@ -85,8 +85,8 @@ interface JudgeError {
 }
 
 const ALL_CASES = MOCK_CASES
-/** 文章库的第一篇：启动时的落点（文章栏由文章库供题，见 ADR 0007） */
-const FIRST_ARTICLE = ARTICLE_EXCERPTS[0]
+/** 文章库的那几篇随代码进仓库（见 ADR 0010）；这里只在"文章库整个空了"时兜底 */
+const FIRST_ARTICLE = ARTICLES[0]
 const EMPTY_GENERATED: GeneratedExercise[] = []
 const EMPTY_LAYOUT: AnnotatedLayout = { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 }
 
@@ -97,44 +97,62 @@ interface LastInTab {
 }
 
 /**
- * 一道题是从哪里来的。
+ * 把"记下来的那道题"按**来源**确认一遍，确实还在就返回题号，否则 null。
  *
- * 光记题号不够：文章栏的题号可能是 `art-…`（文章库）、`article-001`（内置题库）、
- * AI 现出的 `gen-…`，也可能是自己贴的 `custom-…`。按来源重新解析一遍，
- * 才能保证"取回来的确实是当初那一篇"，而不是某个撞了号的别的东西。
+ * 光有题号不够（见 last-view.ts）：文章栏的题号可能是文章库、内置题库、AI 现出的，
+ * 也可能是自己贴的，四者共用同一个编号空间。不确认就会出现
+ * "落在一道已经不存在的题上"——那比换一篇更糟：界面会空着。
  */
-type ExerciseOrigin = 'article-bank' | 'builtin' | 'custom' | 'sentence' | 'term'
+function resolveStoredExercise(id: string, origin: ExerciseOrigin, customId: string | null): string | null {
+  if (origin === 'article-bank') return articleById(id) ? id : null
+  if (origin === 'custom') return customId === id ? id : null
+  if (origin === 'builtin') return ALL_CASES.some((item) => item.exercise.id === id) ? id : null
+  // 句子题与术语题由数据表现算，题号本身就能确认（解析不出来就等于不存在）
+  if (origin === 'sentence') return exerciseSourceOf(id)?.mode === 'sentence' ? id : null
+  if (origin === 'term') return exerciseSourceOf(id)?.mode === 'term' ? id : null
+  return null
+}
 
 export function App(): JSX.Element {
   const firstCase = ALL_CASES[0]
   if (!firstCase) throw new Error('题库为空')
 
   /**
-   * 启动时落在「文章」栏 —— 而文章栏由**文章库**供题（见 ADR 0007）。
+   * 启动落点（用户要求：「个性化记忆，下一次落到上一次关掉时的界面」）。
    *
-   * 启动题号**必须与上次选的方向配套**（用户报过："文章模式，在中译英的选项下，
-   * 进去后要显示中译英的原文，不要显示英译中的"）。
-   * 原先固定取文章库第一篇（`ARTICLE_EXCERPTS[0]`，那是英文的），
-   * 于是上次选了「中译英」的用户一进来看到的还是英文原文——方向和原文对不上。
+   * 顺序是：
+   *   1. **上次关掉时的那一栏、那一道题、那一页**（`last-view.ts`）——
+   *      按来源确认那道题还在，取不回来就当没记过；
+   *   2. 那一道如果是**整篇练完并批改过的文章题**，按老规矩**不主动打开它**
+   *      （用户之前明确要求过：练完的还留在下拉里、也还能点开，只是不再自动落在它上面），
+   *      改而落到同一格里第一篇没练完的；
+   *   3. 都没有就退回"上次选的那一格 + 英译中"的第一篇；
+   *   4. 文章库整个为空时退回内置题库，保证界面照样能开。
    *
-   * 现在的顺序：上次那一篇（**若还没练完**）→ 那一格里第一篇没练完的 → 那一格第一篇
-   * → 文章库第一篇。文章库为空时退回内置题库，保证界面照样能开。
+   * 第 2 条里那句"文章题"是必须的：句子题、术语题提交一次也会在进度里留下记录，
+   * 但对它们来说没有"整篇练完"这回事，不该被这条规矩拦在外面。
    *
-   * ⚠️ 中间那句"若还没练完"是用户要求的：「整篇翻译完并批改的文章，
-   * 后续打开网页**不主动显示**它的内容」——练完的那一篇还留在下拉里、也还能点开，
-   * 只是不再自动落在它上面。
+   * ⚠️ 落点里的 `sectionIndex` 是 `number | null`，null 表示**没记住页号**。
+   * 这一位不能省：兜底那条路（"同一格里第一篇没练完的"）给出的是**哪一篇**，
+   * 没说"第几页"；把它当成"记住的第 0 页"会盖掉"从没批完的那一段继续"这条老规矩
+   * （实测过：进度里已批 3 页，打开却回到第 1 页）。
    */
   const startupProgress = loadProgress()
   const startup = (() => {
+    const view = loadLastView()
+    if (view && view.tab !== 'records' && view.tab !== 'favorites') {
+      const id = resolveStoredExercise(view.exerciseId, view.origin, loadCustom()?.id ?? null)
+      const isFinishedArticle = id !== null && exerciseSourceOf(id)?.mode === 'article' && isCompleted(startupProgress, id, pageCountOf(id))
+      if (id && !isFinishedArticle) return { tab: view.tab, exerciseId: id, sectionIndex: view.sectionIndex }
+    }
     const remembered = loadSelection()
-    const saved = remembered.articleId ? articleById(remembered.articleId) : null
-    if (saved && !isCompleted(startupProgress, saved.id, pageCountOf(saved.id))) return saved
     const inSlot = articlesOf(remembered.domain, remembered.direction)
     const unfinished = inSlot.find((item) => !isCompleted(startupProgress, item.id, pageCountOf(item.id)))
-    return unfinished ?? inSlot[0] ?? FIRST_ARTICLE
+    const article = unfinished ?? inSlot[0] ?? FIRST_ARTICLE
+    return article ? { tab: 'article' as Tab, exerciseId: article.id, sectionIndex: null } : null
   })()
-  const [tab, setTab] = useState<Tab>(startup ? 'article' : firstCase.exercise.mode)
-  const [exerciseId, setExerciseId] = useState(startup ? startup.id : firstCase.exercise.id)
+  const [tab, setTab] = useState<Tab>(startup ? startup.tab : firstCase.exercise.mode)
+  const [exerciseId, setExerciseId] = useState(startup ? startup.exerciseId : firstCase.exercise.id)
 
   /**
    * 文章进度（哪几页已经批过）——存在浏览器里，刷新之后还在。
@@ -166,6 +184,11 @@ export function App(): JSX.Element {
   const [genBusy, setGenBusy] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
   const [level, setLevel] = useState<PolishLevel>('polish')
+  /**
+   * 原文栏看的是原文还是「对照」，纯界面状态（不落盘）。
+   * 默认关：用户打开一道题的默认视线是原文本身，译文要自己按出来。
+   */
+  const [compareSource, setCompareSource] = useState(false)
 
   const [judging, setJudging] = useState(false)
   const [error, setError] = useState<JudgeError | null>(null)
@@ -197,15 +220,21 @@ export function App(): JSX.Element {
   /** 当前在做的是不是文章库里的一篇 */
   const activeArticle = useMemo(() => articleById(exerciseId), [exerciseId])
   /*
-   * 把"当前这一篇"同步进文章选择里（只在真的对不上时写一次）。
+   * 把"当前这一篇所属的格子"同步进文章选择里（只在真的对不上时写一次）。
    *
-   * 用途是**下次打开回到这一篇**：换文章的入口有好几个（方向切换、选文章弹窗、
-   * 从练习记录跳回来、启动落点……），与其在每个入口各记一遍、漏一个就前功尽弃，
-   * 不如在这里统一对齐——"当前这一篇"与"选择里记的那一篇"本来就是同一个东西。
+   * 用途：文章栏那两个下拉必须显示**当前这一篇**所在的领域与方向。
+   * 进入文章题的入口有好几个（方向切换、选文章弹窗、从练习记录跳回来、启动落点……），
+   * 与其在每个入口各对齐一遍、漏一个就显示错格子，不如在这里统一对齐。
    * 只在不等时写，因此不会来回触发；写的是 localStorage，不影响渲染结果。
+   *
+   * 注意这里**只同步领域与方向**："上次看到哪一篇、第几页"由 last-view.ts 管，
+   * 它对句子栏、术语栏同样成立，不该塞进这个只管文章栏下拉的文件里。
    */
-  if (activeArticle && articleSelection.articleId !== activeArticle.id) {
-    const next: ArticleSelection = { ...articleSelection, articleId: activeArticle.id }
+  if (
+    activeArticle &&
+    (articleSelection.domain !== activeArticle.domain || articleSelection.direction !== activeArticle.direction)
+  ) {
+    const next: ArticleSelection = { domain: activeArticle.domain, direction: activeArticle.direction }
     setArticleSelection(next)
     saveSelection(next)
   }
@@ -272,10 +301,34 @@ export function App(): JSX.Element {
    * 下次打开网站就**从没有翻译完成的那一段继续**」。页数由原文现算（与练习页同一套分页），
    * 页号则来自落盘的进度；会话一旦真的建起来（用户动手了），页号就归它自己管，
    * 这个初始值不再起作用——所以它只影响"刚打开的那一眼"。
+   *
+   * 两个来源，**记住的那一页优先**：
+   *   1. 上次关掉网页时停在哪一页（用户要求"下一次落到上一次关掉时的界面"）；
+   *   2. 没有记住时退回"第一个还没批过的页"（用户要求"从没有翻译完成的那一段继续"）。
+   * 页号一律夹在有效范围内：题库换了、页数变了之后，旧页号不该把人送到一篇空白上。
    */
-  const resumeIndex = firstUngraded(progress, exercise.id, pageCountOf(exercise.id))
+  const totalPages = Math.max(1, pageCountOf(exercise.id))
+  const rememberedPage = startup && startup.exerciseId === exercise.id ? startup.sectionIndex : null
+  const resumeIndex = Math.min(
+    rememberedPage ?? firstUngraded(progress, exercise.id, totalPages),
+    totalPages - 1,
+  )
   const session = sessionOf(sessions, exercise.id, resumeIndex)
   const { drafts, sectionIndex, pages, unlocked, openResults } = session
+
+  /*
+   * 记下"现在停在哪"（栏 + 题 + 来源 + 页），下次打开落回这里。
+   *
+   * 为什么写在渲染里而不是每个入口各记一遍：切栏、换题、翻页、从记录跳回来……
+   * 入口有七八个，逐个补记漏一个就前功尽弃（`lastInTabRef` 上已经踩过一次）。
+   * 内容没变时 `saveLastView` 一个字都不写（见 last-view.ts 的比对），因此这里不贵。
+   *
+   * 「记录」与「收藏」两栏不记：那是去"看别的东西"，不是练习位置——
+   * 用户从记录页关掉网页，下次该回到他当时练的那道题，而不是回到记录页。
+   */
+  if (tab !== 'records' && tab !== 'favorites') {
+    saveLastView({ tab, exerciseId: exercise.id, origin, sectionIndex })
+  }
   /*
    * 当前这一页的批改结果；没批过就是 undefined。
    *
@@ -316,22 +369,24 @@ export function App(): JSX.Element {
   const currentGenre = current?.genre ?? exercise.genre
 
   /**
-   * 原文按**页**切分（不是按自然段）。
+   * 原文按**页**切分——一页 = 一个自然段（不足 50 单位的自然段与相邻段合并）。
    *
-   * 用户要求「文章模式仍然切割成段落，但是要求保证每一页在 100-200 字，
-   * 如果一段不足一百字，那么一页显示两段甚至三段，直到超过 100 字；
-   * 如果某一段超过 300 字，那么合理分割将其变成两段」——规则本身在
+   * 用户要求「把每个文章进行分段，文章模式下，一段一段的出」，规则本身在
    * domain/sections.ts 的 paginateArticle 里，这里只是用它。
    *
    * 单段题（句子/段落/术语/自己贴的短题）本来就只有一段，于是原样得到一页 ✓。
+   * 参考译文一起传进去：分页顺手把每一页的**逐段译文对**也算好了，
+   * 原文栏的「对照」直接拿它铺"一段原文、一段译文"。
    */
-  const sourceSections: Section[] = useMemo(
-    () => paginateArticle(currentSource, exercise.direction),
-    [currentSource, exercise.direction],
+  const sourceSections: ArticlePage[] = useMemo(
+    () => paginateArticle(currentSource, currentReference, exercise.direction),
+    [currentSource, currentReference, exercise.direction],
   )
   const multiSection = sourceSections.length > 1
   const currentSection = sourceSections[sectionIndex] ?? sourceSections[0]
   const currentAnswer = drafts[sectionIndex] ?? ''
+  /** 这一页逐段配好的原文/译文对（「对照」用它；没有参考译文时是空的） */
+  const currentPairs = currentSection?.pairs ?? []
 
   /*
    * 这一页在"逐页批改"里的四档。按钮文案与翻页行为全由它推出来，
@@ -1017,15 +1072,12 @@ export function App(): JSX.Element {
               onChange={(next) => {
                 /*
                  * 换领域或换方向时自动落到那一格的第一篇，免得停在上一个格子那篇上让人以为没生效。
-                 *
-                 * ⚠️ 这里**必须同时更新 articleId**（用户报过："选了中译英，进去还是英文原文"）。
-                 * 只存 domain/direction 的话，下次打开会去猜一篇，而"猜"出来的很可能是
-                 * 另一个方向的文章——方向与原文就对不上了。选中的那一篇本身就是状态的一部分。
+                 * 落点只存在这一格的选择里（领域 + 方向），"上次看的是哪一篇"由 last-view.ts 记，
+                 * 因此切过去之后自然会记住这一篇。
                  */
+                setArticleSelection(next)
+                saveSelection(next)
                 const first = articlesOf(next.domain, next.direction)[0]
-                const withArticle: ArticleSelection = first ? { ...next, articleId: first.id } : next
-                setArticleSelection(withArticle)
-                saveSelection(withArticle)
                 if (first) selectExercise(first.id)
                 // 用户点领域是为了挑文章，所以顺手把选文章的弹窗打开（方向切换不打开）
                 if (next.domain !== articleSelection.domain) setArticlePickerOpen(true)
@@ -1078,7 +1130,9 @@ export function App(): JSX.Element {
               judging={judging}
               currentSection={currentSection}
               currentSource={currentSource}
-              currentReference={currentReference}
+              currentPairs={currentPairs}
+              compare={compareSource}
+              onToggleCompare={setCompareSource}
               onSectionChange={(next) => void goToSection(next)}
               {...(isTermExercise ? { terms: activeTerms } : null)}
               {...(tab === 'article' ? { onPickArticle: () => setArticlePickerOpen(true) } : null)}
@@ -1293,18 +1347,14 @@ export function App(): JSX.Element {
           activeArticleId={activeArticle ? activeArticle.id : null}
           progress={progress}
           onSwitchDirection={(direction) => {
-            const next = { ...articleSelection, direction }
+            const next: ArticleSelection = { domain: articleSelection.domain, direction }
+            setArticleSelection(next)
+            saveSelection(next)
             const first = articlesOf(next.domain, direction)[0]
-            const withArticle: ArticleSelection = first ? { ...next, articleId: first.id } : next
-            setArticleSelection(withArticle)
-            saveSelection(withArticle)
             if (first) selectExercise(first.id)
           }}
           onPick={(article) => {
-            // 选了哪一篇也要存下来：下次打开直接回到它（方向与篇目是配套的）
-            const withArticle: ArticleSelection = { ...articleSelection, articleId: article.id }
-            setArticleSelection(withArticle)
-            saveSelection(withArticle)
+            // 选了哪一篇就切过去；"上次看的是哪一篇、第几页"由 last-view.ts 记，不在这里存
             selectExercise(article.id)
             setArticlePickerOpen(false)
           }}

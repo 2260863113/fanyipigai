@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react'
 import type { Correction, Direction, Mode, PolishLevel } from '../domain/types'
 import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
-import { pageSourceOf } from '../domain/exercise-source'
+import { pageReferenceOf, pageSourceOf } from '../domain/exercise-source'
 import type { ValidatedCorrection } from '../domain/validate'
 import { scoreCorrection } from '../domain/scoring'
 import { AnnotationList } from './AnnotationList'
@@ -79,6 +79,14 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
   const source = openRecord ? pageSourceOf(openRecord.exerciseId, openRecord.sectionIndex) : ''
   /** 文章题才有分页概念，界面上如实标出是第几页 */
   const sourceIsPage = openRecord ? openRecord.mode === 'article' : false
+  /*
+   * 这一段对应的**参考译文**（用户要求：记录页也显示）。
+   *
+   * 复盘时最有用的一句话就是"我当时这么译，标准译文是这么写"——参考译文存在的意义之一
+   * 就是给用户自查（ADR 0003）。文章库自带逐段对齐的译文，因此这一段查得到；
+   * 自己贴的题、句子题、术语题没有译文，这一块就不出现。
+   */
+  const reference = openRecord ? pageReferenceOf(openRecord.exerciseId, openRecord.sectionIndex) : ''
 
   /*
    * 左右两屏的边界也能拖（与练习页同一套 useSplitDrag）。
@@ -225,6 +233,16 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
               </header>
               <div className="pane-body">
                 <p className="source-text">{source || '（未保存题干）'}</p>
+                {/*
+                  参考译文折叠在原文下面（练习页的那份折叠块已换成标题栏的「对照」按钮，
+                  记录页是只读的复盘视图，折叠着更省地方，因此这里仍然用折叠块）。
+                */}
+                {reference.length > 0 && (
+                  <details className="reference">
+                    <summary>参考译文{sourceIsPage && openRecord ? `（第 ${openRecord.sectionIndex + 1} 页）` : ''}</summary>
+                    <p>{reference}</p>
+                  </details>
+                )}
               </div>
             </section>
 

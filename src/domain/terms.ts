@@ -44,10 +44,28 @@ export interface Term {
 /**
  * 现代术语，按领域分组。
  *
- * 分组口径与文章库的八个主题域一致，这样术语栏与句子栏能共用同一个领域下拉。
+ * 分组口径与文章库的五个板块一致（社会、经济、文化、生态、科技），
+ * 这样术语栏与句子栏能共用同一个领域下拉。
  * 一条术语只归一个领域（按它讲的是什么），避免同一条出现在多处。
+ *
+ * ⚠️ 领域表从八个收敛到五个时，**政治 10 条、教育 6 条、国际传播 10 条一并删掉了**
+ * （用户的选择：宁可少一批词，也不要站里出现两套领域口径）。
+ * 那 26 条在 git 历史里还能找回——全过程人民民主、一带一路倡议、人类命运共同体都在其中。
+ * 要恢复的话，得先把对应领域加回 `ARTICLE_DOMAINS`。
  */
 export const TERMS_BY_DOMAIN: Record<ArticleDomain, readonly Term[]> = {
+  society: [
+    { zh: '多层次社会保障体系', en: 'the multi-tiered social security system', verified: true },
+    { zh: '健康中国战略', en: 'the Healthy China initiative', verified: true },
+    { zh: '精准扶贫', en: 'targeted poverty alleviation', verified: true },
+    { zh: '乡村振兴战略', en: 'the rural revitalization strategy', verified: true },
+    { zh: '以人民为中心的发展思想', en: 'the people-centered philosophy of development', verified: true },
+    { zh: '新时代中国社会主要矛盾', en: 'the principal contradiction facing Chinese society in the new era', verified: true },
+    { zh: '国之大者', en: 'the country\u2019s most fundamental interests', verified: true },
+    { zh: '"四个意识"', en: 'the four consciousnesses', verified: true },
+    { zh: '"四个自信"', en: 'the four-sphere confidence', verified: true },
+    { zh: '"两个一百年"奋斗目标', en: 'the two centenary goals', verified: true },
+  ],
   economy: [
     { zh: '高质量发展', en: 'high-quality development', verified: true },
     { zh: '新发展阶段', en: 'a new stage of development', verified: true },
@@ -60,18 +78,6 @@ export const TERMS_BY_DOMAIN: Record<ArticleDomain, readonly Term[]> = {
     { zh: '新型城镇化战略', en: 'the new urbanization strategy', verified: true },
     { zh: '落实"六稳"、"六保"任务', en: 'ensure stability on six fronts and security in six areas', verified: true },
   ],
-  politics: [
-    { zh: '全过程人民民主', en: "whole-process people's democracy", verified: true },
-    { zh: '中国特色社会主义制度', en: 'the system of socialism with Chinese characteristics', verified: true },
-    { zh: '中国特色社会主义法治道路', en: 'the path of socialist rule of law with Chinese characteristics', verified: true },
-    { zh: '习近平法治思想', en: 'Xi Jinping Thought on the Rule of Law', verified: true },
-    { zh: '总体国家安全观', en: 'a holistic approach to national security', verified: true },
-    { zh: '"五位一体"总体布局', en: 'the five-sphere integrated plan', verified: true },
-    { zh: '"四个全面"战略布局', en: 'the four-pronged comprehensive strategy', verified: true },
-    { zh: '"两个确立"', en: 'the two establishments', verified: true },
-    { zh: '"两个维护"', en: 'the two upholds', verified: true },
-    { zh: '中国共产党领导的多党合作和政治协商制度', en: 'the system of multiparty cooperation and political consultation under the leadership of the Communist Party of China', verified: true },
-  ],
   culture: [
     { zh: '社会主义核心价值观', en: 'the core socialist values', verified: true },
     { zh: '中华优秀传统文化', en: 'fine traditional Chinese culture', verified: true },
@@ -81,18 +87,6 @@ export const TERMS_BY_DOMAIN: Record<ArticleDomain, readonly Term[]> = {
     { zh: '人类文明新形态', en: 'a new model for human advancement', verified: true },
     { zh: '国家文化软实力', en: 'national cultural soft power', verified: true },
     { zh: '文化强国', en: 'a country with a strong socialist culture', verified: true },
-  ],
-  society: [
-    { zh: '多层次社会保障体系', en: 'the multi-tiered social security system', verified: true },
-    { zh: '健康中国战略', en: 'the Healthy China initiative', verified: true },
-    { zh: '精准扶贫', en: 'targeted poverty alleviation', verified: true },
-    { zh: '乡村振兴战略', en: 'the rural revitalization strategy', verified: true },
-    { zh: '以人民为中心的发展思想', en: 'the people-centered philosophy of development', verified: true },
-    { zh: '新时代中国社会主要矛盾', en: 'the principal contradiction facing Chinese society in the new era', verified: true },
-    { zh: '国之大者', en: 'the country\u2019s most fundamental interests', verified: true },
-    { zh: '"四个意识"', en: 'the four consciousnesses', verified: true },
-    { zh: '"四个自信"', en: 'the four-sphere confidence', verified: true },
-    { zh: '"两个一百年"奋斗目标', en: 'the two centenary goals', verified: true },
   ],
   ecology: [
     { zh: '绿水青山就是金山银山', en: 'lucid waters and lush mountains are invaluable assets', verified: true },
@@ -112,26 +106,6 @@ export const TERMS_BY_DOMAIN: Record<ArticleDomain, readonly Term[]> = {
     { zh: '新质生产力', en: 'new quality productive forces', verified: true },
     { zh: '关键核心技术攻关', en: 'making breakthroughs in core technologies in key fields', verified: true },
     { zh: '科技自立自强', en: 'self-reliance and self-strengthening in science and technology', verified: true },
-  ],
-  education: [
-    { zh: '教育强国', en: 'a country with a strong education system', verified: true },
-    { zh: '立德树人', en: 'fostering virtue through education', verified: true },
-    { zh: '德智体美劳全面发展', en: 'well-rounded development in moral, intellectual, physical, aesthetic and labor education', verified: true },
-    { zh: '为党育人、为国育才', en: 'cultivating talent for the Party and the country', verified: true },
-    { zh: '大思政课', en: 'the great ideological and political course', verified: true },
-    { zh: '义务教育优质均衡发展', en: 'high-quality and balanced development of compulsory education', verified: true },
-  ],
-  communication: [
-    { zh: '人类命运共同体', en: 'a community with a shared future for mankind', verified: true },
-    { zh: '全人类共同价值', en: 'the common values of humanity', verified: true },
-    { zh: '"一带一路"倡议', en: 'the Belt and Road Initiative', verified: true },
-    { zh: '和平共处五项原则', en: 'the Five Principles of Peaceful Coexistence', verified: true },
-    { zh: '和平发展道路', en: 'the path of peaceful development', verified: true },
-    { zh: '新型国际关系', en: 'a new type of international relations', verified: true },
-    { zh: '全球伙伴关系', en: 'global partnerships', verified: true },
-    { zh: '正确义利观', en: 'the right approach to friendship and interests', verified: true },
-    { zh: '习近平外交思想', en: 'Xi Jinping Thought on Diplomacy', verified: true },
-    { zh: '人类命运共同体理念', en: 'the vision of a community with a shared future for mankind', verified: true },
   ],
 }
 
