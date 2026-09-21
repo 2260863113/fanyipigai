@@ -6,6 +6,12 @@
  *
  * 「查看 AI 返回完整内容」挂在这一栏的标题栏右侧：那是整份批改的元信息，
  * 不属于某一条批注，所以不放进 DetailPanel。
+ *
+ * ## 精修档这一栏没有"某一处"可点
+ *
+ * 精修不逐处批改（用户要求），因此没有勾画、没有可点的批注：每一句的解释直接印在
+ * 译文栏的对照里。这一栏就只说清这件事，并把「查看 AI 完整返回」留着——
+ * 想知道模型到底写了什么，那个入口仍然有用。
  */
 
 import type { JSX } from 'react'
@@ -30,22 +36,32 @@ export function NotesPane({
   favorited: boolean
   onToggleFavorite: () => void
 }): JSX.Element {
+  const refine = shown?.refine
   return (
     <section className="pane pane-notes">
       <header className="pane-head">
-        <h2>批注详情</h2>
+        <h2>{refine ? '精修说明' : '批注详情'}</h2>
         <div className="head-meta">
-          {shown && (
-            <span className="chip">
-              共 {shown.validated.errors.length} 处错误
-              {shown.validated.highlights.length > 0 && ` · ${shown.validated.highlights.length} 处优秀`}
-            </span>
+          {refine ? (
+            <span className="chip">逐句改写 {refine.sentences.length} 句 · 不逐处批改</span>
+          ) : (
+            shown && (
+              <span className="chip">
+                共 {shown.validated.errors.length} 处错误
+                {shown.validated.highlights.length > 0 && ` · ${shown.validated.highlights.length} 处优秀`}
+              </span>
+            )
           )}
           {shown && <RawResponseButton raw={shown.raw} />}
         </div>
       </header>
       <div className="pane-body">
-        {shown ? (
+        {refine ? (
+          <p className="hint">
+            精修档对整篇逐句重写，因此没有"逐处批注"可点——每一句为什么这么改，
+            都写在左边译文栏里那两句的下面。要看模型的原话，点右上角的「查看 AI 完整返回」。
+          </p>
+        ) : shown ? (
           <DetailPanel
             selection={selection}
             validated={shown.validated}

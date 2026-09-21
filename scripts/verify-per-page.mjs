@@ -599,8 +599,11 @@ try {
        await sleep(200);
 
        /*
-        * 「查看上次批改」：按「返回编辑」之后**一个字都没改**时，应该还能点回那份批改。
-        * 点回去之后：结果回来、这一页重新只读、而且**不再发请求**（不是重新提交）。
+        * 「批改记录」下拉：按「返回编辑」之后打开它，能看到这一页之前每一次批改，
+        * 点其中一条就显示当时那份批改——结果回来、这一页重新只读、而且**不再发请求**。
+        *
+        * 它取代了原来的「查看上次批改」按钮：那颗按钮只在"一个字都没改"时出现，
+        * 而这条记录是落盘的，改过字之后照样能回看（下面 afterEdit 那一段就量这一点）。
         */
        let returnToResult = null;
        {
@@ -608,28 +611,32 @@ try {
            .find((b) => (b.textContent || '').trim() === '返回编辑');
          if (unlockBtn) unlockBtn.click();
          await sleep(500);
+         const trigger = document.querySelector('.pane-answer .domain-trigger');
+         if (trigger) trigger.click();
+         await sleep(400);
+         const items = [...document.querySelectorAll('.pane-answer .domain-item')];
          const before = {
-           有返回按钮: [...document.querySelectorAll('.pane-answer .btn')].some(
-             (b) => (b.textContent || '').trim() === '查看上次批改',
-           ),
+           有返回按钮: Boolean(trigger),
            有输入框: document.querySelector('.answer-input') !== null,
+           历史条数: items.length,
          };
          const callsBeforeReturn = window.__judgeCalls.length;
-         const back = [...document.querySelectorAll('.pane-answer .btn')]
-           .find((b) => (b.textContent || '').trim() === '查看上次批改');
-         if (back) back.click();
+         if (items[0]) items[0].click();
          await sleep(500);
+         const backToWriting = [...document.querySelectorAll('.pane-answer .btn')]
+           .find((b) => (b.textContent || '').trim() === '回到作答');
          returnToResult = {
            点之前: before,
            点之后: {
              有批注译文: document.querySelector('.pane-answer .annotated-lines') !== null,
              有输入框: document.querySelector('.answer-input') !== null,
-             又是只读: [...document.querySelectorAll('.pane-answer .btn')].some(
-               (b) => (b.textContent || '').trim() === '返回编辑',
-             ),
+             又是只读: Boolean(backToWriting),
            },
            新增调用: window.__judgeCalls.length - callsBeforeReturn,
          };
+         // 回到作答框，后面的检查仍在"正在写"的状态上跑
+         if (backToWriting) backToWriting.click();
+         await sleep(400);
        }
 
        const unlock = [...document.querySelectorAll('.pane-answer .btn')]
@@ -641,12 +648,12 @@ try {
          hasAnnotated: document.querySelector('.pane-answer .annotated-lines') !== null,
          button: (document.querySelector('.pane-answer .btn-primary')?.textContent || '').trim(),
          /*
-          * 还没动字时：按钮是普通的「提交批改」，而且给着「查看上次批改」。
-          * 改过字之后才会变成「提交批改（手动）」并撤掉「查看上次批改」——
-          * 这两条在下面改字之后各量一次。
+          * 还没动字时：按钮是普通的「提交批改」，而且「批改记录」下拉在。
+          * 改过字之后按钮会变成「提交批改（手动）」，但下拉**仍然在**——
+          * 这一条正是它比旧的「查看上次批改」强的地方，下面 afterEdit 量它。
           */
-         有查看上次批改: [...document.querySelectorAll('.pane-answer .btn')].some(
-           (b) => (b.textContent || '').trim() === '查看上次批改',
+         有批改记录下拉: [...document.querySelectorAll('.pane-answer .domain-trigger')].some(
+           (b) => (b.textContent || '').includes('批改记录'),
          ),
        };
 
@@ -655,8 +662,8 @@ try {
        if (area2) { setValue(area2, '改过之后的内容'); await sleep(250); }
        const afterEdit = {
          按钮: (document.querySelector('.pane-answer .btn-primary')?.textContent || '').trim(),
-         有查看上次批改: [...document.querySelectorAll('.pane-answer .btn')].some(
-           (b) => (b.textContent || '').trim() === '查看上次批改',
+         有批改记录下拉: [...document.querySelectorAll('.pane-answer .domain-trigger')].some(
+           (b) => (b.textContent || '').includes('批改记录'),
          ),
        };
        const callsBeforeEdit = window.__judgeCalls.length;
@@ -782,13 +789,13 @@ try {
     walked.afterUnlock.button === '提交批改',
     `还没动字时按钮是普通的「提交批改」（实际 ${JSON.stringify(walked.afterUnlock.button)}）`,
   )
-  check(walked.afterUnlock.有查看上次批改, '还没动字时给着「查看上次批改」')
+  check(walked.afterUnlock.有批改记录下拉, '还没动字时「批改记录」下拉在（它取代了旧的「查看上次批改」按钮）')
   console.log('改过之后 =', JSON.stringify(walked.afterEdit))
   check(
     walked.afterEdit.按钮.includes('手动'),
     `改过字之后按钮变成手动的「提交批改（手动）」（实际 ${JSON.stringify(walked.afterEdit.按钮)}）`,
   )
-  check(!walked.afterEdit.有查看上次批改, '改过字之后「查看上次批改」消失了（批注已经对不上那段文字）')
+  check(walked.afterEdit.有批改记录下拉, '改过字之后「批改记录」下拉仍然在（落盘的记录不受改过字影响）')
   console.log('小卡片收藏 =', JSON.stringify({ 点之前: walked.bubbleBefore, 点之后: walked.bubbleAfter, 收藏条数: walked.favoriteCount, 落盘内容: walked.favoriteStored }))
   check(walked.bubbleBefore.卡片在, '点一处勾画，小卡片出来了')
   check(walked.bubbleBefore.收藏按钮 === '收藏', '小卡片自己带一颗「收藏」按钮', walked.bubbleBefore.收藏按钮)
@@ -845,7 +852,7 @@ try {
     `每条收藏都贴出"这一处所在的那一段原文"（不是整篇）：${JSON.stringify(favView.sources)}`,
   )
   console.log('返回上次批改 =', JSON.stringify(walked.returnToResult))
-  check(walked.returnToResult?.点之前.有返回按钮 === true, '按「返回编辑」之后，还能看到「查看上次批改」')
+  check(walked.returnToResult?.点之前.有返回按钮 === true && (walked.returnToResult?.点之前.历史条数 ?? 0) >= 1, `按「返回编辑」之后打开「批改记录」，看得到这一页之前那几次（${walked.returnToResult?.点之前.历史条数} 条）`)
   check(walked.returnToResult?.点之后.有批注译文 === true, '点它就回到那份带批注的批改')
   check(walked.returnToResult?.点之后.有输入框 === false, '回去之后这一页又是只读的（没在作答状态）')
   check(walked.returnToResult?.点之后.又是只读 === true, '回去之后又能按「返回编辑」，可以再来一轮')

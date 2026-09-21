@@ -2,12 +2,15 @@ import { useMemo, useRef } from 'react'
 import type { Correction, Direction, Mode, PolishLevel } from '../domain/types'
 import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
 import { pageReferenceOf, pageSourceOf } from '../domain/exercise-source'
+import type { RefineResult } from '../domain/refine'
 import type { ValidatedCorrection } from '../domain/validate'
 import { scoreCorrection } from '../domain/scoring'
 import { AnnotationList } from './AnnotationList'
 import { AnnotationText, type Selection } from './AnnotationText'
 import { AnswerViewSwitch } from './AnswerViewSwitch'
 import { CompareView } from './CompareView'
+import { RefineView } from './RefineView'
+import { RefineScore } from './ScorePane'
 import { buildLayout } from '../domain/layout'
 import { ScoreSummary } from './ScoreSummary'
 import { DetailPanel } from './DetailPanel'
@@ -42,6 +45,11 @@ export interface RecordView {
   /** AI 原样返回的完整文本（与练习页共用同一个弹窗） */
   raw: string
   createdAt: Date
+  /**
+   * 精修档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数（见 domain/refine.ts）。
+   * 有它的记录回看时只能看对照视图，分数显示 AI 总评、没有逐处批注。
+   */
+  refine?: RefineResult
 }
 
 interface Props {
@@ -157,9 +165,11 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                       <span className="record-top">
                         <span className="record-attempt">
                           {KIND_LABEL[record.mode]} · 第 {record.attempt} 次 · 第 {record.sectionIndex + 1} 页
+                          {/* 精修档的分数是 AI 总评，与润色档的程序算分不是一回事，列表上就要标出来源 */}
+                          {record.refine && <span className="record-refine">精修 · AI 评分</span>}
                         </span>
                         <span className="record-score">
-                          {scoreCorrection(record.correction, record.answer).total} 分
+                          {(record.refine ? record.refine.score : scoreCorrection(record.correction, record.answer, record.direction).total)} 分
                         </span>
                       </span>
                       <span className="record-meta">
@@ -264,11 +274,14 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                   两个页面里的"同一个开关"不会各说各话。
                 */}
                 <div className="head-meta">
-                  <AnswerViewSwitch view={settings.answerView} onChange={onSettingsChange} />
+                  <AnswerViewSwitch view={settings.answerView} onChange={onSettingsChange} locked={openRecord.refine !== undefined} />
                 </div>
               </header>
               <div className="pane-body">
-                {settings.answerView === 'compare' ? (
+                {openRecord.refine ? (
+                  /* 精修档：回看时同样只有一种看法——逐句「原译 / 改后」+ 每句的解释 */
+                  <RefineView refine={openRecord.refine} />
+                ) : settings.answerView === 'compare' ? (
                   /* 对照视图：与练习页同一套排版（一句原译、一句改后，各占一行） */
                   <CompareView
                     validated={openRecord.validated}
@@ -307,13 +320,18 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                 <h2>总体评分</h2>
               </header>
               <div className="pane-body">
-                <ScoreSummary
-                  correction={openRecord.correction}
-                  validated={openRecord.validated}
-                  answer={openRecord.answer}
-                  level={openRecord.level}
-                  attempt={openRecord.attempt}
-                />
+                {openRecord.refine ? (
+                  <RefineScore refine={openRecord.refine} />
+                ) : (
+                  <ScoreSummary
+                    correction={openRecord.correction}
+                    validated={openRecord.validated}
+                    answer={openRecord.answer}
+                    direction={openRecord.direction}
+                    level={openRecord.level}
+                    attempt={openRecord.attempt}
+                  />
+                )}
               </div>
             </section>
 

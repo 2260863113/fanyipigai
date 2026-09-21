@@ -39,6 +39,7 @@
  */
 
 import type { GeneratedExercise } from '../domain/generate'
+import type { RefineResult } from '../domain/refine'
 import type { Correction, PolishLevel } from '../domain/types'
 import type { ValidatedCorrection } from '../domain/validate'
 
@@ -51,6 +52,14 @@ export interface JudgeDraft {
   sectionCount: number
   /** AI 原样返回的完整文本 */
   raw: string
+  /**
+   * 精修档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数。
+   *
+   * **有它就是精修档的那一次批改**（此时 `correction` 是空壳——精修不逐处批改、
+   * 也就没有 errors），界面据此走另一条渲染路径（见 domain/refine.ts 的文件头）。
+   * 润色档与内置示例批改没有这个字段。
+   */
+  refine?: RefineResult
 }
 
 /**
@@ -144,17 +153,15 @@ export type SessionAction =
    */
   | { type: 'pageUnlocked'; exerciseId: string }
   /**
-   * 反过来：「返回编辑」之后又点回那份批改（用户要求"退回修改后仍能回到批改界面"）。
+   * 反过来：**提交成功之后重新收回只读**（`pageLocked`）。
    *
-   * **保留结果**，只把这一页重新收回只读。于是：
-   *   - 结果还在 → 界面照旧显示带批注的译文（不必重新提交、不花一次调用）；
-   *   - 不在 unlocked 里 → 这一页重新只读（想再改就再按一次「返回编辑」）；
-   *   - drafts 一个字都没动 → 显示的批注与草稿仍然对得上。
-   *
-   * ⚠️ 之所以要求"一个字都没改"才给这个入口（见 App 里 canReturnToResult 的注释）：
-   * 草稿一旦改过，它就不是被批的那段文字了，把旧批注画上去会出现对不上的勾画。
+   * 这一条是补上一个真实的窟窿：「返回编辑」把这一页记进 `unlocked` 之后，
+   * 那一页**再也回不到"已批改"这一档**——用户改完、按了「提交批改（手动）」，
+   * 界面却仍旧停在作答框上，左边还写着"已修改 · 待提交"，而新结果明明已经存下来了。
+   * 现在提交成功就把它从 `unlocked` 里撤掉：这一页重新只读、显示刚批出来的结果；
+   * 想接着改，再按一次「返回编辑」即可。
    */
-  | { type: 'pageResultRestored'; exerciseId: string }
+  | { type: 'pageLocked'; exerciseId: string; sectionIndex: number }
 
 /**
  * 取某个题号的会话（没有就用空会话，调用方不需要判空）。
@@ -273,21 +280,17 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
       })
     }
 
-    case 'pageResultRestored': {
+    case 'pageLocked': {
       /*
-       * 反过来：点「查看上次批改」把暂存的那份恢复回这一页，并且**收回只读**。
-       * 调用方保证草稿与 `answer` 一字不差（否则那颗按钮根本不会出现），因此
-       * 恢复之后显示的批注与草稿仍然对得上。暂存区里那份用完就清了。
+       * 提交成功：把这一页从 `unlocked` 里撤掉，让它重新回到"已批改"那一档。
+       * 暂存区里那份旧批改也一并清掉——新的结果已经在 `pages` 里了，留着旧的说不过去。
        */
-      const restored = session.openResults[session.sectionIndex]
-      const pages = restored ? { ...session.pages, [session.sectionIndex]: restored } : session.pages
       const openResults = { ...session.openResults }
-      delete openResults[session.sectionIndex]
+      delete openResults[action.sectionIndex]
       return withSession(state, action.exerciseId, {
         ...session,
-        pages,
         openResults,
-        unlocked: session.unlocked.filter((index) => index !== session.sectionIndex),
+        unlocked: session.unlocked.filter((index) => index !== action.sectionIndex),
       })
     }
   }

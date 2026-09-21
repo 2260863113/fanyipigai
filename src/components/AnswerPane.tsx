@@ -21,8 +21,11 @@ import { useEffect, useRef, useState, type JSX } from 'react'
 import { AnnotationText, type Selection } from './AnnotationText'
 import { AnswerViewSwitch } from './AnswerViewSwitch'
 import { CompareView } from './CompareView'
+import { RefineView } from './RefineView'
+import { GradeHistoryPicker, type GradeHistoryEntry } from './GradeHistoryPicker'
 import { LEVEL_LABEL, type PolishLevel } from '../domain/types'
 import type { AnnotatedLayout } from '../domain/layout'
+import type { RefineResult } from '../domain/refine'
 import type { ValidatedCorrection } from '../domain/validate'
 import type { ViewSettings } from './settings'
 
@@ -35,6 +38,16 @@ export interface ShownCorrection {
   attempt: number
   sectionCount: number
   raw: string
+  /**
+   * 翻译方向。左下角的算分需要它——漏译/多译的轻重按译文的字数判（见 domain/severity.ts），
+   * 因此"红还是橙"这件事不再只由分类决定，算分必须拿到方向。
+   */
+  direction: import('../domain/types').Direction
+  /**
+   * 精修档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数。
+   * **有它就走精修那条渲染路径**（只给对照、不画勾画、分数显示 AI 总评）。
+   */
+  refine?: RefineResult
 }
 
 /**
@@ -46,7 +59,7 @@ export type PageState =
   | 'pending'
   /** 批过了，结果就是这一段文字（只读） */
   | 'graded'
-  /** 批过之后被「返回编辑」放开，但**一个字都还没改**：可以点回去看那份批改，翻页也会自动提交 */
+  /** 批过之后被「返回编辑」放开，但**一个字都还没改**：翻页时仍会自动提交 */
   | 'edited'
   /** 放开之后**真的改过字**了：批注已对不上，不会再自动提交，只能自己按「提交批改（手动）」 */
   | 'modified'
@@ -62,15 +75,18 @@ export function AnswerPane({
   notice,
   isFixtureAnswer,
   editing,
+  fromHistory,
   pageState,
   multiSection,
   sectionIndex,
   currentAnswer,
+  gradeHistory,
+  viewingRecordId,
   onSelect,
   onSettingsChange,
   onUnlock,
-  canReturnToResult,
-  onReturnToResult,
+  onViewAttempt,
+  onBackToWriting,
   onLevelChange,
   onSubmit,
   onSubmitFixture,
@@ -91,18 +107,24 @@ export function AnswerPane({
   isFixtureAnswer: boolean
   /** 现在是不是在写这一页（否则就是在看这一页的批改结果） */
   editing: boolean
+  /** 正在看的是**批改记录下拉里选中的那一次**（不是当前这一页的结果） */
+  fromHistory: boolean
   pageState: PageState
   multiSection: boolean
   sectionIndex: number
   currentAnswer: string
+  /** 这一页的全部批改（最新在前），填「批改记录」下拉 */
+  gradeHistory: readonly GradeHistoryEntry[]
+  /** 下拉里正在看的那一条；null 表示正在写 */
+  viewingRecordId: string | null
   onSelect: (selection: Selection | null) => void
   onSettingsChange: (patch: Partial<ViewSettings>) => void
   /** 「返回编辑」：作废这一页的结果，放开重写（之后这一页不再自动提交） */
   onUnlock: () => void
-  /** 这一页还能点回刚才那份批改（一个字都没改过） */
-  canReturnToResult: boolean
-  /** 点回去看那一份批改——**不重新提交**，只是把画面切回结果 */
-  onReturnToResult: () => void
+  /** 下拉里选了某一次：把右栏切成那一次的结果（只读，不动正在写的文字） */
+  onViewAttempt: (id: string) => void
+  /** 从历史视图回到作答框 */
+  onBackToWriting: () => void
   onLevelChange: (level: PolishLevel) => void
   onSubmit: () => void
   onSubmitFixture: () => void
@@ -112,13 +134,20 @@ export function AnswerPane({
   onToggleFavorite?: () => void
 }): JSX.Element {
   const hasAnswer = currentAnswer.trim().length > 0
-  /** 这一页的结果还在（正在看的就是它）。它是"返回编辑"够不够格出现的依据 */
-  const resultShown = shown !== null && !editing
+  /**
+   * 右栏现在显示的是**结果**（而不是作答框）。两种来路：
+   *   - 这一页批过、且没被「返回编辑」放开（`!editing`）；
+   *   - 用户从「批改记录」下拉里选了历史里的某一次（`fromHistory`）——
+   *     这时即使这一页正放开着写，也要让位给"看一眼那一次"。
+   */
+  const showResult = shown !== null && (!editing || fromHistory)
+  /** 这是一份**精修档**的结果：只给对照、不逐处批改 */
+  const refine = shown?.refine
   /**
    * 这一页被「返回编辑」放开过、而且已经改过字（"已修改 · 待提交"那一档）。
    *
    * 注意它问的是"改过没有"，**不是**"放开过没有"：放开之后一个字都没动时，
-   * 那份批改还在暂存区、还能点回去看，界面不该说"已修改"。
+   * 那一页仍然会在翻页时自动提交，界面不该说"已修改"。
    */
   const wasModified = pageState === 'modified'
 
@@ -127,12 +156,18 @@ export function AnswerPane({
       <header className="pane-head">
         <h2>我的译文</h2>
         <div className="head-meta">
-          {resultShown && <AnswerViewSwitch view={settings.answerView} onChange={onSettingsChange} />}
+          {/*
+            精修档没得选：改写遍布每一句，勾画只会糊成一片（用户要求"精修只能看对照"）。
+            按用户选的做法，开关**保留但禁用**并注明原因，而不是藏起来（藏起来会让人以为设置丢了）。
+          */}
+          {showResult && <AnswerViewSwitch view={settings.answerView} onChange={onSettingsChange} locked={refine !== undefined} />}
           {/*
             批过的页是只读的，所以这里给的是「返回编辑」而不是可写的输入框。
             放开之后（unlocked）按钮消失，页面重新可写，并且**不再自动提交**。
+            正在看历史（fromHistory）时不给它：那一刻显示的不是"当前这一页的结果"，
+            按「返回编辑」会让人以为在放开这一页——要回作答请用旁边的「回到作答」。
           */}
-          {pageState === 'graded' && (
+          {!fromHistory && pageState === 'graded' && (
             <button
               type="button"
               className="btn btn-ghost"
@@ -143,22 +178,19 @@ export function AnswerPane({
             </button>
           )}
           {/*
-            「返回编辑」之后还能点回那一份批改（用户要求："退回修改后，仍然可以返回到批改界面"）。
-            只在这一页**一个字都没改**的时候给这颗按钮——理由见 App 里 canReturnToResult 的注释：
-            批注的位置是按提交当时那段文字算的，改了字再回去看，画面上就会出现对不上的勾画。
+            「批改记录」下拉：这一页之前每一次批改都在里面，选哪一次就显示哪一次的结果。
+            它取代了原来那颗「查看上次批改」按钮与「已改过 · 待提交」提示芯片
+            （用户明确要求：去掉提示、改成下拉）——旧按钮只在"一个字都没改"时才出现，
+            而这条记录是落盘的，改过字也照样能回看。
           */}
-          {editing && canReturnToResult && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={onReturnToResult}
-              title="回到这一页的批改结果（不重新提交、不消耗 API）；改了字就不能再回去看了"
-            >
-              查看上次批改
-            </button>
+          {editing && (
+            <GradeHistoryPicker
+              history={gradeHistory}
+              viewingId={viewingRecordId}
+              onView={onViewAttempt}
+              onBackToWriting={onBackToWriting}
+            />
           )}
-          {/* 正在写、而且这一页是"改过的那一页"：提醒它交出去要自己按，不会自动发 */}
-          {editing && wasModified && <span className="chip chip-warn">已改过 · 待提交</span>}
           {editing && (
             <>
               <div className="level-switch" role="group" aria-label="修改风格">
@@ -209,20 +241,11 @@ export function AnswerPane({
 
         {notice && !error && <p className="hint notice">{notice}</p>}
 
-        {editing ? (
-          <textarea
-            className="answer-input answer-input-fill"
-            value={currentAnswer}
-            onChange={(event) => onAnswerChange(event.target.value)}
-            placeholder={
-              multiSection
-                ? `在第 ${sectionIndex + 1} 页写下你的译文……写完点「下一页」，这一页会自动交去批改`
-                : '在这里写下你的译文……'
-            }
-            spellCheck={false}
-          />
-        ) : shown ? (
-          settings.answerView === 'compare' ? (
+        {showResult && shown ? (
+          refine ? (
+            /* 精修档：只有一种看法——逐句「原译 / 改后」+ 每句的解释 */
+            <RefineView refine={refine} />
+          ) : settings.answerView === 'compare' ? (
             /*
              * 对照视图**不受行距设置影响**（用户要求"对照视图还是保持以前那样一句对一句"）。
              * 它本来就不画勾画、不画方框，行距只是它自己那份排版的事——
@@ -242,7 +265,19 @@ export function AnswerPane({
               {...(onToggleFavorite ? { onToggleFavorite, favorited: favorite === true } : null)}
             />
           )
-        ) : null}
+        ) : (
+          <textarea
+            className="answer-input answer-input-fill"
+            value={currentAnswer}
+            onChange={(event) => onAnswerChange(event.target.value)}
+            placeholder={
+              multiSection
+                ? `在第 ${sectionIndex + 1} 页写下你的译文……写完点「下一页」，这一页会自动交去批改`
+                : '在这里写下你的译文……'
+            }
+            spellCheck={false}
+          />
+        )}
 
         {/*
           翻页导航**不在这里**——它挪到了左边「原文」那一栏（用户要求）。
@@ -258,7 +293,7 @@ export function AnswerPane({
 export const PAGE_STATE_HINT: Record<PageState, string> = {
   pending: '待批改',
   graded: '已批改（只读，点「返回编辑」可改）',
-  edited: '编辑中（未改动，可点「查看上次批改」）',
+  edited: '编辑中（未改动，翻页时会自动提交）',
   modified: '已修改 · 待提交',
 }
 
@@ -279,48 +314,53 @@ export function nextPageHint(options: {
 }
 
 /**
- * 批改进度条的**台阶表**（用户给的节奏，第二版）。
+ * 批改进度条的**台阶表**（用户给的节奏，第三版）。
  *
- * 用户原话："进度条移动不要平滑，就一下一下地向前瞬移（瞬移！），
- * 到了百分之 80（大约 15 秒），瞬移速度明显变慢，到了 98（大约三十秒），停止不动，直到结果出来。"
- * 随后又调整成："进度条的跳动增加的距离可以调小一倍。到 80% 的时间延长到 20 秒，
- * 98% 的时间延长到 40 秒。"——因此这一版把**每一跳的步长减半、并把两个节点各往后推**。
+ * 用户原话（改过三轮，每一轮都把两个节点往后推、把步子改小）：
+ *   - 第一版："不要平滑，就一下一下地向前瞬移（瞬移！），到 80% 大约 15 秒，到 98% 大约 30 秒"；
+ *   - 第二版："跳动增加的距离可以调小一倍，80% 延长到 20 秒，98% 延长到 40 秒"；
+ *   - 第三版（现在这版）："1 分钟时走到 80%，1 分 20 秒时走到 98%，步子走小一点、频率大一些"。
  *
- * 写死一张表而不是拿公式算：公式画出来是连续的斜线，而用户要的是"跳"，
- * 跳的节奏只能一个个列出来。每一格至少占一秒（前端采样间隔半秒），
- * 因此看到的每一跳都稳稳停一下。
+ * 于是节奏变成：**每 1.5 秒跳 2 个百分点**，从 0 一路跳到 80%（正好 60 秒、40 跳）；
+ * 之后每约 2.2 秒再跳 2 个点，到 98% 停住（正好 80 秒、再 9 跳）。
+ * 采样间隔同时从 500ms 收紧到 250ms，否则"步子变小"这件事在屏幕上看不出来——
+ * 一跳 2 个点时，半秒采一次会漏掉整整一格。
  *
- * 节奏：前 20 秒跳到 80%（约每 4 秒 16 个点），之后**明显变慢**——
- * 20→40 秒只再爬 18 个点（约每 4 秒 3.6 个点）。
+ * 仍然写成一张算出来的表而不是公式：公式画出来是连续的斜线，而用户要的是"跳"，
+ * 跳的节奏只能一个个列出来。每一格都远长于采样间隔，因此每一跳都稳稳停一下。
+ *
+ * ⚠️ 它估的是**时间，不是真进度**：批改接口只有"发出去"和"回来"两个时刻，
+ * 中间没有任何可用于量进度的信号。因此刻意**不显示百分比数字**，
+ * 只给一条细蓝线——它表达的是"还在忙"，不是一个可以信到个位的数字。
+ * 实测单次批改约 10–35 秒，所以多数时候结果会在 80% 之前就回来（线随即消失）；
+ * 这条节奏主要是为"慢的时候"准备的：**宁可慢一点爬，也不要十几秒冲到头再僵住**。
  */
-const JUDGING_STEPS: ReadonlyArray<{ at: number; percent: number }> = [
-  { at: 0, percent: 0 },
-  { at: 2000, percent: 6 },
-  { at: 5000, percent: 16 },
-  { at: 8000, percent: 26 },
-  { at: 11000, percent: 38 },
-  { at: 14000, percent: 50 },
-  { at: 17000, percent: 62 },
-  { at: 20000, percent: 80 },
-  // 明显变慢：每 4 秒只涨 3–4 个点
-  { at: 24000, percent: 84 },
-  { at: 28000, percent: 88 },
-  { at: 32000, percent: 91 },
-  { at: 36000, percent: 94 },
-  { at: 40000, percent: 98 },
-]
+const JUDGING_STEPS: ReadonlyArray<{ at: number; percent: number }> = (() => {
+  /** 到 80% 用多久、到 98% 再用多久（毫秒） */
+  const TO_80 = 60_000
+  const TO_98 = 20_000
+  /** 一跳走几个百分点、跳几跳 */
+  const STEP = 2
+  const STEPS_TO_80 = 80 / STEP
+  const STEPS_TO_98 = (98 - 80) / STEP
+
+  const steps: Array<{ at: number; percent: number }> = [{ at: 0, percent: 0 }]
+  for (let index = 1; index <= STEPS_TO_80; index += 1) {
+    steps.push({ at: (TO_80 * index) / STEPS_TO_80, percent: index * STEP })
+  }
+  for (let index = 1; index <= STEPS_TO_98; index += 1) {
+    steps.push({ at: TO_80 + (TO_98 * index) / STEPS_TO_98, percent: 80 + index * STEP })
+  }
+  return steps
+})()
 
 /**
  * 批改进度条。
  *
  * 三条行为（都是用户点名的）：
  *   1. 按台阶表**一格一格跳**上去（不要平滑滑动）；
- *   2. 15 秒到 80% 之后**明显变慢**，30 秒到 98% 就**停住**不再动；
+ *   2. 1 分钟到 80% 之后**明显变慢**，1 分 20 秒到 98% 就**停住**不再动；
  *   3. 结果回来 → 组件随即卸载（提前返回也就是"立刻结束"）。
- *
- * ⚠️ 它估的是**时间，不是真进度**：批改接口只有"发出去"和"回来"两个时刻，
- * 中间没有任何可用于量进度的信号。因此刻意**不显示百分比数字**，
- * 只给一条细蓝线——它表达的是"还在忙"，不是一个可以信到个位的数字。
  */
 function JudgingProgress(): JSX.Element {
   const [percent, setPercent] = useState(0)
@@ -337,7 +377,7 @@ function JudgingProgress(): JSX.Element {
         if (elapsed >= step.at) next = step.percent
       }
       setPercent(next)
-    }, 500)
+    }, 250)
     return () => window.clearInterval(timer)
   }, [])
 

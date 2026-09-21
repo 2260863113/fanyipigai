@@ -8,6 +8,13 @@
  *
  * 它只负责**显示与切换**，不持有状态——用的是设置里那一个 `answerView`
  * （存在浏览器里），因此在练习页切过之后，练习记录页打开就是同一个视图。
+ *
+ * ## 精修档：`locked` 时保留但禁用
+ *
+ * 精修档的产物是"整篇逐句重写"，改动遍布每一句——再画勾画只会糊成一片
+ * （用户原话："修改的太多了屏幕太花了"），因此**精修只能看对照**。
+ * 这里按用户选的做法处理：**开关保留但禁用**，并在旁边注明为什么，
+ * 而不是把它藏起来——藏起来用户会以为设置丢了。
  */
 
 import type { JSX } from 'react'
@@ -16,28 +23,34 @@ import type { ViewSettings } from './settings'
 export function AnswerViewSwitch({
   view,
   onChange,
+  locked = false,
 }: {
   view: ViewSettings['answerView']
   onChange: (patch: Partial<ViewSettings>) => void
+  /** 精修档：锁在对照视图上（见文件头） */
+  locked?: boolean
 }): JSX.Element {
   return (
     <div className="view-switch" role="group" aria-label="译文视图">
       <button
         type="button"
-        className={view === 'correct' ? 'view-btn view-btn-active' : 'view-btn'}
+        className={view === 'correct' && !locked ? 'view-btn view-btn-active' : 'view-btn'}
         onClick={() => onChange({ answerView: 'correct' })}
-        title="在译文上勾画：划线、方框、调序弧线"
+        disabled={locked}
+        title={locked ? '精修档只能看对照视图：改写遍布每一句，勾画会糊成一片' : '在译文上勾画：划线、方框、调序弧线'}
       >
         批改视图
       </button>
       <button
         type="button"
-        className={view === 'compare' ? 'view-btn view-btn-active' : 'view-btn'}
+        className={view === 'compare' || locked ? 'view-btn view-btn-active' : 'view-btn'}
         onClick={() => onChange({ answerView: 'compare' })}
-        title="一句一句对照：每句下方给出修改后的完整那句，不划线不填补"
+        disabled={locked}
+        title={locked ? '精修档固定看这一种' : '一句一句对照：每句下方给出修改后的完整那句，不划线不填补'}
       >
         对照视图
       </button>
+      {locked && <span className="chip">精修档只能看对照</span>}
     </div>
   )
 }

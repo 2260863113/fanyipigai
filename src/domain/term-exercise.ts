@@ -241,6 +241,8 @@ export function correctionFromVerdicts(verdicts: readonly TermVerdict[]): {
       // 未作答那一条没有字可划，就不给改动项（界面上只说"没作答"）
       changes: empty ? [] : [{ start, end, to: verdict.term.en }],
       span: { start, end },
+      // 术语写错一律算硬性错误（红）：固定译法要求一字不差，没有"轻重"可言
+      hard: true,
     })
   })
 

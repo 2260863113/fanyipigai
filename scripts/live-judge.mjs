@@ -118,7 +118,7 @@ if (!outcome.ok) {
   if (outcome.rawExcerpt) console.log(`\n  原始返回片段：\n${outcome.rawExcerpt}`)
   process.exitCode = 1
 } else {
-  const score = scoreCorrection(outcome.correction, chosen.request.answer)
+  const score = scoreCorrection(outcome.correction, chosen.request.answer, chosen.request.direction)
   console.log(`\n✓ 批改成功（用时 ${elapsed}s，尝试 ${outcome.attempts} 次）`)
   console.log(
     `  系统计分 ${score.total} / 100（硬性错误 ${score.hardCount} 处 ×8，表达问题 ${score.softCount} 处 ×3，表达优秀 ${score.highlightCount} 处）`,
@@ -127,9 +127,12 @@ if (!outcome.ok) {
   console.log(`\n  错误 ${outcome.validated.errors.length} 处：`)
   for (const entry of outcome.validated.errors) {
     const { error, span } = entry
-    const color = ['terminology', 'omission', 'addition', 'function-word', 'punctuation'].includes(error.category)
-      ? '红'
-      : '橙'
+    /*
+     * 颜色取解析时定死的那个（`entry.hard`），不在这里另写一份分类表：
+     * 漏译/多译的轻重是程序按字数判的（见 domain/severity.ts），
+     * 照分类硬推会把"漏一个小品词"也打成红色，与界面上的颜色对不上。
+     */
+    const color = entry.hard ? '红' : '橙'
     console.log(
       `    ${error.id} [${color}] ${error.type}/${error.category} [${span.start},${span.end}) ` +
         `「${error.anchor?.snippet ?? error.insertAfter?.snippet ?? ''}」` +

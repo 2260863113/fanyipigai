@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Connect, Plugin } from 'vite'
-import { DEFAULT_JUDGE_CONFIG, generateExercise, judgeAnswer } from './src/domain/ai'
+import { DEFAULT_JUDGE_CONFIG, generateExercise, judgeAnswer, refineAnswer } from './src/domain/ai'
 import { FailureCollector, archiveFailure, type FailureKind } from './src/domain/archive'
 import { rebuildFromSections, type Section } from './src/domain/sections'
 import { PROBLEM_JSON_PARSE_FAILED, PROBLEM_NO_ANCHOR_MATCH, PROBLEM_NO_JSON_OBJECT } from './src/domain/parse'
@@ -312,6 +312,94 @@ export function judgeApiPlugin(): Plugin {
 
           server.config.logger.warn(
             `[judge-api] 批改失败（${outcome.kind}，用时 ${elapsed}s${sectionNote}）：${outcome.message}` +
+              (collector.isEmpty ? '' : saved ? `（存档失败：${saved}）` : '（失败详情已存档到 .ai-failures/）'),
+          )
+          json(res, 200, outcome)
+        })().catch((error: unknown) => {
+          server.config.logger.error(`[judge-api] 未预期的错误：${error instanceof Error ? error.stack : String(error)}`)
+          if (!res.writableEnded) {
+            json(res, 500, {
+              ok: false,
+              kind: 'server-error',
+              message: `本地接口出错：${error instanceof Error ? error.message : String(error)}`,
+            })
+          }
+        })
+      })
+      /*
+       * 精修档：与批改同样的请求形状，但产物是**整篇逐句重写 + 总评**（见 domain/refine.ts）。
+       * 单独一条路径而不是在 /api/judge 里分支：两边的提示词、解析器、产物都不同，
+       * 混在一个处理器里只会让两条链路互相牵制。
+       */
+      server.middlewares.use('/api/refine', (req, res, next) => {
+        if (req.method !== 'POST') {
+          next()
+          return
+        }
+
+        void (async () => {
+          let body: unknown
+          try {
+            body = JSON.parse(await readBody(req))
+          } catch {
+            json(res, 400, { ok: false, kind: 'bad-request', message: '请求体不是合法的 JSON' })
+            return
+          }
+
+          if (!isCorrectionRequest(body)) {
+            json(res, 400, { ok: false, kind: 'bad-request', message: '请求缺少必要字段或字段取值不合法' })
+            return
+          }
+
+          if (!apiKey) {
+            json(res, 503, {
+              ok: false,
+              kind: 'missing-key',
+              message:
+                '没有配置 DeepSeek API 密钥。请把 .dev.vars.example 复制成 .dev.vars 并填入 DEEPSEEK_API_KEY，然后重启开发服务。',
+            })
+            return
+          }
+
+          const started = Date.now()
+          const collector = new FailureCollector()
+          const answerSections = toSections(body.answerSections)
+          const fullAnswer = rebuildFromSections(answerSections)
+          const outcome = await refineAnswer(
+            {
+              source: body.source,
+              direction: body.direction,
+              genre: body.genre,
+              level: body.level,
+              answer: fullAnswer,
+            },
+            { ...DEFAULT_JUDGE_CONFIG, apiKey, model },
+            collector,
+          )
+          const elapsed = ((Date.now() - started) / 1000).toFixed(1)
+
+          if (outcome.ok) {
+            server.config.logger.info(
+              `[judge-api] 精修完成，用时 ${elapsed}s，逐句 ${outcome.refine.sentences.length} 条，` +
+                `AI 评分 ${outcome.refine.score}`,
+            )
+            json(res, 200, outcome)
+            return
+          }
+
+          const saved = collector.isEmpty
+            ? undefined
+            : await archiveFailure(
+                body,
+                model,
+                classifyFailure(outcome, DEFAULT_JUDGE_CONFIG.maxAttempts),
+                collector,
+                fullAnswer,
+                outcome.message,
+              )
+
+          server.config.logger.warn(
+            `[judge-api] 精修失败（${outcome.kind}，用时 ${elapsed}s）：${outcome.message}` +
               (collector.isEmpty ? '' : saved ? `（存档失败：${saved}）` : '（失败详情已存档到 .ai-failures/）'),
           )
           json(res, 200, outcome)

@@ -7,10 +7,13 @@
  * 3. 成本——提示词里少一块内容，AI 的返回更短、更不容易被截断。
  *
  * 规则写死在代码里，改规则就改这里，不要散落在界面里。
+ *
+ * ⚠️ 「红还是橙」这件事**不只有分类**：漏译/多译的轻重由程序按字数判（见 severity.ts），
+ * 因此算分必须拿到翻译方向。只按分类判会把漏译一律算成红色，分数与页面上标出的颜色就对不上了。
  */
 
-import type { Correction, ErrorCategory, Score } from './types'
-import { HARD_CATEGORIES } from './types'
+import type { Correction, Direction, Score } from './types'
+import { isHardError } from './severity'
 
 /** 每处硬性错误（红色）扣多少分。 */
 export const HARD_PENALTY = 8
@@ -21,20 +24,16 @@ export const SOFT_PENALTY = 3
 /** 表达优秀（绿色）是否加分。默认不加分：加分会让"多写亮点"成为刷分动机。 */
 export const HIGHLIGHT_BONUS = 0
 
-export function isHardCategory(category: ErrorCategory): boolean {
-  return HARD_CATEGORIES.includes(category)
-}
-
 /**
  * 计算一次批改的分数。
  * 分数只反映"被标出来的错误"，所以它与批注区域里看到的东西一定一致。
  */
-export function scoreCorrection(correction: Correction, answer: string): Score {
+export function scoreCorrection(correction: Correction, answer: string, direction: Direction): Score {
   let hardCount = 0
   let softCount = 0
 
   for (const error of correction.errors) {
-    if (isHardCategory(error.category)) hardCount += 1
+    if (isHardError(error, direction)) hardCount += 1
     else softCount += 1
   }
 

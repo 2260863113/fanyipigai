@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import type { Correction, ErrorCategory } from '../domain/types'
-import { CATEGORY_LABEL, COLOR_LABEL, LEVEL_LABEL, type PolishLevel } from '../domain/types'
+import { CATEGORY_LABEL, COLOR_LABEL, LEVEL_LABEL, type Direction, type PolishLevel } from '../domain/types'
 import { colorForCategory, type ValidatedCorrection } from '../domain/validate'
+import { hasLengthSeverity } from '../domain/severity'
 import { scoreCorrection, SCORING_RULE_TEXT } from '../domain/scoring'
 import { MARK_COLOR_VALUE } from '../domain/color'
 
@@ -9,6 +10,8 @@ interface Props {
   correction: Correction
   validated: ValidatedCorrection
   answer: string
+  /** 翻译方向：漏译/多译的轻重按译文的字数判，因此算分需要它（见 severity.ts） */
+  direction: Direction
   level: PolishLevel
   attempt: number
   sectionCount?: number
@@ -20,8 +23,8 @@ interface Props {
  * 只放"一眼能扫完"的东西：分数、三色各自的处数、错误分类的分布。
  * 逐处批注在右下角，这里不重复。
  */
-export function ScoreSummary({ correction, validated, answer, level, attempt, sectionCount }: Props) {
-  const score = useMemo(() => scoreCorrection(correction, answer), [correction, answer])
+export function ScoreSummary({ correction, validated, answer, direction, level, attempt, sectionCount }: Props) {
+  const score = useMemo(() => scoreCorrection(correction, answer, direction), [correction, answer, direction])
 
   const stats = new Map<ErrorCategory, number>()
   for (const entry of validated.errors) {
@@ -61,6 +64,8 @@ export function ScoreSummary({ correction, validated, answer, level, attempt, se
             {statsList.map(([category, count]) => (
               <li key={category} style={{ color: MARK_COLOR_VALUE[colorForCategory(category)] }}>
                 {CATEGORY_LABEL[category]}
+                {/* 只有漏译/多译这两类按字数定红橙，图例上要说清，否则用户会以为颜色标错了 */}
+                {hasLengthSeverity(category) && <span className="stats-note">（按字数定红/橙）</span>}
                 <span className="stats-count">×{count}</span>
               </li>
             ))}

@@ -11,7 +11,7 @@
  * 注意：AI 不再返回分数（分数由 scoring.ts 按错误分类算），也不返回任何字符序号。
  */
 
-import type { Correction, ErrorCategory, ErrorObject, ErrorType, Highlight } from './types'
+import type { Correction, Direction, ErrorCategory, ErrorObject, ErrorType, Highlight } from './types'
 import { CATEGORY_PRIORITY } from './types'
 import { locate } from './locate'
 import { minimizeChange } from './minimal'
@@ -375,7 +375,7 @@ function readHighlight(value: unknown, index: number, answer: string, problems: 
   return { id, anchor, comment }
 }
 
-export function parseCorrection(raw: string, answer: string): ParseSuccess | ParseFailure {
+export function parseCorrection(raw: string, answer: string, direction: Direction): ParseSuccess | ParseFailure {
   const extracted = extractJson(raw)
   if ('error' in extracted) return { ok: false, problems: [extracted.error] }
 
@@ -416,7 +416,7 @@ export function parseCorrection(raw: string, answer: string): ParseSuccess | Par
   }
 
   // 结构层面没问题后，再做一次位置校验（此时位置已由程序找出，因此这一步主要防内部错误）
-  const validated = validateCorrection(errors, highlights, answer)
+  const validated = validateCorrection(errors, highlights, answer, direction)
   const repaired = validated.rejections.map((rejection) => `${rejection.id}：${rejection.message}`)
 
   if (problems.length > 0) return { ok: false, problems }

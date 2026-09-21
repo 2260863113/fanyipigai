@@ -1986,6 +1986,20 @@ button {
   color: var(--accent);
 }
 
+/*
+ * 精修档的记录：分数是 AI 总评，与润色档"程序按错误算"的分数不是一回事，
+ * 列表上必须标出来源，否则两种分数混在一起看不出区别。
+ */
+.record-refine {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--mark-orange);
+  background: var(--mark-orange-bg);
+}
+
 .record-meta,
 .record-time {
   font-size: 11.5px;
@@ -2217,6 +2231,12 @@ button {
   color: #fff;
 }
 
+/* 精修档锁在对照视图上：按钮保留但点不动（见 AnswerViewSwitch 的说明） */
+.view-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── 对照视图 ─────────────────────────────────────── */
 
 .compare-list {
@@ -2262,6 +2282,21 @@ button {
   margin-top: 4px;
   font-size: 17px;
   color: var(--ink);
+}
+
+/*
+ * 精修档每一句的说明（"为什么这么改"）。
+ *
+ * 直接印在这一对的下面，而不是藏进点击里：精修档没有逐处批注可点，
+ * 用户读完全篇才知道哪一句为什么改。字号小一号、缩进对齐正文，不抢两行正文的注意力。
+ */
+.compare-note {
+  margin: 6px 0 0;
+  padding-left: calc(2.6em + 6px);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-soft);
 }
 
 /* 行首那个小标签（原译 / 改后）：不占正文宽度，只帮人分清这两行是什么 */

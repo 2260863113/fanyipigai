@@ -138,7 +138,21 @@ try {
 
   await cdp.send('Page.navigate', { url: `${base}/` })
   await sleep(1200)
-  await cdp.evaluate('try { localStorage.clear() } catch (e) {}')
+  await cdp.evaluate(
+    `try {
+       localStorage.clear();
+       /*
+        * 术语题的领域**跟着文章栏那个选择走**（术语栏没有自己的领域下拉）。
+        * 这里把它定到「经济」：下面第 2 段里写死的五条标准译法就是经济那一组的前五条
+        * （高质量发展 / 新发展阶段 / 新发展理念 …）。不定的话，题目会落在领域表的第一个板块上，
+        * 那五条答案全都对不上——测试失败其实是在测自己的笔误。
+        */
+       localStorage.setItem(
+         'translation-practice.article-selection.v2',
+         JSON.stringify({ domain: 'economy', direction: 'en-to-zh' }),
+       );
+     } catch (e) {}`,
+  )
   await cdp.send('Page.reload')
   let mounted = false
   for (let i = 0; i < 40 && !mounted; i += 1) {

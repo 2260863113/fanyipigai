@@ -16,6 +16,7 @@
 import type { Direction, Genre, Mode, PolishLevel } from './types'
 import type { JudgeFailure, JudgeFailureKind, JudgeSuccess } from './ai'
 import type { GeneratedExercise } from './generate'
+import type { RefineResult } from './refine'
 
 export type JudgeResult = JudgeSuccess | JudgeFailure
 
@@ -92,6 +93,64 @@ export async function requestJudgment(request: JudgeRequest): Promise<JudgeResul
     message: failure.message ?? '批改未能完成',
     rawExcerpt: failure.rawExcerpt,
     problems: failure.problems ?? [],
+  }
+}
+
+/* ── 精修档：整篇逐句重写 ────────────────────────────────── */
+
+export type RefineResultPayload =
+  | { ok: true; refine: RefineResult; attempts: number; raw: string }
+  | { ok: false; kind: JudgeFailureKind | 'bad-request'; message: string; rawExcerpt?: string }
+
+/**
+ * 精修档：把这一段译文交给模型逐句重写。
+ *
+ * 请求形状与批改**完全一样**（同一份 JudgeRequest），只是打到另一条路径上——
+ * 服务端据此换一套提示词与解析器（见 vite-plugin-judge-api.ts 的 /api/refine）。
+ * 形状相同是有意的：逐页批改、分段校验、失败分类这些下游代码一行都不用改。
+ */
+export async function requestRefine(request: JudgeRequest): Promise<RefineResultPayload> {
+  let response: Response
+  try {
+    response = await fetch('/api/refine', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    })
+  } catch (error) {
+    return {
+      ok: false,
+      kind: 'network',
+      message: `无法连接批改接口：${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+
+  const text = await response.text()
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return {
+      ok: false,
+      kind: 'bad-output',
+      message: `批改接口返回了无法解析的内容（HTTP ${response.status}）`,
+      rawExcerpt: text.slice(0, 300),
+    }
+  }
+
+  if (!isRecord(body) || typeof body.ok !== 'boolean') {
+    return { ok: false, kind: 'bad-output', message: '批改接口返回的数据结构不符合预期' }
+  }
+  if (body.ok) {
+    const success = body as unknown as { refine: RefineResult; attempts: number; raw: string }
+    return { ok: true, refine: success.refine, attempts: success.attempts ?? 1, raw: success.raw ?? '' }
+  }
+  const failure = body as unknown as { kind?: JudgeFailureKind; message?: string; rawExcerpt?: string }
+  return {
+    ok: false,
+    kind: failure.kind ?? 'bad-output',
+    message: failure.message ?? '精修未能完成',
+    ...(failure.rawExcerpt !== undefined ? { rawExcerpt: failure.rawExcerpt } : null),
   }
 }
 

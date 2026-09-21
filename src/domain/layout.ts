@@ -6,7 +6,7 @@
  * 渲染组件只负责把片段画出来，不再做任何位置计算。
  */
 
-import { colorForCategory, type ValidatedCorrection, type ValidatedError, type ValidatedSpan } from './validate'
+import type { ValidatedCorrection, ValidatedError, ValidatedSpan } from './validate'
 import type { ErrorCategory, MarkColor } from './types'
 
 export interface Point {
@@ -142,7 +142,8 @@ export function buildLayout(correction: ValidatedCorrection, answer: string): An
    */
   const pushError = (entry: ValidatedError): void => {
     const { error } = entry
-    const color = colorForCategory(error.category)
+    // 颜色取解析时定死的那个（漏译/多译按字数定轻重，见 severity.ts），不按分类现推
+    const color: MarkColor = entry.hard ? 'red' : 'orange'
 
     // 整句重写整段画一次：上面划掉原句，下面的方框给出完整新句。
     // 但只有"整段都换了"才是重写；只剩一处词级改动时按普通替换画（否则一个词写错会被整句划掉）。
@@ -217,7 +218,7 @@ export function buildLayout(correction: ValidatedCorrection, answer: string): An
       })
       reorderGroups.push({
         errorId: entry.error.id,
-        color: colorForCategory(entry.error.category),
+        color: entry.hard ? 'red' : 'orange',
         category: entry.error.category,
         parts: parts.map((p) => ({ span: p.span, label: p.label, sourceIndex: p.sourceIndex, targetIndex: p.targetIndex })),
         reordered: entry.reordered,

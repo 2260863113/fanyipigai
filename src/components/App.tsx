@@ -1,5 +1,7 @@
 import { useMemo, useReducer, useRef, useState, type JSX } from 'react'
 import { MOCK_CASES, fixtureCorrectionFor } from '../domain/mock'
+import { scoreCorrection } from '../domain/scoring'
+import type { GradeHistoryEntry } from './GradeHistoryPicker'
 import {
   DIRECTION_LABEL,
   GENRE_LABEL,
@@ -11,7 +13,7 @@ import {
 import { validateCorrection } from '../domain/validate'
 import { buildLayout, type AnnotatedLayout } from '../domain/layout'
 import { toAiShape } from '../domain/parse'
-import { requestGeneration, requestJudgment, type JudgeSectionInput } from '../domain/client'
+import { requestGeneration, requestJudgment, requestRefine, type JudgeSectionInput } from '../domain/client'
 import { paginateArticle, type ArticlePage } from '../domain/sections'
 import { variantsFor } from '../domain/variants'
 import { GENERATION_TOPICS, type GeneratedExercise } from '../domain/generate'
@@ -184,6 +186,13 @@ export function App(): JSX.Element {
   const [genBusy, setGenBusy] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
   const [level, setLevel] = useState<PolishLevel>('polish')
+  /**
+   * 正在看的是**批改记录下拉里选中的那一条**（练习记录里的 id）；null = 正在写这一页。
+   *
+   * 它与 `openRecord`（练习记录页里点开的那一条）刻意分开：那个是"去记录页回看"，
+   * 这个是"在这一页就地看一眼之前批成什么样"，两者互不干扰。
+   */
+  const [viewingGradeId, setViewingGradeId] = useState<string | null>(null)
   /**
    * 原文栏看的是原文还是「对照」，纯界面状态（不落盘）。
    * 默认关：用户打开一道题的默认视线是原文本身，译文要自己按出来。
@@ -422,18 +431,40 @@ export function App(): JSX.Element {
    */
   const gradedPages = gradedCount(progress, exercise.id, sourceSections.length)
   /**
-   * 「返回编辑」之后还能不能点回那份批改（用户要求"退回修改后仍然可以返回到批改界面"）。
-   *
-   * 条件里那条"草稿与提交时一字不差"是**安全阀**，不是多余的：
-   * 批注的位置是按**提交当时**那段文字算出来的，草稿一旦改过，它就不是被批的那一段了——
-   * 那时光把旧批注画上去，用户会看到"划在别的字上的红线"。
-   * 一个字都没改时回去看，画面与刚才完全一致，等于白送一次"再瞄一眼"。
+   * 「返回编辑」之后不再有"点回刚才那份批改"的按钮（用户要求去掉）。
+   * 回看那一次靠「批改记录」下拉——它读的是**落盘的练习记录**，
+   * 因此不必再关心"草稿改没改过"这回事：记录里存着那一次提交时的原文与作答，
+   * 批注画的就是那一段文字，永远不会对不上。
    */
-  const canReturnToResult =
-    pageUnlocked && openResults[sectionIndex] !== undefined && (openResults[sectionIndex]?.answer ?? '') === currentAnswer
-
-
   const caseRecords = records.filter((record) => record.exerciseId === exercise.id)
+
+  /**
+   * 这一页在练习记录里的全部批改（**最新在前**），供「批改记录」下拉使用。
+   *
+   * `ordinal` 是"这一页的第几次批改"（1 起），与练习记录页里那个"第几次作答"
+   * （按题目数、跨页累加）刻意不同：下拉是"这一页的历史"，用页内序号才不会让人以为漏了几次。
+   */
+  const gradeHistory: GradeHistoryEntry[] = useMemo(() => {
+    const mine = records
+      .filter((record) => record.exerciseId === exercise.id && record.sectionIndex === sectionIndex)
+      .map((record, index) => ({
+        id: record.id,
+        ordinal: index + 1,
+        createdAt: record.createdAt,
+        level: record.level,
+        score: record.refine
+          ? record.refine.score
+          : scoreCorrection(record.correction, record.answer, record.direction).total,
+        refined: record.refine !== undefined,
+      }))
+    return mine.reverse()
+  }, [records, exercise.id, sectionIndex])
+
+  /** 下拉里选中的那一条记录；没选就是 null（= 正在写） */
+  const viewingGrade = useMemo(
+    () => (viewingGradeId ? (records.find((record) => record.id === viewingGradeId) ?? null) : null),
+    [records, viewingGradeId],
+  )
 
   const isFixtureAnswer = useMemo(() => {
     const trimmed = currentAnswer.trim()
@@ -467,6 +498,8 @@ export function App(): JSX.Element {
   function clearTransientUi(): void {
     setSelection(null)
     setOpenRecord(null)
+    // 换题之后"上一次批改的历史视图"就不成立了（那一条属于上一道题），必须一起清掉
+    setViewingGradeId(null)
     setError(null)
     setNotice(null)
   }
@@ -573,6 +606,8 @@ export function App(): JSX.Element {
   function selectTab(nextTab: Tab): void {
     setTab(nextTab)
     setOpenRecord(null)
+    // 切栏之后不再停在"上一次批改的历史视图"上：那是练习页的临时看法，不是要看的东西
+    setViewingGradeId(null)
     if (nextTab === 'records') return
     if (nextTab === 'favorites') return
     if (nextTab === 'custom') {
@@ -645,6 +680,8 @@ export function App(): JSX.Element {
 
   /** 直接切到某一页（不自动提交）。自动提交那条路在 goToSection 里。 */
   function setSection(nextIndex: number): void {
+    // 翻页之后历史视图失效：下拉里列的本来就是"这一页"的批改记录
+    setViewingGradeId(null)
     dispatchSession({ type: 'sectionChanged', exerciseId: exercise.id, sectionIndex: nextIndex })
   }
 
@@ -720,8 +757,18 @@ export function App(): JSX.Element {
      * 都要求这件事记得住，因此提交成功就往这里记一笔。
      */
     setProgress((previous) => markGraded(previous, target.exerciseId, target.sectionIndex))
+    /*
+     * 提交成功就把这一页重新收回只读（`pageLocked`）。
+     *
+     * 不这么做的话，「返回编辑」过的那一页就永远回不到"已批改"这一档：
+     * 用户改完、按了「提交批改（手动）」，界面却仍旧停在作答框上、左边还写着"已修改 · 待提交"，
+     * 而新结果明明已经存下来了。收回之后显示的就是刚批出来的那一份；想接着改再按「返回编辑」。
+     */
+    dispatchSession({ type: 'pageLocked', exerciseId: target.exerciseId, sectionIndex: target.sectionIndex })
     setSelection(null)
     setOpenRecord(null)
+    // 刚交完，画面就该显示这一次的结果；不再停在历史视图上
+    setViewingGradeId(null)
     setRecords((previous) => {
       /*
        * 编号与"第几次"都不能用 previous.length 推：
@@ -747,6 +794,8 @@ export function App(): JSX.Element {
           answer: pageAnswer,
           correction: judging_.correction,
           validated: judging_.validated,
+          // 精修档那一次也照实存下来：练习记录要能回看"当时怎么改的、给了几分"
+          ...(judging_.refine ? { refine: judging_.refine } : null),
           source: judging_.source,
           raw: judging_.raw,
           createdAt: now,
@@ -792,14 +841,47 @@ export function App(): JSX.Element {
      * 单页题（句子/段落/术语）本来就只有一段，这一行对它没有影响。
      */
     const sourceForJudge = sourceSectionOf(sectionIndex).text || currentSource
-    const outcome = await requestJudgment({
+    const request = {
       source: sourceForJudge,
       direction: exercise.direction,
       genre: exercise.genre,
       level,
       sourceSections: [sourceSectionOf(sectionIndex)],
       answerSections,
-    })
+    }
+
+    /*
+     * 精修档走**另一条链路**：产物是"整篇逐句重写 + 逐句解释 + AI 总评"，
+     * 不是逐处批注（见 domain/refine.ts）。请求形状完全一样，只是打到 /api/refine 上，
+     * 因此逐页批改、分段校验、失败分类这些下游代码一行都不用改。
+     */
+    if (level === 'refine') {
+      const refined = await requestRefine(request)
+      setJudging(false)
+      if (!refined.ok) {
+        setError({ kind: refined.kind, message: refined.message })
+        return false
+      }
+      if (refined.attempts > 1) setNotice('AI 有几次返回没通过校验，已自动重试并修正。')
+      commit(
+        target,
+        {
+          // 精修不逐处批改：correction 是空壳，真正的内容在 refine 里
+          correction: { errors: [], highlights: [] },
+          validated: { errors: [], highlights: [], rejections: [] },
+          refine: refined.refine,
+          level,
+          source: 'live',
+          sectionCount: 1,
+          raw: refined.raw,
+        },
+        pageAnswer,
+        level,
+      )
+      return true
+    }
+
+    const outcome = await requestJudgment(request)
 
     setJudging(false)
 
@@ -861,7 +943,7 @@ export function App(): JSX.Element {
       setError({ kind: 'bad-request', message: '当前作答不是内置示例，无法使用示例批改。' })
       return
     }
-    const checked = validateCorrection(fixture.errors, fixture.highlights, currentAnswer)
+    const checked = validateCorrection(fixture.errors, fixture.highlights, currentAnswer, exercise.direction)
     setError(null)
     setNotice('这是内置示例的批改结果，不是 AI 现场批改的。')
     commit(
@@ -887,29 +969,49 @@ export function App(): JSX.Element {
    * 后者的译文取 `pageResult.answer`（提交当时的那段文字），**不是** drafts：
    * 用户改过一个字之后批注的位置就全对不上了，所以显示的必须是被批的那一版。
    */
-  const shown = openRecord
+  const shown = viewingGrade
     ? {
-        correction: openRecord.correction,
-        validated: openRecord.validated,
-        answer: openRecord.answer,
-        level: openRecord.level,
-        attempt: openRecord.attempt,
+        /* 正在看下拉里选中的那一次：显示的**不是**当前这一页的结果，而是那一次存档 */
+        correction: viewingGrade.correction,
+        validated: viewingGrade.validated,
+        answer: viewingGrade.answer,
+        level: viewingGrade.level,
+        attempt: viewingGrade.attempt,
         sectionCount: 1,
-        source: openRecord.source,
-        raw: openRecord.raw,
+        source: viewingGrade.source,
+        raw: viewingGrade.raw,
+        direction: viewingGrade.direction,
+        ...(viewingGrade.refine ? { refine: viewingGrade.refine } : null),
       }
-    : pageResult && !editing
+    : openRecord
       ? {
-          correction: pageResult.draft.correction,
-          validated: pageResult.draft.validated,
-          answer: pageResult.answer,
-          level: pageResult.draft.level,
-          attempt: caseRecords.length,
-          sectionCount: pageResult.draft.sectionCount,
-          source: pageResult.draft.source,
-          raw: pageResult.draft.raw,
+          correction: openRecord.correction,
+          validated: openRecord.validated,
+          answer: openRecord.answer,
+          level: openRecord.level,
+          attempt: openRecord.attempt,
+          sectionCount: 1,
+          source: openRecord.source,
+          raw: openRecord.raw,
+          direction: openRecord.direction,
+          // 记录里若是精修档的那一次，回看时同样只能看对照
+          ...(openRecord.refine ? { refine: openRecord.refine } : null),
         }
-      : null
+      : pageResult && !editing
+        ? {
+            correction: pageResult.draft.correction,
+            validated: pageResult.draft.validated,
+            answer: pageResult.answer,
+            level: pageResult.draft.level,
+            attempt: caseRecords.length,
+            sectionCount: pageResult.draft.sectionCount,
+            source: pageResult.draft.source,
+            raw: pageResult.draft.raw,
+            direction: exercise.direction,
+            // 精修档：有它界面就走"只给对照"那条路径（见 AnswerPane 的 refine 分支）
+            ...(pageResult.draft.refine ? { refine: pageResult.draft.refine } : null),
+          }
+        : null
 
   /**
    * 术语题的逐条判分结果。
@@ -1250,10 +1352,13 @@ export function App(): JSX.Element {
               notice={notice}
               isFixtureAnswer={isFixtureAnswer}
               editing={editing}
+              fromHistory={viewingGrade !== null}
               pageState={pageState}
               multiSection={multiSection}
               sectionIndex={sectionIndex}
               currentAnswer={currentAnswer}
+              gradeHistory={gradeHistory}
+              viewingRecordId={viewingGrade?.id ?? null}
               onSelect={toggleSelection}
               onSettingsChange={updateSettings}
               onUnlock={() => {
@@ -1267,18 +1372,22 @@ export function App(): JSX.Element {
                 setSelection(null)
                 setNotice(null)
               }}
-              canReturnToResult={canReturnToResult}
-              onReturnToResult={() => {
+              onViewAttempt={(id) => {
                 /*
-                 * 点回刚才那份批改：**不重新提交**，只是把这一页收回只读、把结果重新显示出来。
-                 * 能点到这里就说明草稿一个字都没改，因此显示的批注与草稿仍然对得上。
+                 * 「批改记录」下拉里选了某一次：右栏切成那一次的结果（只读）。
                  *
-                 * 不再弹提示语（用户明确说那句是废话）：画面本身已经变成"带批注的批改"，
-                 * 而右上角那颗「返回编辑」就摆在那里，用法一目了然。
+                 * 显示的是**那一次提交时的原文与作答**（记录里存着），因此批注画在对的文字上——
+                 * 这也正是它比旧的「查看上次批改」强的地方：改了字之后照样能回看。
+                 * 正在写的草稿一个字都不动。
                  */
-                dispatchSession({ type: 'pageResultRestored', exerciseId: exercise.id })
+                const record = gradeHistory.find((entry) => entry.id === id)
+                setViewingGradeId(record?.id ?? null)
                 setSelection(null)
                 setNotice(null)
+              }}
+              onBackToWriting={() => {
+                setViewingGradeId(null)
+                setSelection(null)
               }}
               onLevelChange={setLevel}
               onSubmit={() => void submitPage(sectionIndex)}

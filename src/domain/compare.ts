@@ -8,7 +8,7 @@
  */
 
 import type { MarkColor } from './types'
-import { colorForCategory, type ValidatedCorrection } from './validate'
+import type { ValidatedCorrection } from './validate'
 import { splitSentenceSpans } from './sentences'
 
 /** 对照视图里的一段文字；着色表示「这里被改过 / 值得肯定」。 */
@@ -29,6 +29,11 @@ export interface CompareLine {
   corrected: CompareSpan[]
   /** 这一句有没有被改动（没有的话两行一样，界面可以淡化处理） */
   changed: boolean
+  /**
+   * 这一句的说明。**只有精修档会用到**（那边要逐句说清为什么这么改）；
+   * 润色档的说明挂在每一处批注上，点那一处才显示，因此这里不填。
+   */
+  note?: string
 }
 
 /**
@@ -81,7 +86,8 @@ export function buildCompareLines(validated: ValidatedCorrection, answer: string
       start: change.start,
       end: change.end,
       to: change.to,
-      color: colorForCategory(entry.error.category),
+      // 颜色取解析时定死的那个（漏译/多译按字数定轻重，见 severity.ts），不按分类现推
+      color: entry.hard ? 'red' : 'orange',
       errorId: entry.error.id,
     })),
   )

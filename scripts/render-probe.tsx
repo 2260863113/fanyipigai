@@ -85,6 +85,33 @@ export interface RenderProbe {
     /** 点开之后，弹窗里的完整文本 */
     rawModalText: string
   }
+  /** 精修档：整篇逐句重写 + 逐句解释 + AI 总评，而且只给对照（见 domain/refine.ts） */
+  refine?: {
+    /** 按「返回编辑」把批过的那一页放开（作答还在） */
+    reUnlock: boolean
+    editorBack: boolean
+    /** 档位切到「精修」 */
+    levelPicked: boolean
+    activeLevel: string
+    /** 精修那一次提交打到了 /api/refine 几次 */
+    refineCalls: number
+    refineRequestBody: string
+    /** 只给对照：对照列表在、勾画不在 */
+    hasCompareList: boolean
+    hasAnnotatedLines: boolean
+    lineCount: number
+    noteText: string
+    correctedText: string
+    /** 视图开关保留但禁用，并注明为什么 */
+    viewButtonsDisabled: boolean
+    lockedNote: string
+    /** 分数是 AI 总评，而且写着"不与润色档可比" */
+    scorePaneText: string
+    scoreChip: string[]
+    /** 右下角说清"不逐处批改" */
+    notesPaneText: string
+    paneHtml: string
+  }
   /** 四栏边界可拖动；「返回编辑」之后输入框回来 */
   panels?: {
     hasSplitter: boolean
@@ -95,12 +122,17 @@ export interface RenderProbe {
     judgeCallsAfterReturn: number
     /** 刚按「返回编辑」时的提交按钮文案（还没动字，应当是普通的「提交批改」） */
     submitLabelAfterUnlock: string
-    /** 刚按「返回编辑」时有没有「查看上次批改」（没动字时应当有） */
-    canGoBackBeforeEdit: boolean
-    /** 点「查看上次批改」的结果：回到带批注的批改、重新只读、而且不发请求 */
+    /** 刚按「返回编辑」时有没有「批改记录」下拉（应当有：历史是落盘的，放开重写不影响它） */
+    historyItemCount: number
+    /** 下拉里至少有东西、而且点第一条真的把右栏切成了当时那份批改 */
+    pickedFromHistory: boolean
+    /** 改过字之后「批改记录」下拉还在吗（应当还在——这正是它比旧的「查看上次批改」强的地方） */
+    historyKeptAfterEdit: boolean
+    /** 改过之后**手动提交**：这一页重新变回只读、把刚批出来的结果显示出来（回归：曾经一直停在作答框上） */
+    manualSubmitShowsResult: boolean
+    manualSubmitReadOnly: boolean
+    /** 从下拉里点一条回看的结果：回到带批注的批改、重新只读、而且不发请求 */
     backToResult: { 有批注译文: boolean; 又是只读: boolean; 新增调用: number }
-    /** 改过字之后还有没有「查看上次批改」（应当没有：批注已经对不上了） */
-    canGoBackAfterEdit: boolean
   }
   /**
    * 逐页批改走一遍的观察：每翻一页记下这一页的状态、按钮文案、有没有输入框。
@@ -273,6 +305,61 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number; lastBody:
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       )
     }
+    if (pathname === '/api/refine') {
+      /*
+       * 精修档：回一份**与提交文字自洽**的重写结果。
+       *
+       * 重写只改一个字符（句首大写），这样 `minimizeChange` 能算出最小不同项、
+       * 对照视图上只染那一个字——结构断言才验证得了"只染真正变了的字"这件事。
+       * 分数与评语是固定的：断言要能对得上具体的数字与句子。
+       */
+      calls += 1
+      lastBody = String(init?.body ?? '')
+      const refineBody = JSON.parse(lastBody || '{}') as {
+        answerSections?: Array<{ start: number; text: string }>
+      }
+      const refineSections = refineBody.answerSections ?? []
+      const submittedText = refineSections.map((section) => section.text).join('\n\n').trim()
+      const refined = submittedText.length > 0 ? submittedText[0]!.toUpperCase() + submittedText.slice(1) : submittedText
+      const refineAnchorStart = refineSections[0]?.start ?? 0
+      const refinePayload = {
+        ok: true,
+        attempts: 1,
+        raw: JSON.stringify(
+          {
+            score: 86,
+            comment: '整体到位；有个别语法小问题；表达可以更地道。',
+            sentences: [
+              {
+                original: submittedText,
+                rewritten: refined,
+                explanation: '句首字母要大写；其余保持不变。',
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+        refine: {
+          score: 86,
+          comment: '整体到位；有个别语法小问题；表达可以更地道。',
+          sentences: [
+            {
+              id: 'r1',
+              oldText: submittedText,
+              anchor: { start: refineAnchorStart, end: refineAnchorStart + submittedText.length, snippet: submittedText },
+              rewritten: refined,
+              explanation: '句首字母要大写；其余保持不变。',
+              changed: submittedText !== refined,
+            },
+          ],
+        },
+      }
+      return new Response(JSON.stringify(refinePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
     if (pathname !== '/api/judge') throw new Error(`渲染测试未预期的请求：${pathname}`)
     calls += 1
     lastBody = String(init?.body ?? '')
@@ -281,7 +368,10 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number; lastBody:
     const body = JSON.parse(lastBody || '{}') as {
       answerSections?: Array<{ start: number; text: string }>
       source?: string
+      direction?: Direction
     }
+    /** 真实接口拿得到方向（它就在请求里），位置校验与算分都要它——这里如实照抄 */
+    const judgedDirection: Direction = body.direction ?? 'en-to-zh'
     const submitted = (body.answerSections ?? []).map((section) => section.text).join('\n\n')
     /*
      * 找到"提交的作答属于哪一道内置示例"。
@@ -316,7 +406,7 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number; lastBody:
         anchor: { start: Math.max(0, anchorStart), end: Math.max(0, anchorStart) + excerpt.length, snippet: excerpt },
         comment: '渲染测试用的固定亮点（作答不属于任何内置示例时由此兜底）',
       }
-      const checkedEmpty = validateCorrection([], [highlight], submitted)
+      const checkedEmpty = validateCorrection([], [highlight], submitted, judgedDirection)
       const payload = {
         ok: true,
         attempts: 1,
@@ -342,7 +432,7 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number; lastBody:
     const correction = fixtureCorrectionFor(exercise.exercise.id, answerForFixture)
     if (!correction) throw new Error('渲染测试：取不到内置示例的批改结果')
     // 与真实接口保持严格同构：真实接口也会把位置校验的结果与 AI 原始返回一起带回来
-    const checked = validateCorrection(correction.errors, correction.highlights, answerForFixture)
+    const checked = validateCorrection(correction.errors, correction.highlights, answerForFixture, exercise.exercise.direction)
     const payload = {
       ok: true,
       attempts: 1,
@@ -381,6 +471,8 @@ export async function renderApp(
     checkRecords?: boolean
     checkGenerate?: boolean
     checkPanels?: boolean
+    /** 走一遍精修档：整篇逐句重写 + AI 总评 + 只给对照（见 domain/refine.ts） */
+    checkRefine?: boolean
     checkViews?: boolean
     /** 先在浏览器里存一篇自定义题（模拟"上次贴过"），贴题流程用它做起点 */
     seedCustom?: string
@@ -1235,36 +1327,47 @@ export async function renderApp(
     }
     const editorShown = container.querySelector('.answer-input') !== null
     /*
-     * 放开之后**还没改字**：按钮仍是普通的「提交批改」，而且多一颗「查看上次批改」
-     * ——那份批改被挪进了暂存区，用户可以在真正动字之前回去再看一眼（用户要求）。
+     * 放开之后**还没改字**：按钮仍是普通的「提交批改」，
+     * 而回看那一次批改靠的是**「批改记录」下拉**（用户要求把「查看上次批改」按钮删掉）。
+     * 这里量三件事：
+     *   1. 放开之后下拉还在（历史是落盘的，不随"放开重写"消失）；
+     *   2. 打开下拉能看到那一次（至少一条），点它能把右栏切成当时那份批改；
+     *   3. 整个过程**不发请求**（回看不是重新批改）。
      */
     const submitLabelAfterUnlock =
       container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')?.textContent?.trim() ?? ''
-    const canGoBackBeforeEdit = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].some(
-      (node) => node.textContent?.trim() === '查看上次批改',
+    const historyTrigger = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .domain-trigger')].find(
+      (node) => node.textContent?.includes('批改记录'),
     )
-    // 点回去：应当原样回到那份批改，而且**不发请求**
     const callsBeforeGoBack = judgeFetch.calls()
-    const goBack = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
-      (node) => node.textContent?.trim() === '查看上次批改',
-    )
-    if (goBack) {
+    let historyItemCount = 0
+    let pickedFromHistory = false
+    if (historyTrigger) {
       await act(async () => {
-        goBack.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        historyTrigger.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       })
+      const items = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .domain-item')]
+      historyItemCount = items.length
+      const first = items[0]
+      if (first) {
+        await act(async () => {
+          first.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        })
+        pickedFromHistory = true
+      }
     }
     const backToResult = {
       有批注译文: container.querySelector('.pane-answer .annotated-lines') !== null,
       又是只读: container.querySelector('.answer-input') === null,
       新增调用: judgeFetch.calls() - callsBeforeGoBack,
     }
-    // 再放开一次，接着走后面那些断言
-    const unlockAgain = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
-      (node) => node.textContent?.trim() === '返回编辑',
+    // 点「回到作答」回到作答框，再放开一次，接着走后面那些断言
+    const backToWriting = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
+      (node) => node.textContent?.trim() === '回到作答',
     )
-    if (unlockAgain) {
+    if (backToWriting) {
       await act(async () => {
-        unlockAgain.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        backToWriting.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       })
     }
     /*
@@ -1274,12 +1377,25 @@ export async function renderApp(
     await typeInto('（改了一下）')
     const submitLabelAfterEdit =
       container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')?.textContent?.trim() ?? ''
-    const canGoBackAfterEdit = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].some(
-      (node) => node.textContent?.trim() === '查看上次批改',
+    /** 改过字之后下拉**仍然在**（这正是它比旧的「查看上次批改」强的地方） */
+    const historyKeptAfterEdit = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .domain-trigger')].some(
+      (node) => node.textContent?.includes('批改记录'),
     )
     await clickNav('prev')
     await clickNav('next')
     const judgeCallsAfterReturn = judgeFetch.calls()
+
+    /*
+     * 改过之后**手动提交**：这一页必须重新变回只读、把刚批出来的结果显示出来。
+     *
+     * 这是一个真实存在过的窟窿：「返回编辑」把这一页记进 `unlocked` 之后，
+     * 它再也回不到"已批改"那一档——用户改完按了提交，界面却仍旧停在作答框上、
+     * 左边还写着"已修改 · 待提交"，而新结果明明已经存下来了。
+     * 现在提交成功会把这一页收回只读（见 session.ts 的 `pageLocked`）。
+     */
+    await submitCurrentPage()
+    const manualSubmitShowsResult = container.querySelector('.pane-answer .annotated-lines') !== null
+    const manualSubmitReadOnly = container.querySelector('.answer-input') === null
 
     // 2) 拖动左右边界：应当切到手动比例，并记住
     const splitter = container.querySelector<HTMLElement>('.splitter-v')
@@ -1303,9 +1419,12 @@ export async function renderApp(
       resultBack: submitLabelAfterEdit.includes('手动'),
       judgeCallsAfterReturn: judgeCallsAfterReturn - callsBeforeUnlock,
       submitLabelAfterUnlock,
-      canGoBackBeforeEdit,
+      historyItemCount,
+      pickedFromHistory,
+      historyKeptAfterEdit,
+      manualSubmitShowsResult,
+      manualSubmitReadOnly,
       backToResult,
-      canGoBackAfterEdit,
     }
   }
 
@@ -1319,12 +1438,72 @@ export async function renderApp(
   const flowText = (flowLines?.textContent ?? '').replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, '')
   const submittedAnswer = answerSections.map((section) => section.text).join('\n\n')
 
+  /*
+   * 精修档：**整篇逐句重写 + 逐句解释 + AI 总评**，而且只给对照（用户要求）。
+   *
+   * 跑在主流程之后：那时这一页刚批过、是只读的，于是这一段先按「返回编辑」放开它
+   * （作答还在），再把档位切到「精修」，重新提交一次——正好是把真实用法的顺序走了一遍。
+   */
+  let refine: RenderProbe['refine']
+  if (options.checkRefine) {
+    const clickByTextIn = async (selector: string, label: string): Promise<boolean> => {
+      const node = [...container.querySelectorAll<HTMLButtonElement>(selector)].find(
+        (item) => item.textContent?.trim() === label,
+      )
+      if (!node) return false
+      await act(async () => {
+        node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      return true
+    }
+
+    // 1) 放开这一页，再把档位切到精修
+    const reUnlock = await clickByTextIn('.pane-answer .btn', '返回编辑')
+    const editorBack = container.querySelector('.answer-input') !== null
+    const levelPicked = await clickByTextIn('.level-btn', '精修')
+    const activeLevel = container.querySelector('.level-btn-active')?.textContent?.trim() ?? ''
+
+    // 2) 重新提交：这一次走的是 /api/refine
+    const callsBeforeRefine = judgeFetch.calls()
+    await submitCurrentPage()
+    const refineCalls = judgeFetch.calls() - callsBeforeRefine
+
+    const paneHtml = container.querySelector('.pane-answer')?.innerHTML ?? ''
+    const switchButtons = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .view-btn')]
+    refine = {
+      reUnlock,
+      editorBack,
+      levelPicked,
+      activeLevel,
+      /** 精修的那一次提交打到了 /api/refine（而不是 /api/judge）+ 那一次的请求体 */
+      refineCalls,
+      refineRequestBody: judgeFetch.lastBody(),
+      /** 只给对照：对照列表在、勾画不在 */
+      hasCompareList: container.querySelector('.pane-answer .compare-list') !== null,
+      hasAnnotatedLines: container.querySelector('.pane-answer .annotated-lines') !== null,
+      /** 一句原译、一句改后、下面跟一句解释 */
+      lineCount: container.querySelectorAll('.pane-answer .compare-line').length,
+      noteText: container.querySelector('.pane-answer .compare-note')?.textContent?.trim() ?? '',
+      correctedText: textOf('.pane-answer .compare-corrected'),
+      /** 视图开关保留但禁用，并注明为什么 */
+      viewButtonsDisabled: switchButtons.length > 0 && switchButtons.every((button) => button.disabled),
+      lockedNote: textOf('.pane-answer .view-switch'),
+      /** 分数是 AI 总评，而且写着"不与润色档可比" */
+      scorePaneText: textOf('.pane-score'),
+      scoreChip: [...container.querySelectorAll('.pane-score .chip')].map((node) => node.textContent?.trim() ?? ''),
+      /** 右下角说清"不逐处批改" */
+      notesPaneText: textOf('.pane-notes'),
+      paneHtml,
+    }
+  }
+
   return {
     sectionNavTrace,
     perPage,
     revisit,
     flow: { text: flowText, answer: submittedAnswer, matches: flowText === submittedAnswer },
     panels,
+    refine,
     custom,
     views,
     record,

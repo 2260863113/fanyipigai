@@ -15,6 +15,9 @@
 import {
   buildGenerationSystemPrompt,
   buildGenerationUserPrompt,
+  buildRefineRetryPrompt,
+  buildRefineSystemPrompt,
+  buildRefineUserPrompt,
   buildRetryPrompt,
   buildSectionNote,
   buildSystemPrompt,
@@ -23,6 +26,7 @@ import {
   type GenerationRequest,
 } from './prompt'
 import { parseCorrection, type ParseSuccess } from './parse'
+import { parseRefine, type RefineResult } from './refine'
 import { validateCorrection } from './validate'
 import { FailureCollector } from './archive'
 import { mergeSectionCorrections, rebuildFromSections, type Section } from './sections'
@@ -256,7 +260,7 @@ async function judgeOneSection(
       continue
     }
 
-    const parsed = parseCorrection(result.content, request.answer)
+    const parsed = parseCorrection(result.content, request.answer, request.direction)
     if (parsed.ok) return { ok: true, parsed, attempts: attempt, raw: lastRaw }
 
     allProblems.push(...parsed.problems)
@@ -373,7 +377,7 @@ export async function judgeAnswer(
   // 注意：不要走 parseCorrection 再解析一遍——那是旧的"让 AI 给序号"方案留下来的做法，
   // 而合并后的批注已经没有 oldText 可供重新定位了。位置此刻就在手上，直接校验区间。
   const mergedAnswer = rebuildFromSections(sections)
-  const revalidated = validateCorrection(merged.errors, merged.highlights, mergedAnswer)
+  const revalidated = validateCorrection(merged.errors, merged.highlights, mergedAnswer, request.direction)
   if (merged.errors.length > 0 && revalidated.errors.length === 0) {
     return fail('bad-output', [
       '合并后的批注在全文坐标下全部校验失败，说明段落起点的换算有问题',
@@ -396,6 +400,91 @@ export async function judgeAnswer(
     sectionCount: total,
     raw,
   }
+}
+
+/* ── 精修档：整篇逐句重写 ────────────────────────────────── */
+
+export interface RefineSuccess {
+  ok: true
+  refine: RefineResult
+  /** 试了几次（含首次） */
+  attempts: number
+  /** AI 原样返回的文本，与批改一样留给「查看完整返回」 */
+  raw: string
+}
+
+export type RefineOutcome = RefineSuccess | JudgeFailure
+
+/**
+ * 精修档：让模型把这一段译文**逐句重写**，并给一个总体分数与评语。
+ *
+ * 与润色档的关系：
+ *   - 走**同一套模型调用、超时与失败分类**（密钥无效 / 余额不足 / 被截断这些提示两边完全一致）；
+ *   - 但提示词、解析器、产物都不同（见 prompt.ts 的 buildRefineSystemPrompt 与 domain/refine.ts）。
+ *
+ * 一次请求：精修的产物是"整篇重写"，而逐页批改下**这一页本来就只有一个段落**，
+ * 再按段拆开并行反而会把同一篇的上下文切断（改写要看全篇才知道语序怎么调）。
+ */
+export async function refineAnswer(
+  request: CorrectionRequest,
+  config: JudgeConfig,
+  collector: FailureCollector = new FailureCollector(),
+): Promise<RefineOutcome> {
+  if (!config.apiKey) return fail('missing-key', [])
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: buildRefineSystemPrompt() },
+    { role: 'user', content: buildRefineUserPrompt(request) },
+  ]
+  const allProblems: string[] = []
+  let lastRaw = ''
+
+  for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs)
+
+    let result: Awaited<ReturnType<typeof callDeepSeek>>
+    try {
+      result = await callDeepSeek(config, messages, controller.signal)
+    } finally {
+      clearTimeout(timer)
+    }
+
+    if (!result.ok) {
+      const { kind } = result.failure
+      if (kind === 'unauthorized' || kind === 'insufficient-balance' || kind === 'missing-key') return result.failure
+      allProblems.push(...result.failure.problems)
+      if (attempt === config.maxAttempts) return result.failure
+      continue
+    }
+
+    lastRaw = result.content
+
+    if (result.finishReason === 'length') {
+      const problems = ['上一次的返回因为太长被截断了，请把每一句的 explanation 写短一些，确保 JSON 完整闭合']
+      allProblems.push(...problems)
+      collector.record(attempt, lastRaw, result.finishReason, problems, 1)
+      if (attempt === config.maxAttempts) {
+        return fail('truncated', problems, { rawExcerpt: lastRaw.slice(-400) })
+      }
+      messages.push({ role: 'assistant', content: lastRaw })
+      messages.push({ role: 'user', content: buildRefineRetryPrompt(problems) })
+      continue
+    }
+
+    const parsed = parseRefine(result.content, request.answer)
+    if (parsed.ok) return { ok: true, refine: parsed.refine, attempts: attempt, raw: lastRaw }
+
+    allProblems.push(...parsed.problems)
+    collector.record(attempt, lastRaw, result.finishReason, parsed.problems, 1)
+    if (attempt === config.maxAttempts) {
+      return fail('bad-output', parsed.problems, { rawExcerpt: lastRaw.slice(0, 400) })
+    }
+    messages.push({ role: 'assistant', content: lastRaw })
+    messages.push({ role: 'user', content: buildRefineRetryPrompt(parsed.problems) })
+  }
+
+  return fail('bad-output', allProblems, { rawExcerpt: lastRaw.slice(0, 400) })
 }
 
 /* ── AI 出题 ──────────────────────────────────────────────── */

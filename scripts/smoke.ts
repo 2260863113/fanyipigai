@@ -83,7 +83,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(correction !== null, `${exercise.id} 的示例作答能取到内置批改结果`)
     if (!correction) continue
     const expectedErrors = correction.errors.length
-    const result = validateCorrection(correction.errors, correction.highlights, sampleAnswer)
+    const result = validateCorrection(correction.errors, correction.highlights, sampleAnswer, exercise.direction)
 
     check(
       result.rejections.length === 0,
@@ -497,10 +497,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         highlights: [],
       }),
       answer,
+      'en-to-zh',
     )
     if (parsed.ok) {
       const lines = buildCompareLines(
-        validateCorrection(parsed.correction.errors, parsed.correction.highlights, answer),
+        validateCorrection(parsed.correction.errors, parsed.correction.highlights, answer, 'en-to-zh'),
         answer,
       )
       check(lines.length === 2, `两句各出一行对照（实际 ${lines.length}）`)
@@ -617,6 +618,181 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   } catch (error) {
     check(false, '术语判分的映射可以验证', error instanceof Error ? error.message : String(error))
   }
+
+  /*
+   * 漏译 / 多译的**轻重**：用户的口径是"漏 0~2 个单位算橙色，漏三个单位以上算红色"，
+   * 由程序按字数判（见 domain/severity.ts）。
+   *
+   * 这一条要盯住三件事：
+   *   1. 单位取**译文那一侧**的口径——中译英的译文是英文，所以数**词**（这里最容易搞反）；
+   *   2. 线画在 2 与 3 之间：**正好 3 个单位就算严重**；
+   *   3. 颜色变了，**扣分跟着变**（红扣 8、橙扣 3），否则页面上的颜色与分数会互相矛盾。
+   */
+  console.log('\n[漏译/多译的轻重] 按字数判红橙，0~2 个单位橙、3 个单位以上红')
+  try {
+    const { MINOR_UNITS_LIMIT, isHardError, severityUnits } = await import('../src/domain/severity')
+    const { scoreCorrection } = await import('../src/domain/scoring')
+
+    check(MINOR_UNITS_LIMIT === 2, `轻重线是 2 个单位（实际 ${MINOR_UNITS_LIMIT}）`)
+
+    const omission = (targetText: string): import('../src/domain/types').ErrorObject => ({
+      id: 'e1',
+      type: 'insert',
+      category: 'omission',
+      insertAfter: { start: 0, end: 0, snippet: 'x' },
+      targetText,
+      explanation: 'x',
+    })
+    const addition = (oldText: string): import('../src/domain/types').ErrorObject => ({
+      id: 'e2',
+      type: 'delete',
+      category: 'addition',
+      oldText,
+      explanation: 'x',
+    })
+
+    // 中译英：译文是英文 → 数词
+    check(severityUnits(omission('the'), 'zh-to-en') === 1, '中译英漏一个小品词 = 1 个单位')
+    check(isHardError(omission('the'), 'zh-to-en') === false, '漏一个词 → 橙（表达问题）')
+    check(isHardError(omission('a national strategy'), 'zh-to-en') === true, '漏三个词 → 红')
+    check(isHardError(omission('reform and opening up'), 'zh-to-en') === true, '漏一整个固定表述 → 红')
+
+    // 英译中：译文是中文 → 数汉字（口径与原文那一侧**相反**，这里最容易搞反）
+    check(severityUnits(omission('的'), 'en-to-zh') === 1, '英译中漏一个汉字 = 1 个单位')
+    check(isHardError(omission('和谐'), 'en-to-zh') === false, '漏 2 个字 → 橙（正好在线上）')
+    check(isHardError(omission('人与自然和谐共生'), 'en-to-zh') === true, '漏 3 个字以上 → 红')
+
+    // 多译同理，量的是**要划掉的那段**
+    check(isHardError(addition('等'), 'en-to-zh') === false, '多一个"等"字 → 橙')
+    check(isHardError(addition('，这一点非常重要'), 'en-to-zh') === true, '多出一整句 → 红')
+
+    // 其它分类仍按分类判，不受字数影响
+    check(
+      isHardError({ id: 'e3', type: 'replace', category: 'grammar', oldText: 'a', targetText: 'b', explanation: 'x' }, 'en-to-zh') === true,
+      '语法错与字数无关，永远红',
+    )
+    check(
+      isHardError({ id: 'e4', type: 'replace', category: 'word-choice', oldText: 'a', targetText: 'b', explanation: 'x' }, 'en-to-zh') === false,
+      '用词不当与字数无关，永远橙',
+    )
+
+    // 颜色与分数必须同源：轻微漏译按橙扣 3 分、严重漏译按红扣 8 分
+    const minorScore = scoreCorrection({ errors: [omission('the')], highlights: [] }, 'Some answer here.', 'zh-to-en')
+    const majorScore = scoreCorrection({ errors: [omission('a national strategy')], highlights: [] }, 'Some answer here.', 'zh-to-en')
+    check(minorScore.softCount === 1 && minorScore.hardCount === 0, '轻微漏译记在"表达问题"里')
+    check(majorScore.hardCount === 1 && majorScore.softCount === 0, '严重漏译记在"硬性错误"里')
+    check(
+      minorScore.total === 97 && majorScore.total === 92,
+      `扣分跟着颜色走（轻微 ${minorScore.total} 分 / 严重 ${majorScore.total} 分）`,
+      `${minorScore.total} / ${majorScore.total}`,
+    )
+  } catch (error) {
+    check(false, '漏译轻重可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 精修档：**整篇逐句重写 + 逐句解释 + AI 总评**（见 domain/refine.ts）。
+   *
+   * 用户对这一档的要求与原话："让 ai 将整个翻译重新写，修改单位为每句，
+   * 让 AI 说明他修改的某一句对应的是哪一句……不统计，不逐处批改，
+   * 但是让 AI 给一个最终分数和解释。"
+   *
+   * 这里盯住四件事：
+   *   1. 解析：分数、评语、逐句三个字段缺一不可，格式不对就整份重试；
+   *   2. **定位**：原句由程序按文字找位置（AI 不数序号），找不到就报错重试；
+   *   3. 对照行：一句原译、一句改后、下面跟着这一句的解释；
+   *   4. **颜色一律橙色**：精修不分类，没有依据说哪一处算硬性错误。
+   */
+  console.log('\n[精修档] 整篇逐句重写：解析、定位、对照行')
+  try {
+    const { parseRefine, buildRefineLines, changedSentenceCount } = await import('../src/domain/refine')
+
+    const answer = 'i is a form of human progress. it became a important part.'
+    const sent = (original: string, rewritten: string, explanation: string) => ({ original, rewritten, explanation })
+    const ok = parseRefine(
+      JSON.stringify({
+        score: 88,
+        comment: '术语到位；语法有几处硬伤；表达可以更地道。',
+        sentences: [
+          sent('i is a form of human progress.', 'I am a form of human progress.', 'I 要大写；主语 I 用 am。'),
+          sent('it became a important part.', 'It became an important part.', '句首大写；important 前用 an。'),
+        ],
+      }),
+      answer,
+    )
+    check(ok.ok, '一份合法的精修返回能解析出来', ok.ok ? '' : ok.problems.join('；'))
+    if (ok.ok) {
+      check(ok.refine.score === 88, `分数照收（${ok.refine.score}）`)
+      check(ok.refine.comment.length > 0, '评语照收')
+      check(ok.refine.sentences.length === 2, `逐句两条（实际 ${ok.refine.sentences.length}）`)
+      check(changedSentenceCount(ok.refine) === 2, '两句都算"改过"')
+      check(
+        ok.refine.sentences[0]!.anchor.start < ok.refine.sentences[1]!.anchor.start,
+        '句子按原句在译文里的先后排好',
+      )
+      check(
+        ok.refine.sentences[0]!.anchor.snippet === 'i is a form of human progress.',
+        '原句的区间是程序按文字定位出来的（AI 不数序号）',
+      )
+
+      const lines = buildRefineLines(ok.refine)
+      check(lines.length === 2, `对照两行（实际 ${lines.length}）`)
+      check(
+        lines[0]?.original === 'i is a form of human progress.' &&
+          lines[0]?.corrected.map((part) => part.text).join('') === 'I am a form of human progress.',
+        '一行原译、一行改后',
+      )
+      check(lines[0]?.note === 'I 要大写；主语 I 用 am。', '这一句的解释跟着这一对一起给出来')
+      check(
+        lines[0]?.corrected.some((part) => part.color === 'orange') === true,
+        '改动过的字带橙色（精修不分类，一律按"表达问题"显示）',
+      )
+      check(
+        lines.every((line) => line.corrected.every((part) => part.color !== 'red')),
+        '精修里不会出现红色（那一档没有"硬性错误"这回事）',
+      )
+    }
+
+    // 没改的句子：照抄一遍，changed=false，仍然出现在对照里
+    const unchanged = parseRefine(
+      JSON.stringify({
+        score: 95,
+        comment: '整体到位。',
+        sentences: [sent('i is a form of human progress.', 'i is a form of human progress.', '这一句不必改。')],
+      }),
+      answer,
+    )
+    check(unchanged.ok && changedSentenceCount(unchanged.refine) === 0, '一字不差的那一句不算"改过"')
+    check(
+      unchanged.ok && buildRefineLines(unchanged.refine)[0]?.changed === false,
+      '它仍然出在对照里（没改的句子也要照抄一遍，程序才对得齐整篇）',
+    )
+
+    // 缺字段 / 分数越界 / 原句定位不上：都要报出具体原因（回去重试）
+    const noScore = parseRefine(
+      JSON.stringify({ comment: 'x', sentences: [sent('i is', 'I am', 'x')] }),
+      answer,
+    )
+    check(!noScore.ok && noScore.problems.some((item) => item.includes('score')), '缺分数时明确报"缺 score"')
+    const outOfRange = parseRefine(
+      JSON.stringify({ score: 120, comment: 'x', sentences: [sent('i is', 'I am', 'x')] }),
+      answer,
+    )
+    check(!outOfRange.ok && outOfRange.problems.some((item) => item.includes('0–100')), '分数越界时明确报出来')
+    const badAnchor = parseRefine(
+      JSON.stringify({ score: 80, comment: 'x', sentences: [sent('这段文字根本不在译文里', 'x', 'x')] }),
+      answer,
+    )
+    check(!badAnchor.ok, '原句定位不上就整份重试（缺了几句的对照比明确失败更糟）')
+    const emptyExplanation = parseRefine(
+      JSON.stringify({ score: 80, comment: 'x', sentences: [sent('i is', 'I am', '')] }),
+      answer,
+    )
+    check(!emptyExplanation.ok, '少一句解释也算不合格（用户要求每一句都给解释）')
+  } catch (error) {
+    check(false, '精修档的解析与对照可以验证', error instanceof Error ? error.message : String(error))
+  }
+
 
   /*
    * 文章**分页**：用户的口径是「把每个文章进行分段，文章模式下，一段一段的出」，
@@ -852,6 +1028,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
           highlights: [],
         }),
         item.answer,
+      'zh-to-en',
       )
       if (!outcome.ok) {
         check(false, `最小匹配：${item.name}`, outcome.problems.join('；'))
@@ -1307,6 +1484,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         wordCorrection.errors,
         wordCorrection.highlights,
         wordOrderCase.sampleAnswer,
+        wordOrderCase.exercise.direction,
       )
       const wordLayout = buildLayout(wordValidated, wordOrderCase.sampleAnswer)
       const missed = wordLayout.segments.find((segment) => segment.errorId === 's3-e2')
@@ -1334,10 +1512,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         highlights: [],
       }),
       rewriteAnswer,
+      'en-to-zh',
     )
     if (coercedRewrite.ok) {
       const rewriteLayout = buildLayout(
-        validateCorrection(coercedRewrite.correction.errors, coercedRewrite.correction.highlights, rewriteAnswer),
+        validateCorrection(coercedRewrite.correction.errors, coercedRewrite.correction.highlights, rewriteAnswer, 'en-to-zh'),
         rewriteAnswer,
       )
       const marks = rewriteLayout.segments.filter((segment) => segment.errorId === 'rw-1')
@@ -1374,10 +1553,11 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         highlights: [],
       }),
       spreadAnswer,
+      'en-to-zh',
     )
     if (spread.ok) {
       const spreadLayout = buildLayout(
-        validateCorrection(spread.correction.errors, spread.correction.highlights, spreadAnswer),
+        validateCorrection(spread.correction.errors, spread.correction.highlights, spreadAnswer, 'en-to-zh'),
         spreadAnswer,
       )
       const marks = spreadLayout.segments.filter((segment) => segment.errorId === 'spread-1')
@@ -1413,6 +1593,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         reorderCorrection.errors,
         reorderCorrection.highlights,
         reorderCase.sampleAnswer,
+        reorderCase.exercise.direction,
       )
       const reorderLayout = buildLayout(reorderValidated, reorderCase.sampleAnswer)
 
@@ -1512,24 +1693,90 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         panels.submitLabelAfterUnlock.trim() === '提交批改',
         `还没动字时按钮是普通的「提交批改」（实际 ${JSON.stringify(panels.submitLabelAfterUnlock)}）`,
       )
-      check(panels.canGoBackBeforeEdit, '还没动字时给着「查看上次批改」——退回修改后仍然能回到批改界面')
+      /*
+       * 「返回编辑」之后靠**「批改记录」下拉**回看那一次批改（用户要求把「查看上次批改」按钮删掉）。
+       * 关键差别：下拉读的是**落盘的练习记录**，因此**改过字之后它照样在**——
+       * 旧按钮只在"一个字都没改"时才出现，一改就再也看不到上次批的是哪儿了。
+       */
+      check(
+        panels.historyItemCount >= 1,
+        `「返回编辑」之后「批改记录」下拉里能看到那一次（${panels.historyItemCount} 条）`,
+      )
+      check(panels.pickedFromHistory, '下拉里点一条，真的把右栏切成了当时那份批改')
       check(
         panels.backToResult.有批注译文 && panels.backToResult.又是只读,
-        '点它就回到那份带批注的批改，而且这一页重新只读',
+        '看了那一次之后是带批注的只读译文，而且这一页重新只读',
         JSON.stringify(panels.backToResult),
       )
       check(
         panels.backToResult.新增调用 === 0,
-        `回去看**不是**重新提交（多发 ${panels.backToResult.新增调用} 次请求）`,
+        `回看历史**不是**重新提交（多发 ${panels.backToResult.新增调用} 次请求）`,
       )
       check(panels.resultBack, '改过字之后按钮才变成手动的「提交批改（手动）」')
-      check(!panels.canGoBackAfterEdit, '改过字之后「查看上次批改」消失（批注已经对不上那段文字了）')
+      check(panels.historyKeptAfterEdit, '改过字之后「批改记录」下拉还在（这是它比旧按钮强的地方）')
+      /*
+       * 回归：手动提交之后必须**重新变回只读并显示新结果**。
+       * 曾经这一页永远回不到"已批改"那一档——用户改完提交了，界面还停在作答框上、
+       * 左边写着"已修改 · 待提交"，而结果明明已经存下来了。
+       */
+      check(
+        panels.manualSubmitShowsResult && panels.manualSubmitReadOnly,
+        '改过之后手动提交：这一页重新只读，并把刚批出来的结果摆出来',
+        JSON.stringify({ 有批注: panels.manualSubmitShowsResult, 只读: panels.manualSubmitReadOnly }),
+      )
       check(
         panels.judgeCallsAfterReturn === 0,
         `改过又翻页，没有自动提交（多调用了 ${panels.judgeCallsAfterReturn} 次）`,
       )
     }
     panelProbe.restore()
+
+    /*
+     * 精修档在**真界面**里走一遍：整篇逐句重写 + 逐句解释 + AI 总评，而且只给对照。
+     *
+     * 为什么必须走界面：这一档有一串"只有跑起来才看得见"的约定——
+     * 提交打的是 /api/refine 而不是 /api/judge、视图开关**保留但禁用**并注明原因、
+     * 分数栏写的是"AI 总评"并声明与润色档不可比、右下角说清"不逐处批改"。
+     */
+    console.log('\n[界面渲染 · 精修档] 逐句重写 + AI 总评 + 只给对照')
+    const refineProbe = await renderApp({ exerciseId: 'sentence-001', checkRefine: true })
+    const refine = refineProbe.refine
+    check(Boolean(refine), '精修档探针跑通了')
+    if (refine) {
+      check(refine.reUnlock && refine.editorBack, '先按「返回编辑」放开这一页（作答还在），再换档位')
+      check(refine.levelPicked && refine.activeLevel === '精修', `档位切到精修（实际 ${refine.activeLevel}）`)
+      check(refine.refineCalls === 1, `精修那一次提交打到 /api/refine 一次（实际 ${refine.refineCalls} 次）`)
+      check(refine.refineRequestBody.includes('answerSections'), '精修的请求形状与批改同源（照旧发分段）')
+      check(refine.hasCompareList && !refine.hasAnnotatedLines, '只给对照：对照列表在、勾画不在')
+      check(refine.lineCount >= 1, `一句原译、一句改后（${refine.lineCount} 对）`)
+      check(
+        refine.noteText.includes('句首字母'),
+        `这一句的解释就印在那一对下面（实际 ${JSON.stringify(refine.noteText)}）`,
+      )
+      check(
+        refine.correctedText.length > 0 && refine.correctedText !== refine.noteText,
+        '改后那一句是重写后的文字',
+      )
+      check(refine.viewButtonsDisabled, '「批改视图 / 对照视图」保留但禁用（它只是不给用，不是不见了）')
+      check(
+        refine.lockedNote.includes('精修档只能看对照'),
+        `旁边注明为什么（实际 ${JSON.stringify(refine.lockedNote)}）`,
+      )
+      check(
+        refine.scorePaneText.includes('86') && refine.scorePaneText.includes('不能直接比'),
+        '分数栏显示 AI 总评，并写明它与润色档的分数不可比',
+      )
+      check(refine.scoreChip.includes('AI 总评'), `分数栏挂着「AI 总评」的来源标记（${refine.scoreChip.join('／')}）`)
+      check(
+        refine.notesPaneText.includes('精修说明') && refine.notesPaneText.includes('没有"逐处批注"可点'),
+        '右下角说清"精修不逐处批改"',
+      )
+      check(
+        !refine.paneHtml.includes('mk-replace') && !refine.paneHtml.includes('fix-text'),
+        '译文栏里一处勾画、一处补写都没有（这正是"不逐处批改"）',
+      )
+    }
+    refineProbe.restore()
 
     // 对照视图 + 设置
     console.log('\n[界面渲染 · 视图与设置] 对照视图与设置项')
@@ -2028,6 +2275,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         highlights: [],
       }),
       'Ecological civilization is a form of human progress.',
+      'en-to-zh',
     )
     check(!notFound.ok, '定位全部失败时，解析被判为失败')
     if (!notFound.ok) {
@@ -2044,7 +2292,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
 
     // 生产者：返回里连 JSON 对象都没有（花括号都找不到）→ 应当归到 bad-json
-    const badJson = parseCorrection('this is not json at all', 'anything')
+    const badJson = parseCorrection('this is not json at all', 'anything', 'en-to-zh')
     check(!badJson.ok, '坏 JSON 被判为失败')
     if (!badJson.ok) {
       check(
@@ -2055,7 +2303,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
 
     // 生产者：有花括号、但里面是坏 JSON → 走「JSON 解析失败」那条，同样归 bad-json
-    const brokenJson = parseCorrection('{ "errors": [, }', 'anything')
+    const brokenJson = parseCorrection('{ "errors": [, }', 'anything', 'en-to-zh')
     check(!brokenJson.ok, '花括号里是坏 JSON 时被判为失败')
     if (!brokenJson.ok) {
       check(

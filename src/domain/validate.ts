@@ -6,8 +6,9 @@
  * 对不上就拒绝渲染这一处，而不是画到错误的地方上。
  */
 
-import type { Anchor, ErrorObject, ErrorCategory, Highlight, MarkColor } from './types'
+import type { Anchor, Direction, ErrorObject, ErrorCategory, Highlight, MarkColor } from './types'
 import { HARD_CATEGORIES } from './types'
+import { isHardError } from './severity'
 
 /** 校验通过后得到的绝对区间。 */
 export interface ValidatedSpan {
@@ -42,6 +43,11 @@ export type ValidationOutcome<T> =
  *
  * 红＝硬性错误，橙＝表达问题。哪一类算硬性错误由 types.ts 的 HARD_CATEGORIES 定义，
  * 这里不再重复写一份，避免两处不一致。
+ *
+ * ⚠️ 两个例外：**漏译与增译**的轻重由程序按字数判（见 severity.ts），
+ * 同一类错误因此可能红也可能橙。本函数是"只认分类"的那一面，
+ * 真实渲染一律用校验后的 `ValidatedError.hard`（在 validateCorrection 里算好），
+ * 它已经把这条规则考虑进去了。
  */
 export function colorForCategory(category: ErrorCategory): MarkColor {
   return HARD_CATEGORIES.includes(category) ? 'red' : 'orange'
@@ -126,6 +132,13 @@ export interface ValidatedError {
   reorderSpans?: ValidatedSpan[]
   /** 语序调换后，这些片段拼起来应该是什么样（用于展示调序结果） */
   reordered?: string
+  /**
+   * 这一处算硬性错误（红）吗。
+   *
+   * **颜色的唯一来源**：下游（排版、对照视图、说明卡片）一律读它，不再自己按分类推——
+   * 漏译/多译的轻重是按字数判的（见 severity.ts），只看分类会把它判成红色。
+   */
+  hard: boolean
 }
 
 /** 取若干区间的外框。 */
@@ -141,11 +154,13 @@ function envelopeOf(changes: ReadonlyArray<{ start: number; end: number }>): Val
   return { start, end }
 }
 
-export function validateError(error: ErrorObject, answer: string): ValidationOutcome<ValidatedError> {
+export function validateError(error: ErrorObject, answer: string, direction: Direction): ValidationOutcome<ValidatedError> {
   const fail = (message: string): ValidationOutcome<ValidatedError> => ({
     ok: false,
     rejection: { id: error.id, message },
   })
+  /** 一处批注的红/橙在解析时定死，后续所有渲染都读它（见 ValidatedError.hard 的注释） */
+  const hard = isHardError(error, direction)
 
   /**
    * 校验时要用**模型圈的那片文字**核对，而不是按词缩窄后的改动项。
@@ -175,7 +190,7 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
       const span = checkSpan(error.id, anchorToCheck, answer, '该处批注')
       if (!span.ok) return span
       const changes = renderChanges(span.value, error.targetText)
-      return { ok: true, value: { error, changes, span: envelopeOf(changes) } }
+      return { ok: true, value: { error, changes, span: envelopeOf(changes), hard } }
     }
 
     case 'delete': {
@@ -184,7 +199,7 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
       const span = checkSpan(error.id, anchorToCheck, answer, '该处批注')
       if (!span.ok) return span
       const changes = renderChanges(span.value, '')
-      return { ok: true, value: { error, changes, span: envelopeOf(changes) } }
+      return { ok: true, value: { error, changes, span: envelopeOf(changes), hard } }
     }
 
     case 'insert': {
@@ -195,7 +210,13 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
       const point = anchor.value.end
       return {
         ok: true,
-        value: { error, changes: [{ start: point, end: point, to: error.targetText }], span: { start: point, end: point }, insertPoint: point },
+        value: {
+          error,
+          changes: [{ start: point, end: point, to: error.targetText }],
+          span: { start: point, end: point },
+          insertPoint: point,
+          hard,
+        },
       }
     }
 
@@ -235,7 +256,7 @@ export function validateError(error: ErrorObject, answer: string): ValidationOut
         })
         .join('')
 
-      return { ok: true, value: { error, changes: [], span: { start, end }, reorderSpans: spans, reordered } }
+      return { ok: true, value: { error, changes: [], span: { start, end }, reorderSpans: spans, reordered, hard } }
     }
 
     default:
@@ -266,13 +287,14 @@ export function validateCorrection(
   errors: readonly ErrorObject[],
   highlights: readonly Highlight[],
   answer: string,
+  direction: Direction,
 ): ValidatedCorrection {
   const validatedErrors: ValidatedError[] = []
   const validatedHighlights: ValidatedHighlight[] = []
   const rejections: Rejection[] = []
 
   for (const error of errors) {
-    const outcome = validateError(error, answer)
+    const outcome = validateError(error, answer, direction)
     if (outcome.ok) validatedErrors.push(outcome.value)
     else rejections.push(outcome.rejection)
   }

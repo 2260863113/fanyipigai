@@ -8,7 +8,7 @@
  */
 
 import { CATEGORY_LABEL, type Direction, type ErrorType, type MarkColor, type Mode } from '../domain/types'
-import { colorForCategory, type ValidatedCorrection, type ValidatedError } from '../domain/validate'
+import type { ValidatedCorrection, ValidatedError } from '../domain/validate'
 import { entryRenderedKind } from '../domain/layout'
 import { favoriteOf, type Favorite } from '../domain/favorites'
 
@@ -56,7 +56,8 @@ export interface AnnotationSummary {
  */
 export function summarizeError(entry: ValidatedError, order: number, answer: string): AnnotationSummary {
   const { error } = entry
-  const color = colorForCategory(error.category)
+  // 颜色取解析时定死的那个（漏译/多译按字数定轻重，见 severity.ts），不按分类现推
+  const color: MarkColor = entry.hard ? 'red' : 'orange'
   const kind = entryRenderedKind(entry)
   // 划掉/标注的范围一律取校验后的区间（= 按单词求最小不同项后的范围），不取 AI 圈的原文
   const spanText = answer.slice(entry.span.start, entry.span.end)

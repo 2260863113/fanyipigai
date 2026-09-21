@@ -210,8 +210,9 @@ try {
   console.log('\n=== 5. 换领域 → 句子跟着换 ===')
   await cdp.evaluate("document.querySelector('.domain-trigger').click()")
   await sleep(350)
+  // 领域表现在是五个板块（社会／经济／文化／生态／科技），挑最后一个切过去
   await cdp.evaluate(
-    "[...document.querySelectorAll('.domain-item')].find((b) => b.textContent.includes('科技创新')).click()",
+    "[...document.querySelectorAll('.domain-item')].find((b) => b.textContent.trim() === '科技').click()",
   )
   await sleep(700)
   const afterDomain = await cdp.evaluate(
@@ -220,7 +221,7 @@ try {
        source: (document.querySelector('.pane-source .source-text')?.textContent ?? '').trim(),
      })`,
   )
-  check(afterDomain.domain === '科技创新', `领域切到科技创新（实际 ${afterDomain.domain}）`)
+  check(afterDomain.domain === '科技', `领域切到科技（实际 ${afterDomain.domain}）`)
   check(afterDomain.source.length > 0, '换领域后句子也换了', afterDomain.source.slice(0, 60))
   check(afterDomain.source !== second, '换领域拿到的不是刚才那一句')
 

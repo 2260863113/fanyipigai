@@ -228,7 +228,8 @@ function runPipeline(testCase: Case): { from: string; to: string; rebuiltOk: boo
     ? error
     : { ...error, oldText: testCase.oldText }
 
-  const parsed = parseCorrection(JSON.stringify({ errors: [payload], highlights: [] }), answer)
+  // 这些用例都是英文译文，方向按「中译英」给（只影响漏译/多译的轻重判定，与本用例要验的最小改动无关）
+  const parsed = parseCorrection(JSON.stringify({ errors: [payload], highlights: [] }), answer, 'zh-to-en')
   if (!parsed.ok) return null
   const changed = parsed.correction.errors[0]?.changed
   if (!changed || changed.length === 0) return null
