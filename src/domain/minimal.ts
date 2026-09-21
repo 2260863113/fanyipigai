@@ -116,7 +116,20 @@ function diffBlocks(a: string, b: string): Block[] {
  * 因此这里先做**纯字符级**的前缀/后缀剥离，只把中间那一段交给差异算法，最后把抵消掉的
  * 偏移量加回去。剥离不影响正确性：两端原样不动，重建结果自然也对得上。
  */
-export function minimizeChange(oldText: string, newText: string): MinimalChange[] | null {
+export interface MinimizeOptions {
+  /**
+   * 最多允许切出几个"最小不同项"，超过就整段替换。
+   *
+   * 默认 2——这是**批注**口径（见 MAX_CHANGES 的说明）：一两项是常态，
+   * 再多就是一堆互相牵制的碎片，不如整段重写来得清楚。
+   *
+   * **对照视图会调大它**：那边是"原译 / 改后"两行并排，多切几刀只是多染几个字，
+   * 反而正好——用户要的就是"只把真正不同的字标出来"（见 compare.ts 的 COMPARE_MAX_CHANGES）。
+   */
+  maxChanges?: number
+}
+
+export function minimizeChange(oldText: string, newText: string, options: MinimizeOptions = {}): MinimalChange[] | null {
   if (oldText === newText) return null
   if (oldText.length === 0) return [{ startOffset: 0, endOffset: 0, from: '', to: newText }]
   if (newText.length === 0) return [{ startOffset: 0, endOffset: oldText.length, from: oldText, to: '' }]
@@ -155,7 +168,7 @@ export function minimizeChange(oldText: string, newText: string): MinimalChange[
 
   const coreOld = oldText.slice(head, oldText.length - tail)
   const coreNew = newText.slice(head, newText.length - tail)
-  const core = minimizeCore(coreOld, coreNew)
+  const core = minimizeCore(coreOld, coreNew, options.maxChanges ?? MAX_CHANGES)
   if (!core) return null
   // 把偏移量搬回整串的坐标系
   return core.map((change) => ({
@@ -166,7 +179,7 @@ export function minimizeChange(oldText: string, newText: string): MinimalChange[
 }
 
 /** 差异算法的本体：`oldText` / `newText` 已经剥掉了共同的前后缀，两端都不为空。 */
-function minimizeCore(oldText: string, newText: string): MinimalChange[] | null {
+function minimizeCore(oldText: string, newText: string, maxChanges: number): MinimalChange[] | null {
   const blocks = diffBlocks(oldText, newText)
   if (blocks.length === 0) return null
 
@@ -301,8 +314,8 @@ function minimizeCore(oldText: string, newText: string): MinimalChange[] | null 
     return [{ startOffset: 0, endOffset: oldText.length, from: oldText, to: newText }]
   }
 
-  // 改动项太多 → 整段替换（见 MAX_CHANGES 的说明）
-  if (aligned.length > MAX_CHANGES) {
+  // 改动项太多 → 整段替换（见 MAX_CHANGES 的说明；对照视图会把这个上限调大）
+  if (aligned.length > maxChanges) {
     return [{ startOffset: 0, endOffset: oldText.length, from: oldText, to: newText }]
   }
 

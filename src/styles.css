@@ -899,6 +899,14 @@ button {
 }
 
 /*
+ * 原文里"这一处批改对应的地方"（用户要求：点译文上的某一处，左边原文栏里对应那一段也标同色）。
+ * 颜色与字号都继承正文，只加荧光底色——它是一处**指示**，不是另一层排版。
+ */
+.source-mark {
+  border-radius: 2px;
+}
+
+/*
  * 参考译文的折叠块：现在只出现在**练习记录页**（练习页换成了标题栏的「对照译文」开关）。
  * 记录页是只读的复盘视图，折起来更省地方。
  */
@@ -1019,6 +1027,76 @@ button {
    * 过渡会把台阶抹成斜坡，看起来就成了匀速滑动——那正是用户明确不要的效果。
    * 宽度由 JS 按台阶表直接跳，这里保持瞬时切换。
    */
+}
+
+/*
+ * 右下角的**批改完成通知**（用户指定：批完在右下角弹一条"第 x 页已经批改完成"，
+ * 点它跳到那一页）。
+ *
+ * 固定右下、压在内容之上：它是"另一页的事"跑来找人，因此不占版面、也不把四栏挤变形。
+ * 整块做成一颗按钮（主操作是"去看结果"），右边那颗 × 只管关掉它。
+ * `z-index` 压过四栏（那些没超过 10），但不高于弹窗（弹窗用 100）——
+ * 「已交去批改」的等待弹窗正好可能与这条通知同屏（交下一页时上一条还没点掉）。
+ */
+.judge-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 50;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--paper);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+}
+
+.judge-toast-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+}
+
+.judge-toast-main:hover {
+  background: var(--paper-soft);
+}
+
+.judge-toast-hint {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.judge-toast-close {
+  border: none;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  padding: 0 10px;
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.judge-toast-close:hover {
+  color: var(--ink);
+}
+
+/*
+ * 交出去批改之后作答框是**只读**的（改字会让回来的批注画错位），
+ * 但要让"我还看得见自己的字"——因此只换底色、不置灰文字。
+ */
+.answer-input[readonly] {
+  background: var(--paper-soft);
+  cursor: default;
 }
 
 .level-switch {

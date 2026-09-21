@@ -768,6 +768,70 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       '它仍然出在对照里（没改的句子也要照抄一遍，程序才对得齐整篇）',
     )
 
+    /*
+     * **只染真正不同的字**（用户明确要求："原译文和修改后的译文不同处才标颜色"）。
+     *
+     * 批注那边的口径是"最多切 2 项、超过就整段替换"，因此"整句重写"给的是一整段。
+     * 对照视图另有 COMPARE_MAX_CHANGES（99），把那一整段再切细。判据取"有没有大片没染色的字"：
+     * 整句重写最容易退化成"一整句都染上"，而那正是用户抱怨的画面。
+     */
+    const longBefore = '十年生态修复把一个曾经贫瘠的海岸变成候鸟喜欢的到达地, 吸引了来自全国各地的游客。'
+    const longAfter = '十年生态修复使一片曾经荒芜的海岸线，变成了候鸟青睐的热门栖息地，吸引着来自全国各地的游客。'
+    const longRefine = parseRefine(
+      JSON.stringify({ score: 80, comment: 'x', sentences: [sent(longBefore, longAfter, '整句都改写了')] }),
+      longBefore,
+    )
+    if (longRefine.ok) {
+      const line = buildRefineLines(longRefine.refine)[0]
+      const colored = (line?.originalSpans ?? []).filter((part) => part.color !== undefined)
+      const plain = (line?.originalSpans ?? []).filter((part) => part.color === undefined && part.text.trim().length > 0)
+      check(colored.length > 1, `整句重写也切成细块（实际染了 ${colored.length} 块）`)
+      check(
+        plain.length > 0,
+        `整句重写仍然留有大片没染色的字（${plain.length} 块原样）——这才叫"不同处才标颜色"`,
+        JSON.stringify(line?.originalSpans.map((part) => `${part.color ?? '—'}:${part.text.slice(0, 8)}`)),
+      )
+    } else {
+      check(false, '整句重写的用例能解析出来', longRefine.problems.join('；'))
+    }
+
+    /*
+     * **写得好的句子标绿**（用户要求：精修也让 AI 分析表达很好的句子）。
+     * 判据取"整句标绿 + 下面那一行说明说的是它好在哪"。
+     */
+    const praised = parseRefine(
+      JSON.stringify({
+        score: 92,
+        comment: '整体到位。',
+        sentences: [
+          sent('i is a form of human progress.', 'I am a form of human progress.', 'I 要大写；be 动词用 am。'),
+          {
+            original: 'it became a important part.',
+            rewritten: 'it became a important part.',
+            explanation: '这一句按原样保留。',
+            praise: '用词与原文一一对应；节奏自然，不必改。',
+          },
+        ],
+      }),
+      answer,
+    )
+    if (praised.ok) {
+      const lines = buildRefineLines(praised.refine)
+      check(praised.refine.sentences[1]?.praise.startsWith('用词与原文') === true, 'AI 给的 praise 收下来了')
+      check(
+        lines[1]?.originalSpans.some((part) => part.color === 'green') === true &&
+          lines[1]?.corrected.some((part) => part.color === 'green') === true,
+        '写得好的那一句整句标绿（两行都绿）',
+      )
+      check(lines[1]?.note === '用词与原文一一对应；节奏自然，不必改。', '绿色那一行的说明写的是"好在哪"')
+      check(
+        lines[0]?.originalSpans.every((part) => part.color !== 'green') === true,
+        '改过的那一句不标绿（改了就不算"好"）',
+      )
+    } else {
+      check(false, '带 praise 的用例能解析出来', praised.problems.join('；'))
+    }
+
     // 缺字段 / 分数越界 / 原句定位不上：都要报出具体原因（回去重试）
     const noScore = parseRefine(
       JSON.stringify({ comment: 'x', sentences: [sent('i is', 'I am', 'x')] }),
@@ -804,6 +868,68 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
    *   - 不足下限的自然段**不许独自成页**（否则会出现一行就翻页的碎片）。
    * 整库 48 篇都靠这两条把关（见 scripts/check-articles.mjs），这里用小样本把边界固定下来。
    */
+  /*
+   * 「翻译前的那段原文」：AI 在新字段 `sourceText` 里给出这一处批注对应的原文片段，
+   * 程序把它定位到**原文**上（`error.sourceAnchor`），界面据此在原文栏里标同色。
+   *
+   * 两条要盯住：定位得上要准；**定位不上绝不能算失败**——那会白花一次重试，
+   * 而丢的只是一处高亮（语法、表达类问题本来就常常给不出对应的原文片段）。
+   */
+  console.log('\n[原文标记] AI 给的 sourceText 要定位到原文上，定位不上不算失败')
+  try {
+    const { parseCorrection } = await import('../src/domain/parse')
+    const source = 'China has planted trees across more than 70 million hectares since 2015.'
+    const translation = '中国自 2015 年以来已在超过 7000 万公顷的土地上种树。'
+    const build = (sourceText: string) =>
+      JSON.stringify({
+        errors: [
+          {
+            id: 'e1',
+            type: 'replace',
+            category: 'word-choice',
+            oldText: '种树',
+            targetText: '植树造林',
+            explanation: 'x；y。',
+            sourceText,
+          },
+        ],
+        highlights: [],
+      })
+
+    const hit = parseCorrection(build('planted trees'), translation, 'en-to-zh', source)
+    check(hit.ok, '带 sourceText 的返回能解析', hit.ok ? '' : hit.problems.join('；'))
+    if (hit.ok) {
+      const anchor = hit.correction.errors[0]?.sourceAnchor
+      check(anchor?.snippet === 'planted trees', `sourceText 定位到了原文里（${anchor?.snippet ?? '没定位到'}）`)
+      check(
+        anchor !== undefined && source.slice(anchor.start, anchor.end) === 'planted trees',
+        '区间落在原文上是准的（这是标色要用的坐标）',
+      )
+    }
+
+    const miss = parseCorrection(build('这段文字根本不在原文里'), translation, 'en-to-zh', source)
+    check(miss.ok, '定位不上时**不算失败**（只是少一处高亮，不值得让整份重试）')
+    check(
+      miss.ok && miss.correction.errors[0] !== undefined && miss.correction.errors[0]?.sourceAnchor === undefined,
+      '定位不上就安静地丢掉这个字段，批注本身照样留着',
+    )
+
+    const absent = parseCorrection(
+      JSON.stringify({
+        errors: [
+          { id: 'e1', type: 'replace', category: 'grammar', oldText: '种树', targetText: '植树', explanation: 'x；y。' },
+        ],
+        highlights: [],
+      }),
+      translation,
+      'en-to-zh',
+      source,
+    )
+    check(absent.ok && absent.correction.errors[0]?.sourceAnchor === undefined, '没给 sourceText 时也不报错（它是可选字段）')
+  } catch (error) {
+    check(false, '原文标记可以验证', error instanceof Error ? error.message : String(error))
+  }
+
   console.log('\n[文章分页] 一页 = 一个自然段，不足 50 单位的与相邻段合并')
   try {
     const { countUnits, paginateArticle, splitSections, PAGE_RULE } = await import('../src/domain/sections')
@@ -1191,15 +1317,6 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     rendered.restore()
     check(typeof globalThis.fetch === 'function', '渲染探针已还原全局 fetch')
 
-    /*
-     * 逐页批改的**多页**那一半：上面那道题只有一页，翻页这件事根本没被走到。
-     * 自己贴一篇三段原文来跑——它按自然段切、自动判成文章题，
-     * 于是「下一页」会自动把这一页交出去、翻回去只是看结果。
-     *
-     * ⚠️ 三段都必须**够长**（各 50 字以上）：分页规则是"不足 50 单位就与相邻段并成一页"
-     * （见 domain/sections.ts 的 paginateArticle），段落太短的话整篇会被并成**一页**，
-     * 翻页这件事就一步都走不到了（这条断言实际这么红过一次）。
-     */
     console.log('\n[界面渲染 · 逐页批改] 一篇多段原文：填一页 / 交一页 / 翻一页')
     const multiPageText = [
       '生态文明建设是一场涉及生产方式、生活方式、思维方式和价值观念的深刻变革，需要全社会共同行动、久久为功。党的十八大以来，我们把绿色发展摆在更加突出的位置，推动产业结构和能源结构加快调整，让良好生态环境成为经济社会高质量发展的支撑点，也让绿色成为新时代中国发展最鲜明的底色。',
@@ -1212,7 +1329,19 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
      * 这样不依赖"探针挂载之前先把存档写好"这种时序假设——
      * `useState(() => loadCustom())` 只在挂载那一刻读一次存档。
      */
-    const multi = await renderApp({ checkCustom: multiPageText })
+    /*
+     * 逐页批改的**多页**那一半：上面那道题只有一页，翻页这件事根本没被走到。
+     * 自己贴一篇三段原文来跑——它按自然段切、自动判成文章题。
+     *
+     * ⚠️ 三段都必须**够长**（各 50 字以上）：分页规则是"不足 50 单位就与相邻段并成一页"
+     * （见 domain/sections.ts 的 paginateArticle），段落太短的话整篇会被并成**一页**，
+     * 翻页这件事就一步都走不到了（这条断言实际这么红过一次）。
+     *
+     * ⚠️ `judgeDelayMs` 是这一轮新增的：真实批改要十几秒，而"批改中"那段时间里的界面
+     * （等待弹窗、翻页照样能走、别处不能提交、批完的通知）正是这一轮要守住的规矩。
+     * 桩默认立刻返回 = 那段时间宽度为零，测不到，因此这里把它拖慢。
+     */
+    const multi = await renderApp({ checkCustom: multiPageText, judgeDelayMs: 30 })
     check(multi.perPage.length === 3, `这篇原文分成 ${multi.perPage.length} 页`)
     check(
       multi.perPage.every((page) => page.state.includes('待批改')),
@@ -1220,13 +1349,100 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       multi.perPage.map((page) => `${page.page}:${page.state}`).join(' | '),
     )
     /*
-     * 「点下一页时把刚写完的这一页交出去批」这条规矩，用**练习记录**来验：
-     * 逐页批改下一条记录 = 一页，因此"每一页都留下了自己的那条记录"
-     * 就等于"翻走之前它真的被提交过一次"。
+     * 「点下一页时把刚写完的这一页交出去批」这条老规矩已经**取消**了
+     * （用户要求：翻页不触发提交、草稿留着）。下面这一组就是新规矩的验收：
+     * 每一页都要"翻页不提交 + 草稿还在"，而记录与调用次数仍然一页各一次。
+     */
+    check(
+      multi.submits.length === 3,
+      `三页各提交了一次（观测到 ${multi.submits.length} 次提交）`,
+    )
+    check(
+      multi.submits.every((entry) => entry.viaNav === 0),
+      '点「下一页」不触发提交批改（三页都没有偷偷多交一次）',
+      multi.submits.map((entry) => `第${entry.page + 1}页:${entry.viaNav}`).join(' | '),
+    )
+    check(
+      multi.submits.slice(0, 2).every((entry) => entry.draftKeptAfterRoundTrip),
+      '翻走再翻回来，草稿还在（可以接着往下写）',
+      multi.submits.map((entry) => `第${entry.page + 1}页:${entry.draftKeptAfterRoundTrip}`).join(' | '),
+    )
+    check(
+      multi.perPage.slice(0, 2).every((page) => page.stateAfterLeave.includes('待批改')),
+      '翻走再回来，那一页如实显示"待批改"（没交出去就不该写着已批改）',
+      multi.perPage.map((page) => `${page.page}:${page.stateAfterLeave}`).join(' | '),
+    )
+    /*
+     * 提交之后的等待提示（用户指定：两个按钮「停留此页」「进入下一页」）。
+     * 末页不该弹：后面没有下一页可去。
+     */
+    check(
+      multi.submits[0]?.modal.join('/') === '停留此页/进入下一页' &&
+        multi.submits[1]?.modal.join('/') === '停留此页/进入下一页',
+      '提交之后弹出等待提示，两个按钮都在',
+      multi.submits.map((entry) => `第${entry.page + 1}页:[${entry.modal.join('/')}]`).join(' | '),
+    )
+    check(
+      multi.submits[2]?.modal.length === 0,
+      '最后一页提交时不弹等待提示（后面没有下一页可去）',
+      `[${multi.submits[2]?.modal.join('/') ?? ''}]`,
+    )
+    check(
+      multi.submits.slice(0, 2).every((entry) => entry.duringJudge?.wentNext === true),
+      '点「进入下一页」真的翻到了下一页',
+      multi.submits.map((entry) => `${entry.page}:${entry.duringJudge?.wentNext}`).join(' | '),
+    )
+    check(
+      multi.submits.slice(0, 2).every((entry) => entry.duringJudge?.pageAfterNext === entry.page + 1),
+      '批改还没回来就已经翻到了下一页（批改中可以继续翻译）',
+      multi.submits.map((entry) => `${entry.page}→${entry.duringJudge?.pageAfterNext}`).join(' | '),
+    )
+    check(
+      multi.submits.slice(0, 2).every((entry) => entry.duringJudge?.judgingLabel === '批改中…'),
+      '交出去之后按钮上写着"批改中…"',
+      multi.submits.map((entry) => entry.duringJudge?.judgingLabel ?? '').join(' | '),
+    )
+    check(
+      multi.submits.slice(0, 2).every((entry) => entry.duringJudge?.judgingDisabled === true),
+      '正在批的这一页按不动提交（同一次不会交两遍）',
+      multi.submits.map((entry) => `${entry.page}:${entry.duringJudge?.judgingDisabled}`).join(' | '),
+    )
+    check(
+      multi.submits.slice(0, 2).every((entry) => entry.duringJudge?.answerReadOnly === true),
+      '交出去之后这一页立刻只读（这一刻改字，回来的批注就画错了）',
+      multi.submits.map((entry) => `${entry.page}:${entry.duringJudge?.answerReadOnly}`).join(' | '),
+    )
+    check(
+      multi.submits.slice(0, 2).every((entry) => entry.duringJudge?.submitDisabled === true),
+      '批改进行中（哪怕翻到别的页、写上了字）也提交不了——一次只批一页',
+      multi.submits.map((entry) => `${entry.page}:${entry.duringJudge?.submitDisabled}`).join(' | '),
+    )
+    check(
+      multi.submits.slice(0, 2).every((entry) => entry.duringJudge?.elsewhereTitle.includes('一次只批一页')),
+      '按不动的理由写在悬停说明里（不是"没写东西"）',
+      multi.submits.map((entry) => entry.duringJudge?.elsewhereTitle ?? '').join(' | '),
+    )
+    check(
+      multi.submits.every((entry) => entry.toastText.includes(`第 ${entry.page + 1} 页已经批改完成`)),
+      '每批完一页，右下角都弹出"第 x 页已经批改完成"',
+      multi.submits.map((entry) => entry.toastText).join(' | '),
+    )
+    check(
+      multi.submits.every((entry) => entry.toastRouted && entry.routedPage === entry.page),
+      '点那条通知直接路由到批完的那一页',
+      multi.submits.map((entry) => `${entry.page}→${entry.routedPage}`).join(' | '),
+    )
+    check(
+      multi.submits.every((entry) => entry.toastGoneAfterRoute),
+      '跳过去之后通知自己消失（人已经站在那一页上了）',
+      multi.submits.map((entry) => `${entry.page}:${entry.toastGoneAfterRoute}`).join(' | '),
+    )
+    /*
+     * 记录里有哪几页，仍然用**练习记录**来验：逐页批改下一条记录 = 一页，
+     * 因此"每一页都留下了自己的那条记录"就等于"每一页都被提交过一次"。
      *
      * 为什么不去读界面上那句状态：那句话要等 React 再画一帧才更新，
-     * 探针读到的往往是上一帧（"人已经翻走了、那一页还写着待批改"），
-     * 拿它做断言会间歇性地假红。落盘的记录没有这个时机问题。
+     * 探针读到的往往是上一帧，拿它做断言会间歇性地假红。落盘的记录没有这个时机问题。
      */
     {
       const { loadRecords: loadForMulti } = await import('../src/components/records-store')
@@ -1244,7 +1460,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
     check(
       multi.perPage.at(-1)?.stateAfterLeave === '(末页，翻不过去)',
-      '末页没有「下一页」可点（那一页只能手动交）',
+      '末页没有「下一页」可点（那一页只能自己按「提交批改」）',
       multi.perPage.at(-1)?.stateAfterLeave,
     )
     check(
@@ -1293,6 +1509,15 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         it.bubbleAfterOutsideClick === '' && !it.notesAfterOutsideClick.includes('第 1 处'),
         '点勾画之外的地方，气泡消失、右下角回到提示',
       )
+      /*
+       * 原文栏里"这一处对应的地方"（用户要求）：点译文上的某一处 → 原文里对应那一段标同色；
+       * 收起卡片 → 标记消失。区间来自 AI 给的 sourceText（探针按真实形状补了一个）。
+       */
+      check(
+        it.sourceMarkText.length > 0,
+        `点一处批改之后，原文栏里对应那一段也标了色（「${it.sourceMarkText}」）`,
+      )
+      check(it.sourceMarkAfterOutsideClick === '', '收起小卡片之后，原文里那处标记随之消失')
       check(it.hasRawLink, '右下角有「点击查看 AI 完整返回内容」')
       check(
         it.rawModalText.includes('"errors"') && it.rawModalText.includes('explanation'),
@@ -1655,6 +1880,26 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         `右下角的批注说明也还在（前 ${trip.before.notesChars} 字 / 后 ${trip.after.notesChars} 字）`,
       )
     }
+    /*
+     * 同一条要求的另一半：他切走时如果正在**看某一次历史批改**，切回来也得还在那一次上。
+     * 用户原话是"切换之后切换回来，看到的东西不变"——这一条把"看到的东西"具体化到
+     * 「我正在看第几次」上（判据是下拉上那行字）。
+     */
+    const history = roundTrip.historyView
+    check(Boolean(history), '拿到了"正在看哪一次"的切换前后对照')
+    if (history) {
+      check(history.picked, `从「批改记录」下拉里选中了一次（切栏前写着 ${JSON.stringify(history.viewingBefore)}）`)
+      check(
+        history.viewingBefore !== history.before && history.viewingBefore.includes('第'),
+        '选中之后下拉如实写着"正在看第几次"',
+        JSON.stringify({ before: history.before, after: history.viewingBefore }),
+      )
+      check(
+        history.viewingAfter === history.viewingBefore,
+        `切到别的栏再切回来，看的还是那一次（前 ${JSON.stringify(history.viewingBefore)} / 后 ${JSON.stringify(history.viewingAfter)}）`,
+      )
+      check(history.resultShown && history.backButtonAfter, '切回来时右栏还是那一次的批注，「回到作答」也还在')
+    }
     roundTrip.restore()
 
     /*
@@ -1712,12 +1957,15 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         panels.backToResult.新增调用 === 0,
         `回看历史**不是**重新提交（多发 ${panels.backToResult.新增调用} 次请求）`,
       )
-      check(panels.resultBack, '改过字之后按钮才变成手动的「提交批改（手动）」')
+      check(
+        panels.resultBack,
+        '改过字之后按钮仍是「提交批改」，要自己按（翻页不会替他交）',
+      )
       check(panels.historyKeptAfterEdit, '改过字之后「批改记录」下拉还在（这是它比旧按钮强的地方）')
       /*
        * 回归：手动提交之后必须**重新变回只读并显示新结果**。
-       * 曾经这一页永远回不到"已批改"那一档——用户改完提交了，界面还停在作答框上、
-       * 左边写着"已修改 · 待提交"，而结果明明已经存下来了。
+       * 曾经这一页永远回不到"已批改"那一档——用户改完提交了，界面还停在作答框上，
+       * 而结果明明已经存下来了。
        */
       check(
         panels.manualSubmitShowsResult && panels.manualSubmitReadOnly,
@@ -1726,7 +1974,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       )
       check(
         panels.judgeCallsAfterReturn === 0,
-        `改过又翻页，没有自动提交（多调用了 ${panels.judgeCallsAfterReturn} 次）`,
+        `改过又翻页（来回都翻了），一个批改调用都没多发（多调用了 ${panels.judgeCallsAfterReturn} 次）`,
       )
     }
     panelProbe.restore()
@@ -1759,12 +2007,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       )
       check(refine.viewButtonsDisabled, '「批改视图 / 对照视图」保留但禁用（它只是不给用，不是不见了）')
       check(
-        refine.lockedNote.includes('精修档只能看对照'),
-        `旁边注明为什么（实际 ${JSON.stringify(refine.lockedNote)}）`,
-      )
-      check(
-        refine.scorePaneText.includes('86') && refine.scorePaneText.includes('不能直接比'),
-        '分数栏显示 AI 总评，并写明它与润色档的分数不可比',
+        refine.scorePaneText.includes('86') && refine.scorePaneText.includes('为什么是这个分数'),
+        '分数栏显示 AI 给的分数与它给的理由',
       )
       check(refine.scoreChip.includes('AI 总评'), `分数栏挂着「AI 总评」的来源标记（${refine.scoreChip.join('／')}）`)
       check(
@@ -2500,23 +2744,68 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(pageResultOf(at('a'), 3)?.answer === '第四页改', '结果里存着**提交当时**那段文字（改过之后批注还认得它）')
 
     /*
-     * 逐页批改的两条硬规矩，都在下一页身上：
+     * 逐页批改的规矩都在下一页身上：
      *   1. 翻页**不动**已提交的结果——否则用户翻回去看时只能重新提交（十几秒 + 结果可能不一样）；
-     *   2. 批过之后被「返回编辑」放开过的页，翻页**不能**自动提交（那一页还没改完）。
-     *      这里只测 reducer 那一半：unlocked 记下来了、结果真的没了、草稿还在。
+     *   2. 「返回编辑」**只放开这一页，不把结果扔掉**。
+     *
+     * ⚠️ 第 2 条是这一轮改掉的：原先 `pageUnlocked` 会把结果从 pages 里挪进一个暂存区
+     * （openResults），那套东西存在的唯一理由是"自动提交的年代要判断这一页该不该交"。
+     * 自动提交取消之后它就没用了，而且**有害**：翻页现在只是翻页，用户完全可能
+     * 放开看一眼、一个字不改又翻回来——结果留着，他回来点一下就能看到那一次；
+     * 扔掉的话，那一次调用白花了。真正该作废的时机只有一个：**他动了一个字**
+     * （见下面 answerChanged 那两条）。
      */
     sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 0 })
     sessions = sessionReducer(sessions, { type: 'sectionChanged', exerciseId: 'a', sectionIndex: 3 })
     check(pageResultOf(at('a'), 3) !== undefined, '翻走再翻回来，那一页的结果还在（不需要重新提交）')
 
     sessions = sessionReducer(sessions, { type: 'pageUnlocked', exerciseId: 'a' })
-    check(pageResultOf(at('a'), 3) === undefined, '「返回编辑」作废这一页的结果')
-    check(at('a').unlocked.includes(3), '这一页记下"已放开"，据此**不再自动提交**')
+    check(pageResultOf(at('a'), 3) !== undefined, '「返回编辑」不扔掉那一页的结果（一个字没改，随时能回头看）')
+    check(at('a').unlocked.includes(3), '这一页记下"已放开"，界面上据此显示作答框而不是结果')
     check(at('a').drafts[3] === '第四页改', '「返回编辑」之后作答还留着（人是回来改字的）')
+
+    /*
+     * 一动字就作废：批注是按**提交当时**那段文字画的，
+     * 画在新的草稿上必然错位，留着只会骗人（判据是"与那份结果里的 answer 是否一字不差"）。
+     */
     sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四页再改' })
+    check(pageResultOf(at('a'), 3) === undefined, '放开之后**改了一个字**，那一页的结果随之作废')
     check(at('a').drafts[3] === '第四页再改', '放开之后能接着写')
     check(at('a').unlocked.includes(3), '接着写不会把"已放开"这条标记弄丢')
     check(pageResultOf(at('a'), 0) === undefined, '放开这一页不影响别的页')
+    /*
+     * 反过来也要成立：**没动字**时结果不会因为放开与否而丢。
+     * （上一条已经把它删了，因此这里重新批一次再放开一次。）
+     */
+    sessions = sessionReducer(sessions, {
+      type: 'pageGraded',
+      exerciseId: 'a',
+      sectionIndex: 3,
+      draft,
+      answer: '第四页再改',
+    })
+    sessions = sessionReducer(sessions, { type: 'pageUnlocked', exerciseId: 'a' })
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'a', text: '第四页再改' })
+    check(
+      pageResultOf(at('a'), 3) !== undefined,
+      '放开之后**原样写回同一段文字**，结果不算作废（判据是内容，不是"打没打过字"）',
+    )
+    // 提交成功 → 收回只读（pageLocked）：这一页重新显示结果，不再可写
+    sessions = sessionReducer(sessions, { type: 'pageLocked', exerciseId: 'a', sectionIndex: 3 })
+    check(!at('a').unlocked.includes(3), '提交成功之后这一页收回只读（回到"已批改"那一档）')
+    check(pageResultOf(at('a'), 3) !== undefined, '收回只读之后结果还在')
+
+    /*
+     * 术语栏的「重新作答」要的是**另一件事**：把这一页的结果真的丢掉。
+     * 两件事必须分开，因为术语栏"显示输入框还是显示判分"就由"这一页有没有结果"决定
+     * （见 App 里 termVerdicts 的判据）——结果留着，按了等于没按。
+     * 这一条是回归：改成"放开重写一律保留结果"之后，术语栏的重新作答实际失效过一次
+     * （verify-term-mode.mjs 的第 5 节抓到的）。
+     */
+    sessions = sessionReducer(sessions, { type: 'pageResultDropped', exerciseId: 'a', sectionIndex: 3 })
+    check(pageResultOf(at('a'), 3) === undefined, '「重新作答」把这一页的结果丢掉了')
+    check(at('a').unlocked.includes(3), '丢掉结果之后这一页重新可写')
+    check(pageResultOf(at('a'), 0) === undefined, '丢掉这一页不影响别的页')
 
     // 换原文 → 只清当前这道题的作答与结果，别的题不受影响
     sessions = sessionReducer(sessions, { type: 'sourceRotated', exerciseId: 'a', variantIndex: 1 })

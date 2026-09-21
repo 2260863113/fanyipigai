@@ -19,9 +19,44 @@
  */
 
 import type { JSX } from 'react'
-import { KIND_LABEL, type Exercise, type Mode } from '../domain/types'
+import { KIND_LABEL, type Exercise, type MarkColor, type Mode } from '../domain/types'
+import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 import type { Section } from '../domain/sections'
 import type { Term } from '../domain/terms'
+
+/**
+ * 原文正文。带一处可选的高亮：**选中某处批改时，它在原文里对应的那一小段也标成同色**
+ * （用户要求："点击某一处批改……左边栏中原文显示的中文（或者英文）也要用相应的颜色标记出来，
+ * 当收回小卡片，那么原文的颜色标记消失"）。
+ *
+ * 高亮区间由 AI 给的 `sourceText` 定位而来；**给不出对应原文的错误就没有这一处高亮**，
+ * 因此这里把"有没有标记"当成正常情形处理，而不是异常。
+ */
+export function SourceText({
+  text,
+  mark,
+}: {
+  text: string
+  mark: { start: number; end: number; color: MarkColor } | null
+}): JSX.Element {
+  const valid = mark && mark.start >= 0 && mark.end <= text.length && mark.start < mark.end
+  if (!valid) return <p className="source-text">{text}</p>
+
+  const { start, end, color } = mark
+  return (
+    <p className="source-text">
+      {text.slice(0, start)}
+      <span
+        className="source-mark"
+        style={{ color: MARK_COLOR_VALUE[color], background: MARK_BG_VALUE[color] }}
+        title="这一处就是你点的那处批改在原文里对应的位置"
+      >
+        {text.slice(start, end)}
+      </span>
+      {text.slice(end)}
+    </p>
+  )
+}
 
 export function SourcePane({
   exercise,
@@ -34,11 +69,11 @@ export function SourcePane({
   gradedPages,
   pageStateHint,
   nextHint,
-  judging,
   currentSection,
   currentSource,
   currentPairs,
   compare,
+  sourceMark,
   onToggleCompare,
   onRepaste,
   onRotate,
@@ -59,12 +94,10 @@ export function SourcePane({
   sectionIndex: number
   /** 已批改过的页数（逐页批改：每一页各批各的） */
   gradedPages: number
-  /** 当前这一页在逐页批改里的状态说明（"待批改 / 已批改 / 已修改待提交"） */
+  /** 当前这一页在逐页批改里的状态说明（"待批改 / 批改中 / 已批改 / 编辑中"） */
   pageStateHint: string
-  /** 「下一页」点下去会发生什么（自动提交 / 只看结果 / 还没写完） */
+  /** 「下一页」点下去会发生什么（只翻页，草稿留着） */
   nextHint: string
-  /** 批改进行中：这时不许翻页（结果还没落定） */
-  judging: boolean
   currentSection: Section | undefined
   currentSource: string
   /**
@@ -74,6 +107,14 @@ export function SourcePane({
   currentPairs: ReadonlyArray<{ source: string; reference: string }>
   /** 现在看的是原文还是对照（一段原文、一段译文交替） */
   compare: boolean
+  /**
+   * 当前选中那一处批改**对应到原文**的位置与颜色（用户要求：点译文上的某一处，
+   * 左边原文栏里对应的那一处也标成同色；收起卡片就消失）。
+   *
+   * 位置由 AI 给的 `sourceText` 定位而来（见 domain/types.ts），**AI 给不出就不标**。
+   * 坐标属于这一页的原文，与译文上的批注互不相干。
+   */
+  sourceMark?: { start: number; end: number; color: MarkColor } | null
   onToggleCompare: (next: boolean) => void
   onRepaste: () => void
   onRotate: () => void
@@ -234,13 +275,21 @@ export function SourcePane({
             ))}
           </div>
         ) : (
-          <p className="source-text">{multiSection ? (currentSection?.text ?? currentSource) : currentSource}</p>
+          <SourceText
+            text={multiSection ? (currentSection?.text ?? currentSource) : currentSource}
+            mark={compare ? null : (sourceMark ?? null)}
+          />
         )}
 
         {/*
           翻页导航在**原文这一栏**（用户要求「放在原文左边一栏去」）。
           放在这里更顺手：人的眼睛在原文上，翻页是为了换一段原文，
           而右栏是作答/结果——那里放导航会和「提交批改」挤在一起。
+
+          ⚠️ **批改中照样能翻页**（用户要求：「即使在批改过程中，用户可以手动切换页数，
+          继续翻译（但是批改过程中不能提交）」）。早先这两颗按钮上写着 `|| judging`，
+          那是"一页批完才准走"的年代留下的——现在批改在后台跑，翻页与它无关，
+          拦着反而把用户锁在原地干等。
         */}
         {multiSection && (
           <div className="section-nav">
@@ -249,7 +298,7 @@ export function SourcePane({
               className="btn"
               onClick={() => onSectionChange(Math.max(0, sectionIndex - 1))}
               data-nav="prev"
-              disabled={sectionIndex === 0 || judging}
+              disabled={sectionIndex === 0}
             >
               ← 上一页
             </button>
@@ -261,7 +310,7 @@ export function SourcePane({
               className="btn"
               onClick={() => onSectionChange(Math.min(sourceSectionCount - 1, sectionIndex + 1))}
               data-nav="next"
-              disabled={sectionIndex >= sourceSectionCount - 1 || judging}
+              disabled={sectionIndex >= sourceSectionCount - 1}
               title={nextHint}
             >
               下一页 →

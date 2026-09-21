@@ -2,16 +2,19 @@
  * 逐页批改的**真实浏览器**验收：一页一页译、一页一页交、翻回去看结果。
  *
  * 为什么必须有它：逐页批改的规矩几乎都是"时序 + 计数"类的规矩，
- * jsdom 里的探针能验结构，但验不了"到底发了几次请求、每次发的是哪一页的文字"。
- * 这里对着**已经在跑的那个** dev server，用真实浏览器把整条流程走一遍，
- * 接口用桩（不花 API 钱，并且把每一次请求都记下来）。
+ * jsdom 里的探针能验结构，但验不了"到底发了几次请求、每次发的是哪一页的文字"，
+ * 也验不了"批改还在跑的时候界面到底能不能动"。这里对着**已经在跑的那个** dev server，
+ * 用真实浏览器把整条流程走一遍，接口用桩（不花 API 钱，并且把每一次请求都记下来）。
  *
- * 走的就是用户描述的那套：
- *   1. 第 1 页写完 → 点「下一页」→ 这一页**自动**交出去批；
- *   2. 每一页各交一次、各发自己那段文字（不多不少、不串页）；
- *   3. 末页没有「下一页」，只能手动按「提交批改」；
- *   4. 翻回第 1 页：直接看到当时的批改结果、**只读**、**不再发请求**；
- *   5. 按「返回编辑」：结果作废、可以接着改，而且按钮变成手动的「提交批改（手动）」。
+ * 走的就是用户描述的那套（第三版：翻页不再自动提交）：
+ *   1. 第 1 页写完 → 点「下一页」→ **只是翻页**，不发请求、草稿留着；
+ *   2. 写完一页按「提交批改」：按钮立刻变成"批改中…"、作答框只读、弹出等待窗；
+ *   3. 等待窗里点「进入下一页」：**批改还没回来**就已经翻到下一页接着译；
+ *      这时在别的页上写了字也提交不了（一次只批一页）；
+ *   4. 批完右下角弹「第 x 页已经批改完成」，点它跳回那一页看结果；
+ *   5. 每一页各交一次、各发自己那段文字（不多不少、不串页）；
+ *   6. 翻回已批过的页：直接看到当时的批改结果、**只读**、**不再发请求**；
+ *      按「返回编辑」可以接着改，改完自己再按「提交批改」（翻页不会替他交）。
  *
  * 用法：node scripts/verify-per-page.mjs [地址]
  */
@@ -131,14 +134,22 @@ const stubSource = `
       const url = typeof input === 'string' ? input : (input && input.url) || '';
       if (!url.includes('/api/judge')) return original(input, init);
       /*
-       * 第一次批改故意慢一点（3 秒）：只有在"批改还没回来"的这段时间里，
-       * 进度条才看得到——用它验"它确实在涨、而且到 88% 就停住不下来"。
-       * 之后各次立刻返回，免得整趟验收被拖久。
+       * 两次"拖慢"，用途不同：
+       *   - __judgeDelayOnce：**第一次**批改慢 5 秒，用来密集采样进度条
+       *     （它只在"批改还没回来"的那段时间里看得见）；
+       *   - __judgeDelayMs：**每一次**批改都慢这么多（默认 0 = 立刻返回），
+       *     用来观察"批改中"那一刻的界面：按钮变成"批改中…"、作答框只读、
+       *     别的页上也提交不了、等待窗可以点「进入下一页」。
+       *     没有它，桩在同一个微任务里就把结果还给界面了，那段时间宽度为零，什么都读不到。
+       *
+       * ⚠️ 拖的是**返回**那一侧：请求本身照旧先记进 __judgeCalls（那才是"发出去了"的时刻），
+       * 因此"等它发出去"那几处不会凭空多等一个延迟——否则等到的时候批改早就结束了，
+       * "批改中"的界面状态一个都读不到（踩过）。
+       *
+       * ⚠️ 这段字符串整体躺在一个模板字符串里，**不能出现反引号**（写进去会把它截断）。
        */
-      if (window.__judgeDelayOnce) {
-        window.__judgeDelayOnce = false;
-        await new Promise((r) => setTimeout(r, 3000));
-      }
+      const delay = window.__judgeDelayOnce ? 5000 : (window.__judgeDelayMs || 0);
+      if (window.__judgeDelayOnce) window.__judgeDelayOnce = false;
 
       let body = {};
       try { body = JSON.parse((init && init.body) || '{}'); } catch (error) { body = {}; }
@@ -181,6 +192,7 @@ const stubSource = `
         },
         raw: JSON.stringify({ errors: [], highlights: [highlight] }, null, 2),
       };
+      if (delay) await new Promise((r) => setTimeout(r, delay));
       return new Response(JSON.stringify(payload), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -397,10 +409,45 @@ try {
         * （用户要求"到 80–90 就保持不动，直到结果返回；提前返回就直接 100%"）。
         */
        window.__judgeDelayOnce = true;
+       /* 每一次批改都慢 1.5 秒：下面那些"批改中"的界面状态全在这段时间里读 */
+       window.__judgeDelayMs = 1500;
        const progressSamples = [];
+       /** 点「下一页」**不**提交批改、草稿留着——新规矩，只在前两页各验一次 */
+       const navOnly = [];
+       /** 提交之后"批改还没回来"那一刻的界面状态 */
+       const judgingStates = [];
+       /** 右下角那条"第 x 页已经批改完成"通知，以及点它跳回去的结果 */
+       const toasts = [];
+
+       const clickNav = async (which) => {
+         const node = document.querySelector('.section-nav [data-nav="' + which + '"]');
+         if (!node || node.disabled) return false;
+         node.click();
+         await sleep(350);
+         return true;
+       };
+       /** 站到指定的一页上（上一轮的收尾位置不一定就在它上面） */
+       const ensureOnPage = async (target) => {
+         for (let guard = 0; guard < 20 && pageNo().index !== target; guard++) {
+           if (!(await clickNav(pageNo().index < target ? 'next' : 'prev'))) return false;
+         }
+         return pageNo().index === target;
+       };
+       const modalButtons = () =>
+         [...document.querySelectorAll('.raw-modal-backdrop .gen-foot .btn')].map((b) => (b.textContent || '').trim());
+       const clickModalButton = async (label) => {
+         const node = [...document.querySelectorAll('.raw-modal-backdrop .gen-foot .btn')].find(
+           (b) => (b.textContent || '').trim() === label,
+         );
+         if (!node) return false;
+         node.click();
+         await sleep(350);
+         return true;
+       };
 
        const sources = [];
        for (let page = 0; page < total; page++) {
+         if (!(await ensureOnPage(page))) return { error: '没能翻到第 ' + (page + 1) + ' 页' };
          const source = text('.pane-source .source-text');
          sources.push(source);
          const typed = '第 ' + (page + 1) + ' 页译文：' + source.slice(0, 24);
@@ -409,24 +456,45 @@ try {
          setValue(area, typed);
          await sleep(200);
 
-         const before = window.__judgeCalls.length;
-         const last = page === total - 1;
-         const button = document.querySelector('.pane-answer .btn-primary');
-         const label = (button?.textContent || '').trim();
-
-         if (last) {
-           if (!button) return { error: '末页没有「提交批改」按钮' };
-           button.click();
-         } else {
-           const next = document.querySelector('.section-nav [data-nav="next"]');
-           if (!next) return { error: '第 ' + (page + 1) + ' 页没有「下一页」' };
-           next.click();
+         /*
+          * 规矩一：**翻页只是翻页**（用户要求："点击下一页或者上一页，不触发提交批改，
+          * 而是保留当前页面输入缓存，后面返回时可以继续作答"）。
+          * 翻过去、再翻回来，两头各问一句：有没有偷偷提交？草稿还在不在？
+          */
+         if (page < 2) {
+           const callsBeforeNav = window.__judgeCalls.length;
+           await clickNav('next');
+           const callsAfterNav = window.__judgeCalls.length;
+           await clickNav('prev');
+           const kept = (document.querySelector('.answer-input')?.value || '') === typed;
+           navOnly.push({ page, 多发的请求: callsAfterNav - callsBeforeNav, 草稿还在: kept });
          }
 
+         const before = window.__judgeCalls.length;
+         const button = document.querySelector('.pane-answer .btn-primary');
+         const label = (button?.textContent || '').trim();
+         if (!button) return { error: '第 ' + (page + 1) + ' 页没有「提交批改」按钮' };
+         button.click();
          /*
-          * 第 1 页这次翻页会把这一页自动交出去，而桩被拖慢 3 秒——
-          * 就趁这 3 秒密集采样进度条。采样要在"等它翻过去"**之前**做完：
-          * 一旦翻页成功，进度条就随批改结束一起消失了。
+          * 交出去之后**立刻**看这一页：按钮变成按不动的"批改中…"、作答框只读，
+          * 而且弹出等待窗（还有下一页时）。这些都是"批改还没回来"那一刻的样子，
+          * 必须趁桩被拖慢的这 3 秒里读到。
+          */
+         await sleep(80);
+         const judgingButton = document.querySelector('.pane-answer .btn-primary');
+         judgingStates.push({
+           page,
+           按钮: (judgingButton?.textContent || '').trim(),
+           按钮禁用: judgingButton ? judgingButton.disabled === true : null,
+           作答框只读: document.querySelector('.answer-input')?.readOnly === true,
+           等待窗按钮: modalButtons(),
+           别处按钮禁用: null,
+           别处可以翻页: null,
+         });
+
+         /*
+          * 趁这 3 秒密集采样进度条。采样要在"翻走"**之前**做完：
+          * 进度条只画在**正在批的那一页**上，一翻页它就随这一页一起离开了。
           */
          if (page === 0) {
            for (let k = 0; k < 6; k++) {
@@ -448,35 +516,66 @@ try {
 
          // 等这一页真的交出去（请求数 +1）
          const submitted = await waitFor(() => window.__judgeCalls.length > before, 150);
-         if (!submitted) return { error: '第 ' + (page + 1) + ' 页点完之后没有发出批改请求' };
+         if (!submitted) return { error: '第 ' + (page + 1) + ' 页点了「提交批改」却没有发出批改请求' };
 
+         const last = page === total - 1;
          /*
-          * ⚠️ 只有**末页**才在这里验"提交之后变成只读、界面说已批改"。
-          *
-          * 前面那些页点的是「下一页」，它会把这一页交出去批、然后**立刻切页**，
-          * 因此"这一页变成只读"在画面上只存在一瞬间，之后人已经在下一页上了。
-          * 那一刻去读，读到的是新的一页（输入框在），会误判成"批完还是可写的"。
-          * 要验"翻走之后那一页确实是已批改"，用**翻回去看**那一段（revisit）来验，
-          * 那才是用户真能看到的样子。
+          * 规矩二：等待窗里点「进入下一页」——**批改还在跑**就已经翻到了下一页。
+          * 末页后面没有下一页，因此那一页不该弹窗（下面按"等待窗按钮为空"验它）。
           */
          let arrived = null;
          if (!last) {
-           arrived = await waitFor(
-             () => (pageNo().index === page + 1 ? document.querySelector('.answer-input') : null),
-             150,
-           );
-           if (!arrived) return { error: '点了「下一页」但没有翻到第 ' + (page + 2) + ' 页' };
+           const wentNext = await clickModalButton('进入下一页');
+           if (!wentNext) return { error: '第 ' + (page + 1) + ' 页提交之后没有弹出等待提示（或没有「进入下一页」）' };
+           arrived = await waitFor(() => (pageNo().index === page + 1 ? true : null), 60);
+           if (!arrived) return { error: '点了「进入下一页」但没有翻到第 ' + (page + 2) + ' 页' };
+           /*
+            * 批改还在跑的时候，**别处也不能提交**（用户要求"批改过程中不能提交"）：
+            * 落到新的一页上先写两个字，排除"按钮禁用是因为没写东西"这条歧义。
+            */
+           const nextArea = document.querySelector('.answer-input');
+           if (nextArea) {
+             setValue(nextArea, '下一页的草稿');
+             await sleep(200);
+           }
+           const elsewhere = document.querySelector('.pane-answer .btn-primary');
+           const current = judgingStates[judgingStates.length - 1];
+           current.别处按钮禁用 = elsewhere ? elsewhere.disabled === true : null;
+           current.别处可以翻页 = pageNo().index === page + 1;
          }
-         const readOnly = last
-           ? await waitFor(() => (document.querySelector('.answer-input') === null ? 'readonly' : null), 150)
-           : 'readonly';
+
+         /*
+          * 规矩三：批完右下角弹通知，点它跳回那一页看结果。
+          * 通知是"批改返回之后"才画的，因此这里等它出现。
+          */
+         const toastText = await waitFor(() => {
+           const node = document.querySelector('.judge-toast');
+           return node ? (node.textContent || '').trim() : null;
+         }, 200);
+         document.querySelector('.judge-toast-main')?.click();
+         await sleep(450);
+         toasts.push({
+           page,
+           通知: toastText || '',
+           跳到第几页: pageNo().index,
+           跳过去之后通知没了: document.querySelector('.judge-toast') === null,
+           有批注译文: document.querySelector('.pane-answer .annotated-lines') !== null,
+         });
+
+         /*
+          * 这一页收尾：它现在是"已批改"（只读）。判据与本脚本早先一致——
+          * 没有作答框，也没有「提交批改」按钮。
+          */
+         const readOnly =
+           document.querySelector('.answer-input') === null &&
+           document.querySelector('.pane-answer .btn-primary') === null;
          trace.push({
            page,
            typed,
            label,
            last,
            calls: window.__judgeCalls.length,
-           readOnly: readOnly === 'readonly',
+           readOnly,
            state: text('.section-nav .hint'),
          });
        }
@@ -501,6 +600,14 @@ try {
          hasAnnotated: document.querySelector('.pane-answer .annotated-lines') !== null,
          calls: window.__judgeCalls.length - callsAfterAll,
          state: text('.section-nav .hint'),
+         /*
+          * 「批改记录」下拉**在只读的已批改状态下也在**。
+          * 这一条是这一轮改的：批完不再自动翻页，人就停在这一页看结果，
+          * 要是下拉只在"返回编辑"之后才出现，他想回看前几次就得先按一下「返回编辑」——纯属绕路。
+          */
+         有批改记录下拉: [...document.querySelectorAll('.pane-answer .domain-trigger')].some(
+           (b) => (b.textContent || '').includes('批改记录'),
+         ),
        };
 
        // ── 行距：批改视图加倍，对照视图不受影响（用户要求） ──
@@ -530,7 +637,7 @@ try {
        document.querySelector('.pane-source')?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 5, clientY: 5 }));
        await sleep(200);
 
-       // 「返回编辑」：结果作废、可以接着改，按钮变成手动的那个
+       // 「返回编辑」：放开这一页重写（结果作废、可以接着改）
        const mark = document.querySelector('.pane-answer [data-mark-id]');
        if (mark) mark.click();
        await sleep(400);
@@ -657,7 +764,7 @@ try {
          ),
        };
 
-       // 改一个字，再翻到下一页：改过的页**不该**自动提交
+       // 改一个字，再翻到下一页：翻页**不该**提交（自动提交已经取消了）
        const area2 = document.querySelector('.answer-input');
        if (area2) { setValue(area2, '改过之后的内容'); await sleep(250); }
        const afterEdit = {
@@ -694,6 +801,9 @@ try {
          afterUnlock,
          afterEdit,
          editedTurn,
+         navOnly,
+         judgingStates,
+         toasts,
          progress: progressSamples,
          lineHeights,
          bubbleBefore,
@@ -718,6 +828,9 @@ try {
 
   if (walked?.error) throw new Error(walked.error)
   console.log('\n逐页轨迹 =', JSON.stringify(walked.trace, null, 0))
+  console.log('翻页不提交 =', JSON.stringify(walked.navOnly))
+  console.log('批改中的样子 =', JSON.stringify(walked.judgingStates))
+  console.log('批完的通知 =', JSON.stringify(walked.toasts))
   console.log('翻回第 1 页 =', JSON.stringify(walked.revisit))
   console.log('返回编辑后 =', JSON.stringify(walked.afterUnlock))
   console.log('改过再翻页 =', JSON.stringify(walked.editedTurn))
@@ -737,6 +850,77 @@ try {
   check(
     walked.callsAfterAll === total,
     `${total} 页各发了一次批改请求、不多不少（实际 ${walked.callsAfterAll} 次）`,
+  )
+  /*
+   * ── 这一轮新增的三条规矩（都在真实浏览器里验） ──
+   *
+   * 一、**翻页只是翻页**：点「下一页」/「上一页」不发请求，而且草稿留着
+   *    （用户要求："点击下一页或者上一页，不触发提交批改，而是保留当前页面输入缓存，
+   *     后面返回时可以继续作答"）。这条早先是反的：翻页会自动把这一页交出去批。
+   */
+  check(
+    (walked.navOnly ?? []).length >= 2 && walked.navOnly.every((item) => item.多发的请求 === 0),
+    '点「下一页」不触发提交批改（翻页只翻页）',
+    JSON.stringify(walked.navOnly),
+  )
+  check(
+    walked.navOnly.every((item) => item.草稿还在 === true),
+    '翻走再翻回来，草稿原样还在（可以接着往下写）',
+    JSON.stringify(walked.navOnly),
+  )
+  /*
+   * 二、提交之后：等待窗两个按钮 + "批改中"这三样状态，而且**批改没回来就能翻页**。
+   *    末页不弹窗（后面没有下一页可去）。
+   */
+  const judging = walked.judgingStates ?? []
+  check(
+    judging.length === total && judging.every((item) => item.按钮 === '批改中…' && item.按钮禁用 === true),
+    '提交之后按钮立刻变成按不动的「批改中…」',
+    JSON.stringify(judging.map((item) => `${item.page}:${item.按钮}/${item.按钮禁用}`)),
+  )
+  check(
+    judging.every((item) => item.作答框只读 === true),
+    '交出去之后作答框只读（这一刻改字，回来的批注就画错了）',
+    JSON.stringify(judging.map((item) => `${item.page}:${item.作答框只读}`)),
+  )
+  check(
+    judging.slice(0, total - 1).every((item) => item.等待窗按钮.join('/') === '停留此页/进入下一页'),
+    '提交之后弹出等待提示，两个按钮都在（停留此页 / 进入下一页）',
+    JSON.stringify(judging.map((item) => `${item.page}:[${item.等待窗按钮.join('/')}]`)),
+  )
+  check(
+    judging.at(-1)?.等待窗按钮.length === 0,
+    '末页提交时不弹等待提示（后面没有下一页可去）',
+    JSON.stringify(judging.at(-1)?.等待窗按钮),
+  )
+  check(
+    judging.slice(0, total - 1).every((item) => item.别处可以翻页 === true),
+    '批改还没回来就已经翻到了下一页（等待过程中可以继续翻译）',
+    JSON.stringify(judging.map((item) => `${item.page}:${item.别处可以翻页}`)),
+  )
+  check(
+    judging.slice(0, total - 1).every((item) => item.别处按钮禁用 === true),
+    '批改进行中，翻到下一页写了字也提交不了（一次只批一页）',
+    JSON.stringify(judging.map((item) => `${item.page}:${item.别处按钮禁用}`)),
+  )
+  /*
+   * 三、批完右下角弹出通知，点它跳回那一页。
+   */
+  const toasts = walked.toasts ?? []
+  check(
+    toasts.length === total && toasts.every((item) => item.通知.includes(`第 ${item.page + 1} 页已经批改完成`)),
+    '每批完一页，右下角都弹出"第 x 页已经批改完成"',
+    JSON.stringify(toasts.map((item) => item.通知)),
+  )
+  check(
+    toasts.every((item) => item.跳到第几页 === item.page),
+    '点那条通知直接路由到批完的那一页',
+    JSON.stringify(toasts.map((item) => `${item.page}→${item.跳到第几页}`)),
+  )
+  check(
+    toasts.every((item) => item.跳过去之后通知没了 && item.有批注译文),
+    '跳过去就看到了那一页的批注译文，通知随之消失',
+    JSON.stringify(toasts.map((item) => ({ 页: item.page, 通知没了: item.跳过去之后通知没了, 有批注: item.有批注译文 }))),
   )
   /*
    * 每次请求发的都必须是**那一页自己**的文字。
@@ -784,16 +968,20 @@ try {
     '翻回第 1 页时界面说"已批改"而不是"待批改"',
     walked.revisit.state,
   )
+  check(
+    walked.revisit.有批改记录下拉 === true,
+    '只读的已批改状态下「批改记录」下拉也在（批完就停在这一页，回看不必先按「返回编辑」）',
+  )
   check(walked.afterUnlock.hasInput && !walked.afterUnlock.hasAnnotated, '点「返回编辑」回到作答框，可以接着改')
   check(
     walked.afterUnlock.button === '提交批改',
-    `还没动字时按钮是普通的「提交批改」（实际 ${JSON.stringify(walked.afterUnlock.button)}）`,
+    `放开之后按钮是普通的「提交批改」（实际 ${JSON.stringify(walked.afterUnlock.button)}）`,
   )
-  check(walked.afterUnlock.有批改记录下拉, '还没动字时「批改记录」下拉在（它取代了旧的「查看上次批改」按钮）')
+  check(walked.afterUnlock.有批改记录下拉, '「批改记录」下拉在（它取代了旧的「查看上次批改」按钮）')
   console.log('改过之后 =', JSON.stringify(walked.afterEdit))
   check(
-    walked.afterEdit.按钮.includes('手动'),
-    `改过字之后按钮变成手动的「提交批改（手动）」（实际 ${JSON.stringify(walked.afterEdit.按钮)}）`,
+    walked.afterEdit.按钮 === '提交批改',
+    `改过字之后按钮仍是「提交批改」，要自己按（实际 ${JSON.stringify(walked.afterEdit.按钮)}）`,
   )
   check(walked.afterEdit.有批改记录下拉, '改过字之后「批改记录」下拉仍然在（落盘的记录不受改过字影响）')
   console.log('小卡片收藏 =', JSON.stringify({ 点之前: walked.bubbleBefore, 点之后: walked.bubbleAfter, 收藏条数: walked.favoriteCount, 落盘内容: walked.favoriteStored }))
@@ -859,7 +1047,7 @@ try {
   check(walked.returnToResult?.新增调用 === 0, `回去看**不是**重新提交（多发 ${walked.returnToResult?.新增调用} 次请求）`)
   check(
     walked.editedTurn.calls === 0,
-    `改过之后翻页**没有**自动提交（多发 ${walked.editedTurn.calls} 次）`,
+    `改过之后翻页**没有**提交（多发 ${walked.editedTurn.calls} 次）`,
   )
   check(cdp.errors.length === 0, '整条流程没有页面异常', JSON.stringify(cdp.errors.slice(0, 3)))
 
@@ -959,7 +1147,8 @@ try {
   const failed = results.filter((item) => !item.ok)
   console.log(
     failed.length === 0
-      ? `\n✓ 验收通过：${results.length} 项断言全过（逐页提交、不串页、翻回不重提、改过不自动提交）`
+      ? `\n✓ 验收通过：${results.length} 项断言全过（翻页不提交、批改中可翻页、一次只批一页、` +
+          `批完的通知可跳转、逐页提交不串页、翻回不重提）`
       : `\n✗ 验收未通过：${failed.length} / ${results.length} 项未过`,
   )
   process.exitCode = failed.length === 0 ? 0 : 1

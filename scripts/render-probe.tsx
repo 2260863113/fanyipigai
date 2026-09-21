@@ -52,6 +52,10 @@ export interface RenderProbe {
     firstBubble: string
     /** 卡片的 HTML：说明里的「；」应当断成 <br>（分号换行） */
     firstBubbleHtml: string
+    /** 点了某一处之后，原文栏里"对应那一段"的文字（用户要求：原文也标同色） */
+    sourceMarkText: string
+    /** 收起卡片之后，原文里那处标记应当消失 */
+    sourceMarkAfterOutsideClick: string
     /** 卡片下方那颗按钮点击前 / 点击后的文案（收藏 → 已收藏） */
     firstFavoriteButton: string
     favoriteButtonAfterClick: string
@@ -139,6 +143,41 @@ export interface RenderProbe {
    * 见 renderApp 里那一段的说明——"哪一页批过、翻页会不会重复提交"就靠它钉住。
    */
   perPage: Array<{ page: number; state: string; hasInput: boolean; submitLabel: string; stateAfterLeave: string }>
+  /**
+   * 逐页批改**改版后**那一套规矩的观测点：翻页不提交、草稿留着、
+   * 提交后的等待弹窗、批改中翻页、批改中别处不能提交、批完的右下角通知。
+   */
+  submits: Array<{
+    page: number
+    /** 点「下一页」引起的批改调用数（新规矩：0） */
+    viaNav: number
+    /** 翻走再翻回来，草稿还在不在（用户要求"保留当前页面输入缓存"） */
+    draftKeptAfterRoundTrip: boolean
+    /** 提交之后等待弹窗里的按钮文案（空数组 = 没弹；末页本就不该弹） */
+    modal: string[]
+    /** 批改还没回来时看到的样子（末页提交后不翻页，因此 duringJudge 是 null） */
+    duringJudge: {
+      /** 交出去之后，**正在批的那一页**上按钮写着什么（应当是"批改中…"） */
+      judgingLabel: string
+      /** 正在批的那一页，按钮按不按得动 */
+      judgingDisabled: boolean
+      /** 正在批的那一页，作答框是不是已经只读 */
+      answerReadOnly: boolean
+      /** 落到新的一页、写了字之后，提交按钮还按不按得动（一次只批一页） */
+      submitDisabled: boolean
+      elsewhereTitle: string
+      /** 点「进入下一页」之后落在第几页（0 起） */
+      pageAfterNext: number
+      wentNext: boolean
+    } | null
+    /** 右下角那条通知的文案（没能弹出来就是空串） */
+    toastText: string
+    toastRouted: boolean
+    /** 点通知之后落在第几页（0 起） */
+    routedPage: number
+    /** 跳过去之后通知自己消失了没有 */
+    toastGoneAfterRoute: boolean
+  }>
   /** 逐页批改：翻回第 1 页（已批过）时，批改结果是直接显示出来的，还是被重新提交了 */
   revisit: { showsResult: boolean; hasInput: boolean; judgeCalls: number }
   /** 「自定义」那一栏：自己贴一篇原文来练 */
@@ -221,6 +260,27 @@ export interface RenderProbe {
     before: { score: string; annotatedChars: number; notesChars: number; pageState: string }
     after: { score: string; annotatedChars: number; notesChars: number; pageState: string }
   }
+  /**
+   * 同一条要求的另一半：「我正在看这一页的第几次批改」也要扛住切栏。
+   *
+   * 用户原话是"切换之后切换回来，看到的东西不变"——切走时他看的是**那一次存档**，
+   * 切回来要是变成作答框（或变成本页最新那次结果），就叫"东西变了"。
+   * 判据取下拉上那行字（"第 N 次 · 时间" vs "共 N 次"），它比批注字形更能区分"这是哪一次"。
+   */
+  historyView?: {
+    /** 有没有从下拉里选中一条 */
+    picked: boolean
+    /** 选中之前下拉上写的是什么（应当是"共 N 次"） */
+    before: string
+    /** 选中之后（切栏之前）写的是什么 */
+    viewingBefore: string
+    /** 切栏又切回来之后写的是什么（必须与 viewingBefore 一致） */
+    viewingAfter: string
+    /** 切回来之后右栏还是带批注的译文 */
+    resultShown: boolean
+    /** 切回来之后「回到作答」还在（它是"正在看历史"的出口） */
+    backButtonAfter: boolean
+  }
   /** 顶部导航里的模式标签 */
   modeTabLabels: string[]
   /** 切换到的第一个示例（用来核对四类题型都有题） */
@@ -279,11 +339,16 @@ function splitInto(text: string, parts: number): string[] {
  * 这里用内置假数据构造一个与真实接口**同结构**的响应，
  * 专门用来验证「提交 → 校验 → 渲染」这条链路本身。
  */
-function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number; lastBody: () => string } {
+function makeJudgeFetch(options: { judgeDelayMs?: number } = {}): {
+  fetch: typeof fetch
+  calls: () => number
+  lastBody: () => string
+} {
+  const judgeDelayMs = options.judgeDelayMs ?? 0
   let calls = 0
   let lastBody = ''
 
-  const impl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const handle = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     const pathname = new URL(url, 'http://localhost/').pathname
     if (pathname === '/api/generate') {
@@ -431,6 +496,20 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number; lastBody:
 
     const correction = fixtureCorrectionFor(exercise.exercise.id, answerForFixture)
     if (!correction) throw new Error('渲染测试：取不到内置示例的批改结果')
+    /*
+     * 给第一处批注补一个**"翻译前的那段原文"**（真实 AI 会返回 sourceText，程序据此定位）。
+     * 这里按同样的形状补上，才能验"点这一处 → 左边原文栏对应那一段也标同色"这件事——
+     * 那份字段是可选的，fixture 里本来没有。
+     */
+    {
+      const sourceText = (body.source ?? '').split(/\s+/).filter(Boolean).slice(0, 3).join(' ')
+      const at = sourceText ? (body.source ?? '').indexOf(sourceText) : -1
+      const firstError = correction.errors[0]
+      if (firstError && at >= 0) {
+        firstError.sourceText = sourceText
+        firstError.sourceAnchor = { start: at, end: at + sourceText.length, snippet: sourceText }
+      }
+    }
     // 与真实接口保持严格同构：真实接口也会把位置校验的结果与 AI 原始返回一起带回来
     const checked = validateCorrection(correction.errors, correction.highlights, answerForFixture, exercise.exercise.direction)
     const payload = {
@@ -460,6 +539,26 @@ function makeJudgeFetch(): { fetch: typeof fetch; calls: () => number; lastBody:
     })
   }
 
+  /*
+   * 只在探针要求时把**批改**那一趟拖慢。
+   *
+   * 为什么需要它：真实批改要十几秒到一分钟，而这一轮新增的几条规矩全都发生在
+   * "请求已经发出去、结果还没回来"这段时间里——等待弹窗、翻页不拦、
+   * 一次只批一页（别处不许再提交）、批完的右下角通知。
+   * 桩默认是**立刻**返回的，那段时间宽度为零，这些都测不到。
+   * 拖慢的是"返回"这一侧：调用次数、请求体照旧当场记下，因此计数类断言不受影响。
+   */
+  const impl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const response = await handle(input, init)
+    if (judgeDelayMs > 0) {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (new URL(url, 'http://localhost/').pathname === '/api/judge') {
+        await new Promise((resolve) => setTimeout(resolve, judgeDelayMs))
+      }
+    }
+    return response
+  }
+
   return { fetch: impl as unknown as typeof fetch, calls: () => calls, lastBody: () => lastBody }
 }
 
@@ -483,6 +582,13 @@ export async function renderApp(
      * 指定了 exerciseId 又查不到内置示例时，用它决定切到哪一栏；不指定就按文章栏。
      */
     mode?: Mode
+    /**
+     * 让 `/api/judge` 晚这么多毫秒才返回（默认 0 = 立刻）。
+     *
+     * 逐页那一段要靠它才测得到"批改正在跑"这段时间里的界面：
+     * 等待弹窗、批改中照样翻页、一次只批一页、批完的右下角通知。
+     */
+    judgeDelayMs?: number
   } = {},
 ): Promise<RenderProbe> {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -519,7 +625,7 @@ export async function renderApp(
   install('sessionStorage', dom.window.sessionStorage)
   install('IS_REACT_ACT_ENVIRONMENT', true)
 
-  const judgeFetch = makeJudgeFetch()
+  const judgeFetch = makeJudgeFetch({ judgeDelayMs: options.judgeDelayMs ?? 0 })
   install('fetch', judgeFetch.fetch)
 
   /*
@@ -713,6 +819,24 @@ export async function renderApp(
   }
 
   /**
+   * 翻到指定的页（在当前页与目标页之间一步一步走）。
+   *
+   * 为什么不让循环"记住上一轮停在哪一页"：那样每一轮的正确性都依赖上一轮的收尾动作，
+   * 而这一轮新增的动作（提交后的等待窗、点右下角通知跳回来）恰恰会打乱收尾位置——
+   * 一处出错就变成"每一页都写在别的页上"，症状离原因很远（踩过）。
+   * 现在每一轮开头都先站到自己该在的那一页上，循环内部就自洽了。
+   */
+  const goToPage = async (target: number): Promise<void> => {
+    for (let round = 0; round < 12; round += 1) {
+      const now = sectionIndexNow()
+      if (now === target) return
+      await clickNav(now < target ? 'next' : 'prev')
+      // 翻不动了（到了头）就别空转
+      if (sectionIndexNow() === now) return
+    }
+  }
+
+  /**
    * 让当前这一页变成可写的。
    *
    * 逐页批改下批过的页是**只读**的（要在它上面打字得先按「返回编辑」），
@@ -729,7 +853,55 @@ export async function renderApp(
     })
   }
 
-  /** 手动按「提交批改」并等它批完（自动提交只在翻页时发生） */
+  /** 手动按「提交批改」，**不等结果**就返回（批改中要验的界面状态全靠它） */
+  const clickSubmit = async (): Promise<HTMLButtonElement | null> => {
+    const button = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
+    if (!button || button.disabled) return null
+    await act(async () => {
+      button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    return button
+  }
+
+  /** 等某件事成真（批改是异步的，界面总要过几拍才跟上） */
+  const waitFor = async (ready: () => boolean, rounds = 300): Promise<boolean> => {
+    for (let round = 0; round < rounds; round += 1) {
+      if (ready()) return true
+      await tick()
+    }
+    return false
+  }
+
+  /** 弹窗底部的按钮文案（等待弹窗与 AI 出题弹窗共用同一个壳，因此这里按文案认） */
+  const modalButtonTexts = (): string[] =>
+    [...container.querySelectorAll<HTMLButtonElement>('.raw-modal-backdrop .gen-foot .btn')].map(
+      (node) => node.textContent?.trim() ?? '',
+    )
+
+  const clickModalButton = async (text: string): Promise<boolean> => {
+    const node = [...container.querySelectorAll<HTMLButtonElement>('.raw-modal-backdrop .gen-foot .btn')].find(
+      (item) => item.textContent?.trim() === text,
+    )
+    if (!node) return false
+    await act(async () => {
+      node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    return true
+  }
+
+  /** 右下角那条批改完成通知的文案（没有就是空串） */
+  const toastText = (): string => container.querySelector('.judge-toast')?.textContent?.trim() ?? ''
+
+  const clickToast = async (): Promise<boolean> => {
+    const node = container.querySelector<HTMLButtonElement>('.judge-toast-main')
+    if (!node) return false
+    await act(async () => {
+      node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    return true
+  }
+
+  /** 手动按「提交批改」并等它批完（只在最后一页用：那一页提交完就不动了） */
   const submitCurrentPage = async (): Promise<void> => {
     const button = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
     if (!button || button.disabled) return
@@ -740,10 +912,7 @@ export async function renderApp(
      * 等结果真的落到界面上：提交按钮消失（批过的那一页是只读的）就是落定的标志。
      * 同样不能只等 `act`——批改是异步的。
      */
-    for (let round = 0; round < 60; round += 1) {
-      if (container.querySelector('.pane-answer .btn-primary') === null) return
-      await tick()
-    }
+    await waitFor(() => container.querySelector('.pane-answer .btn-primary') === null, 60)
   }
 
   /*
@@ -870,25 +1039,27 @@ export async function renderApp(
   }
 
   /*
-   * 逐页走一遍：填一页 → 交一页 → 翻一页。
+   * 逐页走一遍：填一页 → 自己按「提交批改」 → 翻到下一页接着译。
    *
-   * 这是**逐页批改**的主循环，也顺手把这一轮改动的规矩跑了一遍：
-   *   - 还没批过的页，「下一页」会先把这一页交去批改，再翻过去；
-   *   - 已经批过的页，翻回去只是看结果（`pageState` 会是"已批改"），不会重新提交；
-   *   - 因此每翻一页最多只多一次批改调用——多出来的调用这里能直接数出来。
+   * ⚠️ 这一轮（第三版）把这条主循环重写了。早先它是"填一页 → 点「下一页」，
+   * 翻页时自动把这一页交出去"，而用户已经把自动提交取消：
+   * 「点击下一页或者上一页，不触发提交批改，而是保留当前页面输入缓存，后面返回时可以继续作答」。
+   *
+   * 因此每一轮除了"填、交、翻"，还顺手验了这一轮改动要守住的四件事
+   * （它们全发生在"请求发出去、结果还没回来"那段时间里，因此这一段把桩拖慢：
+   * 见 renderApp 的 judgeDelayMs）：
+   *   1. 点「下一页」**不引起批改调用**，而且翻回来草稿还在；
+   *   2. 提交之后弹出等待窗，两个按钮都在；点「进入下一页」能走，且**批改还在跑**；
+   *   3. 批改期间**别处也不能提交**（一次只批一页）；
+   *   4. 批完右下角弹出通知，点它跳回那一页，通知随之消失。
    */
   const perPage: Array<{ page: number; state: string; hasInput: boolean; submitLabel: string; stateAfterLeave: string }> = []
+  const submits: RenderProbe['submits'] = []
 
   for (const [index, section] of sectionsToFill.entries()) {
+    // 每一轮开头先站到自己该在的那一页上（上一轮的收尾未必落在这里，见 goToPage）
+    await goToPage(index)
     const before = navText()
-    /*
-     * 这里**刻意不点「上一页」**：`readPagesFromScreen` 收完页之后已经翻回第 1 页了，
-     * 而每一轮的结尾都会点「下一页」——所以下一轮开始时人**本来就在**正确的页上。
-     *
-     * 早先每轮开头都点一次「上一页」，于是流程变成了"翻过去又翻回来"：
-     * 每一轮写的都是同一页，而「下一页」因为那一页已经是"改过的页"（不再自动提交）
-     * 而不再前进——整整 8 轮全写在第 1 页上（踩过，很难看出是这里的问题）。
-     */
     await ensureEditable()
     await typeInto(section)
     // 注意：typedInto 要在**填完之后**读，否则记下的是上一次的残留
@@ -898,34 +1069,104 @@ export async function renderApp(
     const pendingState = pageStateNow()
     const hadInput = container.querySelector('.answer-input') !== null
 
+    const isLast = index === sectionsToFill.length - 1
+    /** 点「下一页」引起的批改调用数（新规矩：必须是 0） */
+    let viaNav = 0
+    let draftKeptAfterRoundTrip = false
+    /** 翻走再回来之后，这一页自己说它是什么状态（新规矩下应当是"待批改"） */
+    let stateAfterLeave = '(末页，翻不过去)'
+
+    if (!isLast) {
+      /*
+       * 规矩 1：**翻页只是翻页**。
+       * 翻过去、再翻回来，两头各问一句：有没有偷偷提交？草稿还在不在？
+       * `stateAfterLeave` 就在翻回来的那一刻读——那时界面说的才是"这一页现在是什么状况"。
+       */
+      const callsBeforeNav = judgeFetch.calls()
+      await clickNav('next')
+      viaNav = judgeFetch.calls() - callsBeforeNav
+      await clickNav('prev')
+      draftKeptAfterRoundTrip =
+        (container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? '') === section
+      stateAfterLeave = pageStateNow()
+    }
+
     /*
-     * 最后一页先手动交出去：翻页导航的「下一页」在末页是禁用的，
-     * 不手动交的话界面会停在"待批改"上，后面那些"看结果"的断言就没有结果可看。
+     * 提交：
+     *   - 非末页：按「提交批改」，这时应当弹出等待窗，然后**点「进入下一页」**
+     *     在批改还没回来的情况下翻走（这正是用户要的"等待过程中可进入下一页"）；
+     *   - 末页：后面没有下一页，因此不该弹窗（`modal` 空即证据），直接等结果。
      */
-    if (index === sectionsToFill.length - 1) await submitCurrentPage()
-    else await clickNav('next')
+    let modal: string[] = []
+    let duringJudge: RenderProbe['submits'][number]['duringJudge'] = null
+    let pageText = ''
+    let toastRouted = false
+    let routedPage = -1
+    let toastGoneAfterRoute = false
+
+    if (isLast) {
+      await submitCurrentPage()
+      modal = modalButtonTexts()
+    } else {
+      await clickSubmit()
+      modal = modalButtonTexts()
+      /*
+       * 交出去之后**立刻**看这一页（还没翻走）：按钮应当变成按不动的"批改中…"，
+       * 作答框应当只读——"批改中不能提交"这条要求最直接的两条证据。
+       */
+      const judgingButton = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
+      const answerBox = container.querySelector<HTMLTextAreaElement>('.answer-input')
+      const judgingLabel = judgingButton?.textContent?.trim() ?? ''
+      const judgingDisabled = judgingButton?.disabled ?? false
+      const answerReadOnly = answerBox?.readOnly ?? false
+      const wentNext = await clickModalButton('进入下一页')
+      const pageAfterNext = sectionIndexNow()
+      /*
+       * 规矩 3：**批改中别处也不能提交**。
+       * 落到新的一页上先写两个字，把"按钮禁用是不是因为没写东西"这条歧义排除掉——
+       * 写了字还按不动，才说明挡住它的是"另一页正在批"。
+       */
+      await typeInto(`${section}\n（下一页的草稿）`)
+      const button = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
+      duringJudge = {
+        judgingLabel,
+        judgingDisabled,
+        answerReadOnly,
+        submitDisabled: button === null || button.disabled,
+        elsewhereTitle: button?.title ?? '',
+        pageAfterNext,
+        wentNext,
+      }
+    }
+
     /*
-     * `stateAfterLeave` 记的是**翻走的那一刻界面自己说的状态**：
-     *   - 还有下一页时：翻页时这一页会自动交出去，所以应当是"已批改"；
-     *     "人已经走了、这一页还没交出去"正是逐页批改要避免的事。
-     *   - 末页：翻不过去，`pageStateNow()` 这时读到的还是"待批改"
-     *     （刚提交的结果还没落进 DOM），因此单独写清楚"页面已离开"
-     *     —— 拿它当"已批改"的断言会误报，见下面 smoke.ts 里的用法。
+     * 规矩 4：批完右下角弹通知，点它跳回来。
+     * 这里必须**等到通知出现**：它在批改返回之后才画出来，而这一段故意把桩拖慢，
+     * 所以"点了按钮马上读"一定读不到（那会变成一条假红）。
      */
+    const appeared = await waitFor(() => toastText().includes('已经批改完成'))
+    pageText = appeared ? toastText() : ''
+    toastRouted = await clickToast()
+    routedPage = sectionIndexNow()
+    toastGoneAfterRoute = toastText() === ''
+
     perPage.push({
       page: index,
       state: pendingState,
       hasInput: hadInput,
       submitLabel: container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')?.textContent?.trim() ?? '',
-      /*
-       * 翻走之后界面自己说的状态：还有下一页时应当是"已批改"。
-       *
-       * ⚠️ 这里必须**等它落定**（见 clickNav 里的说明）：翻页先把这一页交出去批、
-       * 批完才切页，而那些状态更新有自己的节奏。直接读会读到翻页**之前**的
-       * "第 N 页 · 待批改"，看上去像"翻走了还没交出去"，其实是读早了。
-       */
-      stateAfterLeave:
-        index === sectionsToFill.length - 1 ? '(末页，翻不过去)' : pageStateNow(),
+      stateAfterLeave,
+    })
+    submits.push({
+      page: index,
+      viaNav,
+      draftKeptAfterRoundTrip,
+      modal,
+      duringJudge,
+      toastText: pageText,
+      toastRouted,
+      routedPage,
+      toastGoneAfterRoute,
     })
   }
 
@@ -1021,6 +1262,12 @@ export async function renderApp(
   const firstNotes = notesText()
   const firstBubble = bubbleText()
   const firstBubbleHtml = container.querySelector('.pane-answer .ann-bubble')?.innerHTML ?? ''
+  /*
+   * 原文栏里"这一处对应的地方"（用户要求）：点了译文上的某一处之后，
+   * 左边原文栏里对应的那一小段也要用同一个颜色标出来；收起卡片就消失。
+   * 区间来自 AI 给的 sourceText（见下面 stub 里补的那一段）。
+   */
+  const sourceMarkText = container.querySelector('.pane-source .source-mark')?.textContent?.trim() ?? ''
   const selectedDetailCount = container.querySelectorAll('.pane-notes .detail-list').length
   // 卡片下方那颗「收藏」：点了之后文案要变成「已收藏」，并且真的进了收藏页
   const favoriteButton = (): HTMLButtonElement | undefined =>
@@ -1061,6 +1308,8 @@ export async function renderApp(
   })
   const notesAfterOutsideClick = notesText()
   const bubbleAfterOutsideClick = bubbleText()
+  /** 收起小卡片之后，原文里那处标记也该跟着消失（用户要求） */
+  const sourceMarkAfterOutsideClick = container.querySelector('.pane-source .source-mark')?.textContent?.trim() ?? ''
 
   /*
    * 点**上方补写的字**（`.fix-text`）：它代表的是同一处，也该把小卡片打开。
@@ -1103,6 +1352,8 @@ export async function renderApp(
           firstNotes,
           firstBubble,
           firstBubbleHtml,
+          sourceMarkText,
+          sourceMarkAfterOutsideClick,
           firstFavoriteButton: favoriteBefore,
           favoriteButtonAfterClick: favoriteAfter,
           favoriteStored,
@@ -1122,6 +1373,8 @@ export async function renderApp(
   // 切走再切回来，检查会不会丢东西
   let survivedTabRoundTrip: RenderProbe['survivedTabRoundTrip']
   let tabRoundTripResult: RenderProbe['tabRoundTripResult']
+  /** 切走再切回来时，"我正在看第几次批改"这件事有没有被记住 */
+  let historyView: RenderProbe['historyView']
   if (options.checkTabRoundTrip) {
     const clickTab = async (label: string): Promise<void> => {
       const tab = [...container.querySelectorAll<HTMLButtonElement>('.mode-tab')].find(
@@ -1179,6 +1432,64 @@ export async function renderApp(
     await ensureEditable()
     await typeInto(lastSection)
     await submitCurrentPage()
+
+    /*
+     * ③ 第三件事：**"我正在看这一页的第几次批改"也要扛住切栏**。
+     *
+     * 这是用户报的第二条原话："批改界面下，切换导航栏后，回到文章模式时，
+     * 不要恢复到批改前的空白状态，而是保留记忆，相当于切换之后切换回来，看到的东西不变。"
+     * 当时的那条路线上写着 `selectTab` 里一句 `setViewingGradeId(null)`——
+     * 于是切走时屏幕上是那一次存档，切回来变成作答框，看着就像批改结果被清空了。
+     *
+     * 判据取「批改记录」下拉上那行小字：正在看某一次时写的是"第 N 次 · 时间"，
+     * 没在看时写的是"共 N 次"——两者一眼可分，不必去猜右栏那些批注是谁的。
+     */
+    const pickerTriggerText = (): string => {
+      const node = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .domain-trigger')].find((item) =>
+        item.textContent?.includes('批改记录'),
+      )
+      return node?.textContent?.trim() ?? ''
+    }
+    const pickerBefore = pickerTriggerText()
+    const pickerTrigger = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .domain-trigger')].find(
+      (item) => item.textContent?.includes('批改记录'),
+    )
+    let pickedFromPicker = false
+    if (pickerTrigger) {
+      await act(async () => {
+        pickerTrigger.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      const firstItem = container.querySelector<HTMLButtonElement>('.pane-answer .domain-item')
+      if (firstItem) {
+        await act(async () => {
+          firstItem.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        })
+        pickedFromPicker = true
+      }
+    }
+    const viewingLabelBefore = pickerTriggerText()
+    await clickTab('术语')
+    await clickTab(backTabLabel)
+    await tick()
+    historyView = {
+      picked: pickedFromPicker,
+      before: pickerBefore,
+      viewingBefore: viewingLabelBefore,
+      viewingAfter: pickerTriggerText(),
+      resultShown: container.querySelector('.pane-answer .annotated-lines') !== null,
+      backButtonAfter: [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].some(
+        (node) => node.textContent?.trim() === '回到作答',
+      ),
+    }
+    // 收场：点「回到作答」，把这一页还回"看这一页结果"的样子
+    const backToCurrent = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
+      (node) => node.textContent?.trim() === '回到作答',
+    )
+    if (backToCurrent) {
+      await act(async () => {
+        backToCurrent.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+    }
   }
 
   /*
@@ -1371,8 +1682,11 @@ export async function renderApp(
       })
     }
     /*
-     * 改一个字之后再翻一次页：这一页已经批过又被放开，
-     * 翻页绝不能自动提交（那正是"改完要自己按批改"那条规矩）。
+     * 改一个字、翻走再翻回来：**一个批改调用都不该多**。
+     *
+     * ⚠️ 这条比早先更强：那时翻页仍会自动提交（只有"改过的页"例外），
+     * 因此这里量的是"改过的页不自动提交"；现在自动提交整个取消了，
+     * 翻页无论改没改过都只是翻页——`judgeCallsAfterReturn` 必须是 0。
      */
     await typeInto('（改了一下）')
     const submitLabelAfterEdit =
@@ -1416,7 +1730,7 @@ export async function renderApp(
       manualApplied: container.querySelector('.split-manual') !== null,
       editorShown,
       canReturnToResult: readonlyBeforeUnlock && Boolean(unlock),
-      resultBack: submitLabelAfterEdit.includes('手动'),
+      resultBack: submitLabelAfterEdit.includes('提交批改'),
       judgeCallsAfterReturn: judgeCallsAfterReturn - callsBeforeUnlock,
       submitLabelAfterUnlock,
       historyItemCount,
@@ -1500,6 +1814,7 @@ export async function renderApp(
   return {
     sectionNavTrace,
     perPage,
+    submits,
     revisit,
     flow: { text: flowText, answer: submittedAnswer, matches: flowText === submittedAnswer },
     panels,
@@ -1525,6 +1840,7 @@ export async function renderApp(
     judgeRequestBody: judgeFetch.lastBody(),
     survivedTabRoundTrip,
     tabRoundTripResult,
+    historyView,
     interaction,
     restore: () => {
       // 把改过的全局对象放回去。不做这一步，后面依赖 fetch 的检查（例如截屏的就绪探测）

@@ -11,6 +11,7 @@ import { AnswerViewSwitch } from './AnswerViewSwitch'
 import { CompareView } from './CompareView'
 import { RefineView } from './RefineView'
 import { RefineScore } from './ScorePane'
+import { SourceText } from './SourcePane'
 import { buildLayout } from '../domain/layout'
 import { ScoreSummary } from './ScoreSummary'
 import { DetailPanel } from './DetailPanel'
@@ -95,6 +96,18 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
    * 自己贴的题、句子题、术语题没有译文，这一块就不出现。
    */
   const reference = openRecord ? pageReferenceOf(openRecord.exerciseId, openRecord.sectionIndex) : ''
+  /**
+   * 记录页也要能"点某处批改 → 原文里对应那一段标同色"（用户要求，练习页与记录页同一套行为）。
+   * 位置来自存下来的 `sourceAnchor`（AI 给的 sourceText 在解析时定位出来的），
+   * 因此回看旧记录照样点得出来。
+   */
+  const recordSourceMark = useMemo(() => {
+    if (selection?.kind !== 'error' || !openRecord) return null
+    const entry = openRecord.validated.errors.find((item) => item.error.id === selection.id)
+    const anchor = entry?.error.sourceAnchor
+    if (!entry || !anchor) return null
+    return { start: anchor.start, end: anchor.end, color: entry.hard ? ('red' as const) : ('orange' as const) }
+  }, [selection, openRecord])
 
   /*
    * 左右两屏的边界也能拖（与练习页同一套 useSplitDrag）。
@@ -242,7 +255,7 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                 )}
               </header>
               <div className="pane-body">
-                <p className="source-text">{source || '（未保存题干）'}</p>
+                <SourceText text={source || '（未保存题干）'} mark={recordSourceMark} />
                 {/*
                   参考译文折叠在原文下面（练习页的那份折叠块已换成标题栏的「对照」按钮，
                   记录页是只读的复盘视图，折叠着更省地方，因此这里仍然用折叠块）。

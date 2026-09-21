@@ -10,8 +10,13 @@
  *
  * 批过一次的页再改字，批注的位置就全对不上了（批注是按**提交当时**那段文字算出来的）。
  * 因此批过的页先只读，由用户明确说一句"我要改这一页"（`onUnlock`）才放开：
- * 那一刻结果作废、草稿留着、并且这一页从此**不再自动提交**——
- * 改完自己按「提交批改」，免得替他交一次、白花一次调用。
+ * 那一刻结果作废、草稿留着，改完自己按「提交批改」。
+ *
+ * ## 交出去之后也一样只读
+ *
+ * 一页交了、结果还没回来时（`pageState === 'judging'`）同样只读：
+ * 那一刻改字，回来的批注画的就不是屏幕上这一段了。但**翻页不拦**——
+ * 用户可以先去下一页接着译，这一页批完会在右下角通知他（见 JudgeDoneToast）。
  *
  * 「哪一页批过没有」不在这个组件里判断：它由 App 按 session.pages 推出来，
  * 这里只按 `pageState` / `editing` 渲染。
@@ -53,16 +58,19 @@ export interface ShownCorrection {
 /**
  * 当前这一页在逐页批改里的状态。**按钮文案与翻页行为都由它推出来**，
  * 因此它的名称要与 reducer 里那几个动作对得上（见 session.ts）。
+ *
+ * ⚠️ 四档里**没有**"已修改 · 待提交"那一档了：翻页不再自动提交（用户要求），
+ * 于是"改过没有"不再改变任何行为——放开过的页就是在写，写完自己按「提交批改」。
  */
 export type PageState =
-  /** 还没批过 */
+  /** 还没批过（可能已经写了字，也可能还是空的） */
   | 'pending'
-  /** 批过了，结果就是这一段文字（只读） */
+  /** 已经交出去、正在批（只读：这一刻再改字，批注就全对不上了） */
+  | 'judging'
+  /** 批过了，结果就是这一段文字（只读，点「返回编辑」可改） */
   | 'graded'
-  /** 批过之后被「返回编辑」放开，但**一个字都还没改**：翻页时仍会自动提交 */
-  | 'edited'
-  /** 放开之后**真的改过字**了：批注已对不上，不会再自动提交，只能自己按「提交批改（手动）」 */
-  | 'modified'
+  /** 批过之后被「返回编辑」放开，正在改 */
+  | 'editing'
 
 export function AnswerPane({
   shown,
@@ -70,7 +78,8 @@ export function AnswerPane({
   selection,
   settings,
   level,
-  judging,
+  judgingThisPage,
+  busyElsewhere,
   error,
   notice,
   isFixtureAnswer,
@@ -99,7 +108,16 @@ export function AnswerPane({
   selection: Selection | null
   settings: ViewSettings
   level: PolishLevel
-  judging: boolean
+  /** **这一页**正在批（进度条、只读、按钮文案都由它决定） */
+  judgingThisPage: boolean
+  /**
+   * 别处正在批（同一页之外的另一页、或另一道题）。
+   *
+   * 用户要求"批改过程中不能提交"，而批改现在允许翻页，
+   * 因此"正在批"不再等于"就在当前这一页"——两条判断必须分开，
+   * 否则翻到下一页之后提交按钮又是亮的，能连着发出第二次请求。
+   */
+  busyElsewhere: boolean
   /** 批改失败的信息（含"能不能看内置示例"的判断依据） */
   error: { message: string } | null
   notice: string | null
@@ -119,7 +137,7 @@ export function AnswerPane({
   viewingRecordId: string | null
   onSelect: (selection: Selection | null) => void
   onSettingsChange: (patch: Partial<ViewSettings>) => void
-  /** 「返回编辑」：作废这一页的结果，放开重写（之后这一页不再自动提交） */
+  /** 「返回编辑」：作废这一页的结果，放开重写 */
   onUnlock: () => void
   /** 下拉里选了某一次：把右栏切成那一次的结果（只读，不动正在写的文字） */
   onViewAttempt: (id: string) => void
@@ -143,13 +161,25 @@ export function AnswerPane({
   const showResult = shown !== null && (!editing || fromHistory)
   /** 这是一份**精修档**的结果：只给对照、不逐处批改 */
   const refine = shown?.refine
+  /** 这一页已经交出去、结果还没回来：作答框只读，免得批注画在对不上的文字上 */
+  const frozen = pageState === 'judging'
   /**
-   * 这一页被「返回编辑」放开过、而且已经改过字（"已修改 · 待提交"那一档）。
+   * 标题栏里那一块**作答控件**（档位 + 提交按钮）要不要画。
    *
-   * 注意它问的是"改过没有"，**不是**"放开过没有"：放开之后一个字都没动时，
-   * 那一页仍然会在翻页时自动提交，界面不该说"已修改"。
+   * ⚠️ 它比 `editing` 宽一点：**交出去之后也要画**（按钮变成按不动的"批改中…"）。
+   * 把整块藏掉当然也能达到"批改中不能提交"，但用户看到的是"按钮凭空消失了"，
+   * 而这一刻他最想知道的是"交上去了没有"——一颗写着"批改中…"的灰按钮正好回答它。
    */
-  const wasModified = pageState === 'modified'
+  const showAnswerControls = editing || frozen
+  /** 提交按钮按不下去的两种原因（文案与悬停说明分开写） */
+  const blocked = judgingThisPage || busyElsewhere
+  const submitTitle = judgingThisPage
+    ? '这一页已经交去批改了，结果出来会通知你'
+    : busyElsewhere
+      ? '正在批改另一页，等这一页批完再提交（一次只批一页）'
+      : hasAnswer
+        ? undefined
+        : '先在这一页写下你的译文'
 
   return (
     <section className="pane pane-answer">
@@ -182,8 +212,13 @@ export function AnswerPane({
             它取代了原来那颗「查看上次批改」按钮与「已改过 · 待提交」提示芯片
             （用户明确要求：去掉提示、改成下拉）——旧按钮只在"一个字都没改"时才出现，
             而这条记录是落盘的，改过字也照样能回看。
+
+            ⚠️ 早先它只在 `editing` 时出现，那是自动提交年代的写法：那会儿批完就自动翻页，
+            人很少停在"已批改"这一档上。现在批完就停在这一页（只读看结果），
+            要是下拉藏着，用户想回看前几次还得先按「返回编辑」——纯属绕路。
+            因此改成"这一页有历史就给"，与只读与否无关。
           */}
-          {editing && (
+          {gradeHistory.length > 0 && (
             <GradeHistoryPicker
               history={gradeHistory}
               viewingId={viewingRecordId}
@@ -191,7 +226,7 @@ export function AnswerPane({
               onBackToWriting={onBackToWriting}
             />
           )}
-          {editing && (
+          {showAnswerControls && (
             <>
               <div className="level-switch" role="group" aria-label="修改风格">
                 {(Object.keys(LEVEL_LABEL) as PolishLevel[]).map((key) => (
@@ -210,10 +245,10 @@ export function AnswerPane({
                 type="button"
                 className="btn btn-primary"
                 onClick={onSubmit}
-                disabled={!hasAnswer || judging}
-                title={hasAnswer ? undefined : '先在这一页写下你的译文'}
+                disabled={!hasAnswer || blocked}
+                title={submitTitle}
               >
-                {judging ? '批改中…' : wasModified ? '提交批改（手动）' : '提交批改'}
+                {judgingThisPage ? '批改中…' : '提交批改'}
               </button>
             </>
           )}
@@ -222,9 +257,10 @@ export function AnswerPane({
 
       {/*
         批改进度条：正好在「我的译文」标题栏下方、作答框上方（用户指定）。
-        只在批改中显示——平时不占地方，也不给"进度"这种并不精确的东西常驻位置。
+        只在**这一页**批改中时显示——翻到别的页时它不跟着跑
+        （那一页的进度不在这条线上，右下角那条通知才是它的出口）。
       */}
-      {judging && <JudgingProgress />}
+      {judgingThisPage && <JudgingProgress />}
 
       <div className="pane-body">
         {error && (
@@ -270,9 +306,11 @@ export function AnswerPane({
             className="answer-input answer-input-fill"
             value={currentAnswer}
             onChange={(event) => onAnswerChange(event.target.value)}
+            /* 已经交出去了就只读：这一刻再改字，回来的批注就画在对不上的文字上了 */
+            readOnly={frozen}
             placeholder={
               multiSection
-                ? `在第 ${sectionIndex + 1} 页写下你的译文……写完点「下一页」，这一页会自动交去批改`
+                ? `在第 ${sectionIndex + 1} 页写下你的译文……写完点「提交批改」，再翻到下一页接着译`
                 : '在这里写下你的译文……'
             }
             spellCheck={false}
@@ -292,25 +330,30 @@ export function AnswerPane({
 /** 翻页导航中间那句状态说明。四档各一句话，让人一眼知道这一页走到哪一步了。 */
 export const PAGE_STATE_HINT: Record<PageState, string> = {
   pending: '待批改',
+  judging: '批改中…（可以先翻到下一页接着译）',
   graded: '已批改（只读，点「返回编辑」可改）',
-  edited: '编辑中（未改动，翻页时会自动提交）',
-  modified: '已修改 · 待提交',
+  editing: '编辑中（改完按「提交批改」）',
 }
 
 /**
  * 「下一页」点下去会发生什么。
  *
- * 四种情形说的话完全不同，因此写清楚**点下去会发生什么**：
- * 自动交出去批、直接翻过去看结果、还是这一页压根还没写。
+ * ⚠️ 从第三版起，这个问题的答案变得很简单：**只是翻页**。
+ * 用户明确要求"点击下一页或者上一页，不触发提交批改，而是保留当前页面输入缓存，
+ * 后面返回时可以继续作答"——因此不再有"这一页会先交去批改"这种说法，
+ * 早先那四句按 `edited`/`modified` 分开写的话也一并作废（那两档已经不存在了）。
+ *
+ * 留下的这几句只说**用户心里那个疑问**：这一页写了还没交，翻走会不会丢？
  */
 export function nextPageHint(options: {
   hasAnswer: boolean
   pageState: PageState
 }): string {
-  if (!options.hasAnswer) return '这一页还没写——先写点东西吧'
-  if (options.pageState === 'modified') return '翻到下一页（改过的页不会自动提交，请先按「提交批改」）'
+  if (options.pageState === 'judging') return '翻到下一页（这一页正在批改，批完会在右下角通知你）'
   if (options.pageState === 'graded') return '翻到下一页（这一页已批过，不会重新提交）'
-  return '翻到下一页：这一页会先交去批改'
+  if (!options.hasAnswer) return '翻到下一页（这一页还没写）'
+  if (options.pageState === 'editing') return '翻到下一页（草稿会留着，回来接着写）'
+  return '翻到下一页（这一页还没提交，草稿会留着）'
 }
 
 /**

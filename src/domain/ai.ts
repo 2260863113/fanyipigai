@@ -260,7 +260,7 @@ async function judgeOneSection(
       continue
     }
 
-    const parsed = parseCorrection(result.content, request.answer, request.direction)
+    const parsed = parseCorrection(result.content, request.answer, request.direction, request.source)
     if (parsed.ok) return { ok: true, parsed, attempts: attempt, raw: lastRaw }
 
     allProblems.push(...parsed.problems)

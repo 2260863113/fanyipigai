@@ -558,7 +558,7 @@ export function fixtureCorrectionFor(exerciseId: string, answer: string): Correc
     errors: buildErrors(testCase.exercise.id),
     highlights: [testCase.highlight()],
   }
-  const parsed = parseCorrection(JSON.stringify(raw), answer, testCase.exercise.direction)
+  const parsed = parseCorrection(JSON.stringify(raw), answer, testCase.exercise.direction, testCase.exercise.source)
   if (!parsed.ok) {
     // 示例数据有问题就在开发阶段直接抛错：它必须永远是合法的
     throw new Error(

@@ -50,7 +50,6 @@ export function AnswerViewSwitch({
       >
         对照视图
       </button>
-      {locked && <span className="chip">精修档只能看对照</span>}
     </div>
   )
 }

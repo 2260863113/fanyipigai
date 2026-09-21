@@ -31,7 +31,7 @@ import type { Anchor, Direction } from './types'
 import { extractJson } from './parse'
 import { locate } from './locate'
 import type { CompareLine, CompareSpan } from './compare'
-import { minimizeChange } from './minimal'
+import { diffForCompare } from './compare'
 
 /** 精修档里的一句：原句 → 改后句 + 为什么这么改。 */
 export interface RefineSentence {
@@ -45,6 +45,11 @@ export interface RefineSentence {
   rewritten: string
   /** 为什么这么改；没改的句子写一句"这一句不必改" */
   explanation: string
+  /**
+   * 这一句**写得好**在哪（用户要求：精修也让 AI 点出表达很好的句子，界面上标绿）。
+   * 只在"不用改、而且确实好"时才非空；它与 `changed` 应当互斥（改了就不算"好"）。
+   */
+  praise: string
   /** 程序算出来的：这一句到底改了没有（AI 说改了但两串一样时以程序为准） */
   changed: boolean
 }
@@ -136,6 +141,7 @@ export function parseRefine(raw: string, answer: string): RefineParseSuccess | R
         problems.push(`sentences[${index}] 缺少 explanation（每一句都要说明为什么这么改）`)
         continue
       }
+      const praise = typeof item.praise === 'string' ? item.praise.trim() : ''
 
       const located = locate(answer, { text: original })
       if (!located.ok) {
@@ -151,6 +157,7 @@ export function parseRefine(raw: string, answer: string): RefineParseSuccess | R
         anchor: located.value,
         rewritten,
         explanation,
+        praise,
         changed: normalize(original) !== normalize(rewritten),
       })
     }
@@ -181,8 +188,28 @@ function normalize(text: string): string {
  */
 export function buildRefineLines(refine: RefineResult): CompareLine[] {
   return refine.sentences.map((sentence) => {
+    /*
+     * 写得好的句子标绿（用户要求：精修也让 AI 分析表达很好的句子）。
+     * 它必然没改过，因此两行一字不差、整句标绿，说明那一行写的是 praise。
+     */
+    if (!sentence.changed && sentence.praise.length > 0) {
+      return {
+        original: sentence.oldText,
+        originalSpans: [{ text: sentence.oldText, color: 'green' as const }],
+        corrected: [{ text: sentence.rewritten, color: 'green' as const }],
+        changed: true,
+        note: sentence.praise,
+      }
+    }
+
     const note = sentence.explanation
-    const changes = sentence.changed ? minimizeChange(sentence.oldText, sentence.rewritten) : null
+    /*
+     * 改动处用 `diffForCompare` 求：它按「字 / 词 / 标点」逐单位对齐，
+     * 中文（没有空格）也能切出"真正不同的那几个字"——用户要的就是这个
+     * （"原译文和修改后的译文不同处才标颜色"）。用批注口径的 minimizeChange 时，
+     * 中文整句会被当成一个词、差异算不齐，只能退回整段染色。
+     */
+    const changes = sentence.changed ? diffForCompare(sentence.oldText, sentence.rewritten) : null
     if (!changes || changes.length === 0) {
       // 没改动，或两串差得太远（minimizeChange 放弃）：整句当作一处改动
       return {

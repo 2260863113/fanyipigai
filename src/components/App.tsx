@@ -8,6 +8,7 @@ import {
   type Exercise,
   type Direction,
   type Genre,
+  type Mode,
   type PolishLevel,
 } from '../domain/types'
 import { validateCorrection } from '../domain/validate'
@@ -78,6 +79,8 @@ import {
 import { exerciseSourceOf, pageCountOf } from '../domain/exercise-source'
 import { loadRecords, saveRecords } from './records-store'
 import { loadLastView, saveLastView, type ExerciseOrigin, type ViewTab } from './last-view'
+import { JudgeWaitingModal } from './JudgeWaitingModal'
+import { JudgeDoneToast } from './JudgeDoneToast'
 
 type Tab = ViewTab
 
@@ -96,6 +99,36 @@ const EMPTY_LAYOUT: AnnotatedLayout = { segments: [], reorderGroups: [], rejecte
 interface LastInTab {
   id: string
   origin: ExerciseOrigin
+}
+
+/**
+ * 正在批改的**那一页**。
+ *
+ * 用户要求"批改过程中，用户可以手动切换页数，继续翻译（但是批改过程中不能提交）"，
+ * 于是"正在批改"再也不能是一个布尔量：批改允许翻页，翻走之后
+ * "全局在批"与"这一页在批"就不是同一件事了。分成两件事之后：
+ *   - 进度条与只读只认**这一页在批**（翻到别的页就不该看到那条线）；
+ *   - 提交按钮两样都要认（一次只允许一页在批，这是用户明确的要求）。
+ *
+ * 题号必须钉在这里：批改要十几秒到一分钟，回来时用户可能已经翻页、换题甚至切栏，
+ * 靠"当前在哪一页"去认领结果必然错位（这条在 commit 的注释里踩过一次）。
+ */
+interface JudgingTarget {
+  exerciseId: string
+  sectionIndex: number
+}
+
+/**
+ * 右下角那条"批改完成"通知要记的东西。
+ *
+ * 除了页号还要记**题号与题型**：通知的意义就在于"人可能已经不在那一页了"，
+ * 而他可能去了同一篇的另一页，也可能切到了术语栏。点通知要能一路跳回去，
+ * 因此它得自带"回哪儿"的全部信息——光记一个页号，跳回去只能落在当前这道题上。
+ */
+interface JudgeDoneNotice {
+  exerciseId: string
+  mode: Mode
+  sectionIndex: number
 }
 
 /**
@@ -199,12 +232,26 @@ export function App(): JSX.Element {
    */
   const [compareSource, setCompareSource] = useState(false)
 
-  const [judging, setJudging] = useState(false)
+  const [judgingTarget, setJudgingTarget] = useState<JudgingTarget | null>(null)
   const [error, setError] = useState<JudgeError | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [records, setRecords] = useState<RecordView[]>(() => loadRecords())
   const [openRecord, setOpenRecord] = useState<RecordView | null>(null)
+  /**
+   * 「已交去批改」那个等待弹窗要不要弹（用户指定：提交后弹窗，两个按钮
+   * 「停留此页」「进入下一页」）。
+   *
+   * 只在**后面还有一页**时弹：最后一页与单页题（句子/段落/术语/自己贴的短题）
+   * 都没有"下一页"可去，弹出来只有一颗按钮能按，那不是提示，是打扰。
+   * 它只是个提示，收起与否都不影响批改——请求早发出去了。
+   */
+  const [waitingPrompt, setWaitingPrompt] = useState(false)
+  /**
+   * 右下角的批改完成通知（用户指定）。同时只可能有一条：
+   * 一次只批一页（见 judgingTarget），因此不需要队列。
+   */
+  const [judgeDone, setJudgeDone] = useState<JudgeDoneNotice | null>(null)
 
   /** 自己贴的那一篇（存在浏览器里，只留最新一篇）；贴题弹窗的开关与草稿 */
   const [custom, setCustom] = useState<CustomExercise | null>(() => loadCustom())
@@ -323,7 +370,7 @@ export function App(): JSX.Element {
     totalPages - 1,
   )
   const session = sessionOf(sessions, exercise.id, resumeIndex)
-  const { drafts, sectionIndex, pages, unlocked, openResults } = session
+  const { drafts, sectionIndex, pages, unlocked } = session
 
   /*
    * 记下"现在停在哪"（栏 + 题 + 来源 + 页），下次打开落回这里。
@@ -345,8 +392,20 @@ export function App(): JSX.Element {
    * 结果一没（还没提交 / 被「返回编辑」作废）就必然是在写。两份状态迟早会打架。
    */
   const pageResult = pages[sectionIndex]
-  /** 这一页是不是被「返回编辑」放开来改过（据此决定翻页时**绝不**自动提交） */
+  /** 这一页是不是被「返回编辑」放开来改过（放开之后可写，见 pageUnlocked 的说明） */
   const pageUnlocked = unlocked.includes(sectionIndex)
+  /**
+   * 有没有批改正在跑，以及**跑的是不是这一页**。
+   *
+   * 两个问题必须分开问（见 JudgingTarget 的注释）：批改允许翻页，
+   * 因此"全局在批"与"这一页在批"从用户能翻页那一刻起就分家了。
+   * `busyElsewhere` 是两者的差——提交按钮要同时看住"这一页在批"（进度条、只读）
+   * 与"别处占着这次调用"（一次只许批一页）。
+   */
+  const judging = judgingTarget !== null
+  const judgingThisPage =
+    judgingTarget !== null && judgingTarget.exerciseId === exercise.id && judgingTarget.sectionIndex === sectionIndex
+  const busyElsewhere = judging && !judgingThisPage
   // 两个恒定的引用：直接写 `?? []` / `?? 0` 会每帧新建，让下面的 useMemo 失效
   const generatedOptions = session.generated.length > 0 ? session.generated : EMPTY_GENERATED
 
@@ -398,33 +457,34 @@ export function App(): JSX.Element {
   const currentPairs = currentSection?.pairs ?? []
 
   /*
-   * 这一页在"逐页批改"里的四档。按钮文案与翻页行为全由它推出来，
+   * 这一页在"逐页批改"里的四档。按钮文案与翻页提示全由它推出来，
    * 不再由"全篇写完了没有"决定——"一整篇非写完不可"这条约束已随逐页批改取消。
    *
-   * 判据（顺序有意义，见下面注释）：
-   *   1. 被「返回编辑」放开过、而且**一个字都还没改** → `edited`：
-   *      界面在写，但那份批改还暂存着，可以点「查看上次批改」回去；翻页时照旧自动提交；
-   *   2. 被放开过、而且**已经改过字** → `modified`：批注已经对不上，绝不自动提交，
-   *      只能自己按「提交批改（手动）」；
-   *   3. 有结果、没被放开过 → `graded`，只读；
+   * 判据（顺序有意义）：
+   *   1. **这一页正在批** → `judging`：只读 + 进度条。它排在最前面，
+   *      因为"交出去了"是当下最硬的事实：哪怕这一页之前批过、现在又被放开重交了一次，
+   *      屏幕上也该显示"批改中"而不是旧结果；
+   *   2. 被「返回编辑」放开过 → `editing`：可写；
+   *   3. 有结果 → `graded`：只读，点「返回编辑」才放开；
    *   4. 其余 → `pending`（还没批过）。
    *
-   * ⚠️ 第 1 条必须排在"看有没有结果"前面：放开这一页时结果被挪进了暂存区（`openResults`），
-   * 只看 `pages` 会把它当成没批过的页，于是既要用户手动提交、又不给「查看上次批改」。
+   * ⚠️ 第三版把原来的 `edited` / `modified` 两档合成了 `editing`：
+   * 那两档只用来区分"改过没有"，而它们唯一的用处是决定**翻页要不要自动提交**——
+   * 用户已经明确取消自动提交（"点击下一页或者上一页，不触发提交批改"），
+   * 于是"改过没有"不再改变任何行为，留着只会让状态机看起来比实际复杂。
    */
-  const stashedResult = openResults[sectionIndex]
-  const pageState: PageState = pageUnlocked
-    ? stashedResult !== undefined && stashedResult.answer === currentAnswer
-      ? 'edited'
-      : 'modified'
-    : pageResult
-      ? 'graded'
-      : 'pending'
+  const pageState: PageState = judgingThisPage
+    ? 'judging'
+    : pageUnlocked
+      ? 'editing'
+      : pageResult
+        ? 'graded'
+        : 'pending'
   /**
-   * 现在是不是在写这一页（而不是在看这一页的批改结果）。
+   * 现在是不是在写这一页（而不是在看这一页的批改结果或等结果）。
    * 批过的页要**先按「返回编辑」**才能写——见 pageUnlocked。
    */
-  const editing = pageState !== 'graded'
+  const editing = pageState === 'pending' || pageState === 'editing'
   /**
    * 已批页数。**以落盘的进度为准**：刷新之后会话里的结果没了，但"这一篇批过哪几页"还在，
    * 只数会话里的 pages 会显示成 0，而用户明明已经批了三四页。
@@ -436,6 +496,7 @@ export function App(): JSX.Element {
    * 因此不必再关心"草稿改没改过"这回事：记录里存着那一次提交时的原文与作答，
    * 批注画的就是那一段文字，永远不会对不上。
    */
+
   const caseRecords = records.filter((record) => record.exerciseId === exercise.id)
 
   /**
@@ -460,10 +521,24 @@ export function App(): JSX.Element {
     return mine.reverse()
   }, [records, exercise.id, sectionIndex])
 
-  /** 下拉里选中的那一条记录；没选就是 null（= 正在写） */
+  /**
+   * 下拉里选中的那一条记录；没选、或者它已经不属于"当前这道题 + 当前这一页"时是 null。
+   *
+   * ⚠️ 过滤这两条不是可选的：`viewingGradeId` 现在**跨切栏保留**（见 clearTransientUi），
+   * 因此它随时可能指向别人家的记录。按题号与页号滤一遍，它就只可能是"这一页的某一次批改"，
+   * 留着一个暂时对不上的 id 也显示不出错东西——切回去它自己又好使了。
+   */
   const viewingGrade = useMemo(
-    () => (viewingGradeId ? (records.find((record) => record.id === viewingGradeId) ?? null) : null),
-    [records, viewingGradeId],
+    () =>
+      viewingGradeId
+        ? (records.find(
+            (record) =>
+              record.id === viewingGradeId &&
+              record.exerciseId === exercise.id &&
+              record.sectionIndex === sectionIndex,
+          ) ?? null)
+        : null,
+    [records, viewingGradeId, exercise.id, sectionIndex],
   )
 
   const isFixtureAnswer = useMemo(() => {
@@ -498,10 +573,20 @@ export function App(): JSX.Element {
   function clearTransientUi(): void {
     setSelection(null)
     setOpenRecord(null)
-    // 换题之后"上一次批改的历史视图"就不成立了（那一条属于上一道题），必须一起清掉
-    setViewingGradeId(null)
     setError(null)
     setNotice(null)
+    /*
+     * ⚠️ `viewingGradeId` **不在这里清**（用户要求：切栏之后回来，看到的东西不变）。
+     *
+     * "正在看这一页的第几次批改"这条记忆属于**这一页**，不属于"此刻这一屏"。
+     * 早先切题/切栏就把它抹掉，用户从批改结果切去术语栏再切回来，屏幕上退回了作答框，
+     * 看着就像批改结果被清空了——那正是他报上来的现象。
+     * 现在这个 id 原样留着，只有三种情况会让它失效：
+     *   - 用户自己点了「回到作答」；
+     *   - 翻到别的页（历史是"这一页的"，见 setSection）；
+     *   - 它解析不出来时自然落空（换了题目、记录被上限裁掉），
+     *     解析那一处按"当前题目 + 当前页"过滤，所以留着一个对不上的 id 也不会显示错东西。
+     */
   }
 
   /**
@@ -606,8 +691,18 @@ export function App(): JSX.Element {
   function selectTab(nextTab: Tab): void {
     setTab(nextTab)
     setOpenRecord(null)
-    // 切栏之后不再停在"上一次批改的历史视图"上：那是练习页的临时看法，不是要看的东西
-    setViewingGradeId(null)
+    /*
+     * ⚠️ 这里**不能**再清 `viewingGradeId`。
+     *
+     * 用户报过："批改界面下，切换导航栏后，回到文章模式时，不要恢复到批改前的空白状态，
+     * 而是保留记忆，相当于切换之后切换回来，看到的东西不变。"
+     * 早先这一行写着 setViewingGradeId(null)，理由是"历史视图是练习页的临时看法"——
+     * 但那一行把"我正在看第 2 页的第 3 次批改"这条记忆也一起抹了：
+     * 切走时屏幕上是那一次的结果，切回来变成作答框，看起来就像批改结果没了。
+     *
+     * 现在它归 `selectExercise` 的 clearTransientUi 管——**换题**才清（那一条记录属于上一道题），
+     * 而切栏若落在同一道题上（文章栏切术语栏再切回来走的就是这条路）就一个字都不动。
+     */
     if (nextTab === 'records') return
     if (nextTab === 'favorites') return
     if (nextTab === 'custom') {
@@ -678,10 +773,25 @@ export function App(): JSX.Element {
     setSelection(null)
   }
 
-  /** 直接切到某一页（不自动提交）。自动提交那条路在 goToSection 里。 */
+  /**
+   * 直接切到某一页。**翻页只是翻页**——不提交、不拦、什么都不问。
+   *
+   * 用户要求的原话：「点击下一页或者上一页，不触发提交批改，而是保留当前页面输入缓存，
+   * 后面返回时可以继续作答」。草稿本来就按页存在 drafts 里（键就是页号），
+   * 因此"保留缓存"这件事不需要额外做什么，**不做**自动提交就够了
+   * （第三版之前这里由一个 async 的 goToSection 负责，它会先把没批过的页交出去）。
+   */
   function setSection(nextIndex: number): void {
     // 翻页之后历史视图失效：下拉里列的本来就是"这一页"的批改记录
     setViewingGradeId(null)
+    /*
+     * 人自己翻到刚批完的那一页时，右下角那条通知就该消失——
+     * 已经站在这一页上了还挂着"点这里去看"，是句废话。
+     * 判断按"题号 + 页号"：通知可能属于另一篇（用户交了就走、去练别的了），那种不该被误撤。
+     */
+    setJudgeDone((previous) =>
+      previous && previous.exerciseId === exercise.id && previous.sectionIndex === nextIndex ? null : previous,
+    )
     dispatchSession({ type: 'sectionChanged', exerciseId: exercise.id, sectionIndex: nextIndex })
   }
 
@@ -809,11 +919,22 @@ export function App(): JSX.Element {
   /**
    * 提交**某一页**去批改。
    *
-   * `sectionIndex` 由调用方给：翻页时的自动提交要在"切页之前"把旧页交出去，
-   * 因此不能读"当前页号"——那一刻它可能已经被改掉了。
-   * 返回是否真的批成了，翻页那条路径据此决定要不要继续切（没批成就留在原地，别把内容弄丢）。
+   * ⚠️ 第三版起它**只由用户按「提交批改」调到**：翻页不再自动提交（见 goToSection），
+   * 因此这里不再需要"切页之前先把旧页交出去"那套时序，`sectionIndex` 就是当前这一页。
+   * 仍然显式收一个页号而不是读 `sectionIndex`，是因为 `await` 之后的所有落账
+   * 都必须靠发起前钉下来的 `target`（见 commit 的注释）——页号是那份账的一部分。
+   *
+   * 返回是否批成了。调用方（`onSubmit`）不看它，留着是因为"批没批成"这个事实
+   * 对失败路径（错误提示、不进通知）有用，而且省得调用方去猜。
    */
   async function submitPage(sectionIndex: number): Promise<boolean> {
+    /*
+     * **一次只批一页**（用户要求：批改过程中不能提交）。
+     *
+     * 守卫认的是全局那一个 `judgingTarget`，不是"这一页在不在批"：
+     * 批改期间允许翻页，所以这条请求完全可能是在第 3 页上发起、跑到第 4 页才回来；
+     * 只看当前页的话，人在第 4 页就能再点一次，两次批改叠着跑。
+     */
     if (judging) return false
     const pageAnswer = drafts[sectionIndex] ?? ''
     if (pageAnswer.trim().length === 0) return false
@@ -825,9 +946,14 @@ export function App(): JSX.Element {
       topic: exercise.topic,
       direction: exercise.direction,
     }
-    setJudging(true)
+    setJudgingTarget({ exerciseId: target.exerciseId, sectionIndex: target.sectionIndex })
     setError(null)
     setNotice(null)
+    /*
+     * 等待提示：只在**后面还有一页**时弹（用户要求：批改大约需要一分钟，可进入下一页）。
+     * 最后一页与单页题没有"下一页"可去，弹一个只有一个按钮的窗只是打扰。
+     */
+    if (multiSection && sectionIndex < sourceSections.length - 1) setWaitingPrompt(true)
 
     const answerSections = [answerSectionOf(sectionIndex)]
     /*
@@ -857,7 +983,7 @@ export function App(): JSX.Element {
      */
     if (level === 'refine') {
       const refined = await requestRefine(request)
-      setJudging(false)
+      clearJudging(target)
       if (!refined.ok) {
         setError({ kind: refined.kind, message: refined.message })
         return false
@@ -878,12 +1004,13 @@ export function App(): JSX.Element {
         pageAnswer,
         level,
       )
+      announceGraded(target)
       return true
     }
 
     const outcome = await requestJudgment(request)
 
-    setJudging(false)
+    clearJudging(target)
 
     if (!outcome.ok) {
       setError({ kind: outcome.kind, message: outcome.message })
@@ -907,31 +1034,80 @@ export function App(): JSX.Element {
       pageAnswer,
       level,
     )
+    announceGraded(target)
     return true
   }
 
   /**
-   * 翻到另一页。
+   * 这一次批改跑完了（成功）：把"正在批"这件事收回来。
    *
-   * 用户要求的规矩（逐页批改的核心）：
-   *   - 离开一页时，**刚写完、还没批过**的那一页自动交出去批；
-   *   - 已经批过的页翻回去看结果，**不重新提交**（批改要十几秒、还可能给出不一样的结果）；
-   *   - 批过之后又被「返回编辑」放开改过的页，**绝不自动提交**——
-   *     用户还没改完，替他交一次等于偷偷花掉一次调用。改完自己按「提交批改」。
-   *
-   * 自动提交没成功（模型返回不合格、网络断了）时**停在原地**：
-   * 这时切走，用户会以为那一页已经交过了。
+   * ⚠️ 必须**按目标比对**再清，不能无条件 `setJudgingTarget(null)`：
+   * 虽然同时只允许一页在批，但"清"这个动作在语义上属于**那一次提交**——
+   * 写死成"清空当前值"，以后一旦放开并发（或加了重试），
+   * 第二次提交的结果回来会把第一次的标记也顺手抹掉。
    */
-  async function goToSection(nextIndex: number): Promise<void> {
-    if (nextIndex === sectionIndex) return
-    if (judging) return
-    const withinRange = nextIndex >= 0 && nextIndex < sourceSections.length
-    if (!withinRange) return
+  function clearJudging(target: { exerciseId: string; sectionIndex: number }): void {
+    setJudgingTarget((previous) =>
+      previous && previous.exerciseId === target.exerciseId && previous.sectionIndex === target.sectionIndex
+        ? null
+        : previous,
+    )
+  }
 
-    if (pageState === 'pending' && currentAnswer.trim().length > 0) {
-      const ok = await submitPage(sectionIndex)
-      if (!ok) return
-    }
+  /**
+   * 批完了在右下角喊一声（用户要求：「当批改结果出来时，右下角弹出信息通知
+   * 『第x页已经批改完成』，用户可以点击该通知直接路由到那个页面」）。
+   *
+   * 只在**多页题**上喊：单页题的结果当场就出现在同一屏上，没什么可"路由"的。
+   * 通知里带着题号与题型（见 JudgeDoneNotice）——批改期间用户可能已经翻页、换题、切栏，
+   * 不把这些一起记上，点通知就跳不回那一页。
+   */
+  function announceGraded(target: { exerciseId: string; sectionIndex: number }): void {
+    if (!multiSection) return
+    setJudgeDone({ exerciseId: target.exerciseId, mode, sectionIndex: target.sectionIndex })
+  }
+
+  /**
+   * 点右下角那条通知：回到批完的那一页看结果。
+   *
+   * 三件事都要做，缺一件就落不到正确的位置上：
+   *   1. 切栏（用户可能已经去了术语栏，而文章题在「文章」栏里）；
+   *   2. 换题（他可能已经翻到别的文章上接着练了）；
+   *   3. 翻到那一页。
+   * 顺序也有讲究：`selectExercise` 会把一次性的界面状态清掉（含"正在看的历史"），
+   * 因此页号必须在它之后写——先写页号会被后一步的清空连带影响（session 里的页号不清，
+   * 但"看哪一次历史"会清，这里要的就是"看刚批出来的这一份"，正好一致）。
+   */
+  function openJudgeDone(): void {
+    const done = judgeDone
+    if (!done) return
+    setTab(done.mode)
+    selectExercise(done.exerciseId)
+    dispatchSession({ type: 'sectionChanged', exerciseId: done.exerciseId, sectionIndex: done.sectionIndex })
+    setJudgeDone(null)
+  }
+
+  /**
+   * 翻到另一页。**只翻页**，不提交任何东西。
+   *
+   * ⚠️ 这条函数在第三版被**砍掉了绝大部分**，砍掉的那部分就是原来的自动提交：
+   * 早先的规矩是"离开一页时，刚写完、还没批过的那一页自动交出去批"，理由是
+   * "逐页批改就该一页一页往下推"。用户改主意了，原话：
+   * 「点击下一页或者上一页，不触发提交批改，而是保留当前页面输入缓存，后面返回时可以继续作答」——
+   * 于是现在**提交只能由一个动作触发**：用户自己按「提交批改」。
+   *
+   * 少掉的不只是几行代码，还有一整类难解释的情形：
+   *   - "我翻页它为什么自己扣了一次钱"；
+   *   - 批改十几秒里界面该锁成什么样；
+   *   - 自动提交失败时"留在原地还是照翻"。
+   * 现在这些都不存在了：批改在后台跑，页面随便翻（见 judgingTarget）。
+   *
+   * 保留的这一层只管两件事：页号在范围内、以及**真的换了页**（点同一页不做任何事，
+   * 免得把"正在看的历史"这类一次性的界面状态白白清掉）。
+   */
+  function goToSection(nextIndex: number): void {
+    if (nextIndex === sectionIndex) return
+    if (nextIndex < 0 || nextIndex >= sourceSections.length) return
     setSection(nextIndex)
   }
 
@@ -997,7 +1173,7 @@ export function App(): JSX.Element {
           // 记录里若是精修档的那一次，回看时同样只能看对照
           ...(openRecord.refine ? { refine: openRecord.refine } : null),
         }
-      : pageResult && !editing
+      : pageResult && pageState === 'graded'
         ? {
             correction: pageResult.draft.correction,
             validated: pageResult.draft.validated,
@@ -1012,6 +1188,22 @@ export function App(): JSX.Element {
             ...(pageResult.draft.refine ? { refine: pageResult.draft.refine } : null),
           }
         : null
+
+  /**
+   * 当前选中的那一处在**原文**里对应的位置与颜色（用户要求：点译文上某一处，
+   * 左边原文栏里对应的那一处也标成同色；收起小卡片，标记就消失）。
+   *
+   * 位置来自 AI 给的 `sourceText`——解析时程序按文字把它定位到原文里，落在 `error.sourceAnchor` 上。
+   * **AI 给不出就不标**：语法、表达一类问题常常指不出具体原文片段，那是正常情形，不是缺陷。
+   * 精修档没有逐处批注，因此这里自然是空的。
+   */
+  const sourceMark = useMemo(() => {
+    if (selection?.kind !== 'error' || !shown) return null
+    const entry = shown.validated.errors.find((item) => item.error.id === selection.id)
+    const anchor = entry?.error.sourceAnchor
+    if (!entry || !anchor) return null
+    return { start: anchor.start, end: anchor.end, color: entry.hard ? ('red' as const) : ('orange' as const) }
+  }, [selection, shown])
 
   /**
    * 术语题的逐条判分结果。
@@ -1229,11 +1421,11 @@ export function App(): JSX.Element {
               gradedPages={gradedPages}
               pageStateHint={PAGE_STATE_HINT[pageState]}
               nextHint={nextPageHint({ hasAnswer: currentAnswer.trim().length > 0, pageState })}
-              judging={judging}
               currentSection={currentSection}
               currentSource={currentSource}
               currentPairs={currentPairs}
               compare={compareSource}
+              sourceMark={sourceMark}
               onToggleCompare={setCompareSource}
               onSectionChange={(next) => void goToSection(next)}
               {...(isTermExercise ? { terms: activeTerms } : null)}
@@ -1299,9 +1491,12 @@ export function App(): JSX.Element {
                           type="button"
                           className="btn"
                           onClick={() => {
-                            // 重新作答：作废这一组的结果，作答本身**留着**让人改
-                            // （与逐页批改里的「返回编辑」同一个动作）
-                            dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
+                            // 重新作答：作废这一组的结果，作答本身**留着**让人改。
+                            // 用 `pageResultDropped` 而不是「逐页批改」那个 `pageUnlocked`：
+                            // 术语栏"显示输入框还是显示判分"就是由"这一页有没有结果"决定的，
+                            // 结果若照旧留着，按了等于没按（`pageUnlocked` 现在**不**丢结果，
+                            // 那是给逐页批改用的语义，见 session.ts）。
+                            dispatchSession({ type: 'pageResultDropped', exerciseId: exercise.id, sectionIndex })
                             setProgress((previous) => clearGraded(previous, exercise.id, sectionIndex))
                             setNotice(null)
                             setSelection(null)
@@ -1347,7 +1542,8 @@ export function App(): JSX.Element {
               selection={selection}
               settings={settings}
               level={level}
-              judging={judging}
+              judgingThisPage={judgingThisPage}
+              busyElsewhere={busyElsewhere}
               error={error}
               notice={notice}
               isFixtureAnswer={isFixtureAnswer}
@@ -1362,8 +1558,8 @@ export function App(): JSX.Element {
               onSelect={toggleSelection}
               onSettingsChange={updateSettings}
               onUnlock={() => {
-                // 「返回编辑」：把这一页的结果挪进暂存区、放开这一页重写（文字还在 drafts 里）。
-                // 放开之后这一页**不再自动提交**，改完自己按「提交批改」。
+                // 「返回编辑」：放开这一页重写（文字还在 drafts 里），结果作废。
+                // 放开之后这一页要重新按「提交批改」才会再批一次——翻页不会替他提交。
                 // 不弹提示语：按钮文案与页面状态已经把这件事说清楚了（用户明确要去掉这类废话）。
                 dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
                 // 这一页的结果作废了，进度里也要撤掉——否则下次打开会跳过它
@@ -1441,6 +1637,34 @@ export function App(): JSX.Element {
             </div>
           </main>
         </>
+      )}
+
+      {/*
+        提交之后的等待提示（用户指定：两个按钮「停留此页」「进入下一页」）。
+        它只是个提示，收起与否都不影响批改——请求早发出去了；
+        因此 `onStay` 与点空白处是同一件事，都只是把窗收起来。
+      */}
+      {waitingPrompt && (
+        <JudgeWaitingModal
+          onStay={() => setWaitingPrompt(false)}
+          onNext={() => {
+            setWaitingPrompt(false)
+            // 走 goToSection 而不是 setSection：范围判断只写在一处
+            goToSection(sectionIndex + 1)
+          }}
+        />
+      )}
+
+      {/*
+        右下角的批改完成通知（用户指定）。点它跳到批完的那一页；
+        也可以不管它自己翻页过去——翻到那一页时它自动消失（见 setSection）。
+      */}
+      {judgeDone && (
+        <JudgeDoneToast
+          pageNumber={judgeDone.sectionIndex + 1}
+          onOpen={openJudgeDone}
+          onDismiss={() => setJudgeDone(null)}
+        />
       )}
 
       {/* 设置：行距、是否显示填补的文字、译文默认视图。纯界面偏好，存在浏览器里 */}

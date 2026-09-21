@@ -28,10 +28,6 @@ export function RefineScore({ refine }: { refine: RefineResult }): JSX.Element {
         <span className="score-number">{refine.score}</span>
         <span className="score-unit">/ 100</span>
       </div>
-      <p className="score-rule">
-        精修档不逐处批改，因此没有"每处错误扣几分"这回事——这个分数是 <strong>AI 按整篇给的总体评价</strong>。
-        它与润色档的分数（程序按错误列表算）不是一回事，两个数字<strong>不能直接比</strong>。
-      </p>
       <div className="stats">
         <h3>为什么是这个分数</h3>
         <p className="hint">{refine.comment}</p>

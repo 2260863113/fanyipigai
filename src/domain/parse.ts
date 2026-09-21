@@ -11,7 +11,7 @@
  * 注意：AI 不再返回分数（分数由 scoring.ts 按错误分类算），也不返回任何字符序号。
  */
 
-import type { Correction, Direction, ErrorCategory, ErrorObject, ErrorType, Highlight } from './types'
+import type { Anchor, Correction, Direction, ErrorCategory, ErrorObject, ErrorType, Highlight } from './types'
 import { CATEGORY_PRIORITY } from './types'
 import { locate } from './locate'
 import { minimizeChange } from './minimal'
@@ -184,8 +184,7 @@ function resolveChanged(
  * 程序自己算出来的字段。要回答"AI 到底返回了什么"，就得把它们去掉——
  * 界面上的「查看 AI 完整返回内容」用的就是这个。
  */
-export function toAiShape(correction: Correction): { errors: unknown[]; highlights: unknown[] } {
-  return {
+export function toAiShape(correction: Correction): { errors: unknown[]; highlights: unknown[] } {  return {
     errors: correction.errors.map((error) => ({
       id: error.id,
       type: error.type,
@@ -255,12 +254,33 @@ function readSegments(
   return segments
 }
 
-function readError(value: unknown, index: number, answer: string, problems: string[]): ErrorObject | undefined {
+function readError(
+  value: unknown,
+  index: number,
+  answer: string,
+  problems: string[],
+  source: string,
+): ErrorObject | undefined {
   if (!isRecord(value)) {
     problems.push(`errors[${index}] 不是对象`)
     return undefined
   }
   const label = `errors[${index}]`
+
+  /**
+   * 「翻译前的那段原文」：AI 给就给，**定位不上就安静地丢掉**。
+   *
+   * 它与批注本身无关，只决定"点这一处时左边原文栏要不要跟着标色"（见 types.ts 的 sourceText）。
+   * 因此**不往 problems 里塞**：那会让整份返回被判不合格、白花一次重试——
+   * 而缺一个高亮远不值得重试。给不出对应原文的错误（语法、表达问题）本来就常常没有这一项。
+   */
+  const readSourceAnchor = (): { sourceText?: string; sourceAnchor?: Anchor } => {
+    const text = readOptionalText(value.sourceText)
+    if (!text || !source) return {}
+    const found = locate(source, { text })
+    if (!found.ok) return {}
+    return { sourceText: text, sourceAnchor: found.value }
+  }
 
   const type = value.type
   if (typeof type !== 'string' || !ERROR_TYPES.includes(type as ErrorType)) {
@@ -285,7 +305,15 @@ function readError(value: unknown, index: number, answer: string, problems: stri
   const after = readOptionalText(value.contextAfter)
   const occurrence = typeof value.occurrence === 'number' ? value.occurrence : undefined
 
-  const base = { id, type: errorType, category: errorCategory, explanation, contextBefore: before, contextAfter: after }
+  const base = {
+    id,
+    type: errorType,
+    category: errorCategory,
+    explanation,
+    contextBefore: before,
+    contextAfter: after,
+    ...readSourceAnchor(),
+  }
 
   switch (errorType) {
     case 'replace':
@@ -375,7 +403,12 @@ function readHighlight(value: unknown, index: number, answer: string, problems: 
   return { id, anchor, comment }
 }
 
-export function parseCorrection(raw: string, answer: string, direction: Direction): ParseSuccess | ParseFailure {
+export function parseCorrection(
+  raw: string,
+  answer: string,
+  direction: Direction,
+  source = '',
+): ParseSuccess | ParseFailure {
   const extracted = extractJson(raw)
   if ('error' in extracted) return { ok: false, problems: [extracted.error] }
 
@@ -398,7 +431,7 @@ export function parseCorrection(raw: string, answer: string, direction: Directio
     problems.push('errors 不是数组（没有发现错误时也应当返回空数组 []）')
   } else {
     for (const [index, item] of parsed.errors.entries()) {
-      const error = readError(item, index, answer, problems)
+      const error = readError(item, index, answer, problems, source)
       if (error) errors.push(error)
     }
   }

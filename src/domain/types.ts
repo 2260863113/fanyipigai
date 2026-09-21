@@ -216,6 +216,20 @@ export interface ErrorObject {
   targetText?: string
   /** 仅 type = 'reorder' 时存在 */
   segments?: ReorderSegment[]
+  /**
+   * **翻译前的那段原文**：这一处批注对应原文里的哪一小段（AI 逐字复制，可省略）。
+   *
+   * 用途是用户要求的那一条：点译文上的某一处批改时，**左边原文栏里对应的那一处也用同一个颜色标出来**；
+   * 收起小卡片，标记就消失。语法/表达类问题常常指不出对应的原文片段，那就留空——
+   * **给不出就不给，宁少勿错**（见 parse.ts：定位不上就安静地丢掉这个字段，不因此重试整份）。
+   */
+  sourceText?: string
+  /**
+   * `sourceText` 在**原文**里的位置（程序按文字找出来的，AI 从不输出这个字段）。
+   *
+   * ⚠️ 坐标属于**原文**（这一页的原文），与 `anchor`（属于译文）是两套坐标系，不要混用。
+   */
+  sourceAnchor?: Anchor
   /** 为什么错、正确写法是什么 */
   explanation: string
 }
