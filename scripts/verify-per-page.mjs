@@ -848,6 +848,56 @@ try {
          切回批改视图: backToCorrection,
        };
 
+       /*
+        * ── 批改后的页来回翻，必须停在**批改界面**（用户报过两次）──
+        *
+        * 三种前情各走一遍，因为正确答案并不一样：
+        *   ① 刚批完、从来没按过「返回编辑」→ 回来必须是批改界面；
+        *   ② 按过「返回编辑」但**一个字都没改**就翻走 → 回来仍是批改界面（用户这次报的就是它）；
+        *   ③ 放开之后**真的改了字**再翻走 → 回来是作答框（那一页的批改这时已经作废了）。
+        *
+        * ⚠️ 必须挑一页**没被前面的步骤动过**的来做。
+        * 第 1 页在这一段之前已经被"返回编辑 + 改字"折腾过（那是 afterEdit 那一段），
+        * 它的批改本来就该作废——拿它当"刚批完"来量，得到的是"编辑中"，
+        * 看着像功能坏了，其实是量错了对象（第一次写这段时事就这么栽了）。
+        * 第 2 页（index 1）走完逐页流程之后一直没人碰过，正是干净的那一页。
+        */
+       const 干净页 = total > 1 ? 1 : 0;
+       const 界面态 = () => ({
+         有作答框: document.querySelector('.answer-input') !== null,
+         有批注译文: document.querySelector('.pane-answer .annotated-lines') !== null,
+         导航说: text('.section-nav .hint'),
+       });
+       const 翻页往返 = async () => {
+         await clickNav('next');
+         await clickNav('prev');
+         await sleep(300);
+         return 界面态();
+       };
+       await ensureOnPage(干净页);
+       await sleep(300);
+       const 刚批完 = { 停在这一页: 界面态(), 往返后: await 翻页往返() };
+       let 放开未改 = null;
+       {
+         const unlockBtn = [...document.querySelectorAll('.pane-answer .btn')].find(
+           (b) => (b.textContent || '').trim() === '返回编辑',
+         );
+         if (unlockBtn) unlockBtn.click();
+         await sleep(300);
+         放开未改 = { 放开后: 界面态(), 往返后: await 翻页往返() };
+       }
+       let 放开改过 = null;
+       {
+         const unlockBtn = [...document.querySelectorAll('.pane-answer .btn')].find(
+           (b) => (b.textContent || '').trim() === '返回编辑',
+         );
+         if (unlockBtn) unlockBtn.click();
+         await sleep(300);
+         const area3 = document.querySelector('.answer-input');
+         if (area3) { setValue(area3, '（改一个字再翻走）'); await sleep(250); }
+         放开改过 = { 往返后: await 翻页往返() };
+       }
+
        return {
          total,
          sources,
@@ -860,6 +910,9 @@ try {
          navOnly,
          judgingStates,
          toasts,
+         刚批完,
+         放开未改,
+         放开改过,
          progress: progressSamples,
          lineHeights,
          bubbleBefore,
@@ -1090,8 +1143,35 @@ try {
     JSON.stringify(walked.点大卡片之后),
   )
   check(
-    (walked.afterUnlock.档位按钮 ?? []).join('/') === '精修/大改',
+    walked.afterUnlock.档位按钮.join('/') === '精修/大改',
     `两档修改风格的界面名是「精修」「大改」（实际 ${JSON.stringify(walked.afterUnlock.档位按钮)}）`,
+  )
+  /*
+   * ── 批改后的页来回翻，必须停在批改界面（用户报过两次）──
+   * 真实浏览器里的三条前情；jsdom 探针里那两条只覆盖了 ② 的一半。
+   */
+  console.log('翻页往返 =', JSON.stringify({ 刚批完: walked.刚批完, 放开未改: walked.放开未改, 放开改过: walked.放开改过 }))
+  check(
+    walked.刚批完?.停在这一页?.有批注译文 === true &&
+      walked.刚批完?.往返后?.有批注译文 === true &&
+      walked.刚批完?.往返后?.有作答框 === false,
+    '① 刚批完的页，翻到别的页再翻回来，仍然是批改界面',
+    JSON.stringify(walked.刚批完),
+  )
+  check(
+    walked.放开未改?.放开后?.有作答框 === true,
+    '② 按「返回编辑」之后这一页确实变成作答框（前置条件成立）',
+    JSON.stringify(walked.放开未改?.放开后),
+  )
+  check(
+    walked.放开未改?.往返后?.有批注译文 === true && walked.放开未改?.往返后?.有作答框 === false,
+    '② 一个字没改就翻走再翻回来，仍然是批改界面（用户这次报的那一条）',
+    JSON.stringify(walked.放开未改?.往返后),
+  )
+  check(
+    walked.放开改过?.往返后?.有作答框 === true && walked.放开改过?.往返后?.有批注译文 === false,
+    '③ 放开之后改了字再翻走，回来是作答框（那一页的批改那时已经作废了）',
+    JSON.stringify(walked.放开改过?.往返后),
   )
   check(walked.favoriteCount === 1, `收藏落盘了（localStorage 里 ${walked.favoriteCount} 条）`)
   check(
@@ -1111,6 +1191,67 @@ try {
   check(
     starts.length > 0 && starts.every((value) => value === 0),
     `每一次请求里的答案起点都是 0（逐页提交的服务端坐标就是那一页的坐标）：${JSON.stringify(starts)}`,
+  )
+
+  /*
+   * ── 刷新之后：批改过的页**仍然是批改界面**（用户报的现象最可能的来源）──
+   *
+   * 会话只在内存里，练习记录是落盘的。刷新一下、或者页面被热更新重载一下，
+   * 会话就没了——刚批完的段落于是变成一张空作答框，而左侧进度还写着"已批 N 页"。
+   * 现在打开时会把记录里有、会话里没有的那几页接回来，因此刷新之后再翻到那一页，
+   * 看到的仍是那次批改（连同箭头、批注与只读态），按「返回编辑」还能拿到当时那段文字。
+   */
+  console.log('\n== 刷新之后，批改过的页还在不在 ==')
+  await cdp.send('Page.reload')
+  let remounted = false
+  for (let i = 0; i < 40 && !remounted; i += 1) {
+    await sleep(250)
+    remounted = Boolean(await cdp.evaluate("!!document.querySelector('.mode-tabs')"))
+  }
+  await sleep(800)
+  const afterReload = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const text = (sel) => (document.querySelector(sel)?.textContent || '').trim();
+       const pageNo = () => {
+         const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(text('.section-nav .hint'));
+         return m ? { index: Number(m[1]) - 1, count: Number(m[2]) } : { index: -1, count: 0 };
+       };
+       /* 翻到第 2 页（逐页流程里批过、而且之后没人碰过的那一页） */
+       for (let guard = 0; guard < 8 && pageNo().index !== 1; guard++) {
+         const step = pageNo().index < 1 ? '[data-nav="next"]' : '[data-nav="prev"]';
+         document.querySelector('.section-nav ' + step)?.click();
+         await sleep(350);
+       }
+       const 落地后 = {
+         在第几页: pageNo().index,
+         有作答框: document.querySelector('.answer-input') !== null,
+         有批注译文: document.querySelector('.pane-answer .annotated-lines') !== null,
+         导航说: text('.section-nav .hint'),
+       };
+       /* 按「返回编辑」：应当拿到**当时写着的那段文字**（草稿也一起接回来了） */
+       const unlock = [...document.querySelectorAll('.pane-answer .btn')].find(
+         (b) => (b.textContent || '').trim() === '返回编辑',
+       );
+       if (unlock) unlock.click();
+       await sleep(400);
+       const 放开后 = {
+         有作答框: document.querySelector('.answer-input') !== null,
+         草稿: (document.querySelector('.answer-input')?.value || '').slice(0, 16),
+       };
+       return { 落地后, 放开后 };
+     })()`,
+  )
+  console.log('刷新之后 =', JSON.stringify(afterReload))
+  check(
+    afterReload?.落地后?.有批注译文 === true && afterReload?.落地后?.有作答框 === false,
+    '刷新之后再翻到批改过的那一页，看到的仍是批改界面（不是空作答框）',
+    JSON.stringify(afterReload?.落地后),
+  )
+  check(
+    afterReload?.放开后?.有作答框 === true && (afterReload?.放开后?.草稿 ?? '').length > 0,
+    '刷新之后按「返回编辑」，当时写的那段文字也还在（草稿一起接回来了）',
+    JSON.stringify(afterReload?.放开后),
   )
 
   // 收藏页：每一条要给出"这一处是从哪一段原文里来的"（用户要求：当前一段，不是整篇）

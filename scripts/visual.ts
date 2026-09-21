@@ -340,6 +340,11 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                 * 还在 DOM 里停一会儿（React 还没把它换掉），于是下一页的文字会被写进
                 * **上一页那个正在消失的 textarea**，末页就变成空的、提交按钮禁用
                 * （真踩过，表现为"末页的提交按钮是禁用的"）。
+                *
+                * 另一件事：**批改过的页现在是只读的**，而截图脚本每一步都重新加载页面，
+                * 于是"上一张截图提交过的那一页"会被练习记录接回来、直接显示批改结果
+                * （这正是用户要的行为：批改过的段落，回来还是批改界面）。
+                * 要往里写就得先按一次「返回编辑」——放开之后草稿也还在。
                 */
                const pageNo = () => {
                  const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(
@@ -347,11 +352,25 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                  );
                  return m ? { index: Number(m[1]) - 1, count: Number(m[2]) } : { index: 0, count: 0 };
                };
+               const unlockIfNeeded = () => {
+                 const unlock = [...document.querySelectorAll('.pane-answer .btn')].find(
+                   (b) => (b.textContent || '').trim() === '返回编辑',
+                 );
+                 if (!unlock) return false;
+                 unlock.click();
+                 return true;
+               };
                const waitForFreshInput = async (expectedPage) => {
+                 let triedUnlock = false;
                  for (let k = 0; k < 150; k++) {
                    if (pageNo().index === expectedPage) {
                      const area = document.querySelector('.answer-input');
                      if (area) return area;
+                     if (!triedUnlock && unlockIfNeeded()) {
+                       triedUnlock = true;
+                       await sleep(300);
+                       continue;
+                     }
                    }
                    const err = document.querySelector('.error-block');
                    if (err) return '页面报错：' + err.textContent.slice(0, 200);
@@ -362,7 +381,13 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
 
                const total = pageNo().count || sections.length;
                for (let i = 0; i < total; i++) {
-                 const ta = hasSectionNav ? await waitForFreshInput(i) : document.querySelector('.answer-input');
+                 /*
+                  * 单页题（句子/术语/自己贴的短题）没有翻页导航，页号恒为 0；
+                  * 但**批改过的单页题同样可能被记录接回来、变成只读**，
+                  * 因此两条路都走 waitForFreshInput（它里面会按一次「返回编辑」）。
+                  *（⚠️ 这段整块躺在模板字符串里，注释里不能出现反引号。）
+                  */
+                 const ta = await waitForFreshInput(hasSectionNav ? i : 0);
                  if (typeof ta === 'string') return ta;
                  if (!ta) return '第 ' + (i + 1) + ' 页没有等到可写的输入框';
                  setValue(ta, sections[i] ?? onScreen);

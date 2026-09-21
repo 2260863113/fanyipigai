@@ -156,6 +156,35 @@ export type SessionAction =
    */
   | { type: 'pageResultDropped'; exerciseId: string; sectionIndex: number }
   /**
+   * 离开这一页（换栏、去看练习记录……），但**页号不动**。
+   *
+   * 与 `sectionChanged` 共用同一条判据：没改过字就把"已放开重写"收回来。
+   * 两条动作分开只是因为触发时机不同（换页 vs 换栏），语义是同一句：
+   * **「返回编辑」只管你人还站在这一页上的时候。**
+   */
+  | { type: 'pageLeft'; exerciseId: string }
+  /**
+   * 把**落盘的练习记录**接回会话：这一页在本次打开里还没有结果，但记录里有一次批改。
+   *
+   * 为什么需要它（用户报的原话："我点击上一页下一页，回到当前段落，批改页面回退到编辑界面"）：
+   * **会话只在内存里**（作答、结果、页号都是），刷新一下、或者页面被热更新重载一下，
+   * 整份会话就没了——于是刚刚还显示着批改的段落，回来变成一张空的作答框，
+   * 而左侧的进度却还写着"已批 N 页"，两边说的不是一件事。
+   *
+   * 现在开始：**练习记录是落盘的**，因此打开时把"记录里有批改、会话里没有结果"的那几页
+   * 接回会话（每页取最新的一条）。接回来之后，逐页批改那一整套判据
+   * （只读、返回编辑、翻页往返、提交后收回只读）对它就和对本次刚批出来的那一份完全一样——
+   * 不需要第二套规则。
+   *
+   * 只在**这道题还没有会话**时用（见 App 里那个 effect），因此不会把用户刚刚作废掉的结果复活。
+   * `drafts` 也一并补上：不然按了「返回编辑」面对的是一张空框，像把人家写的字弄丢了。
+   */
+  | {
+      type: 'sessionRestored'
+      exerciseId: string
+      restored: Array<{ sectionIndex: number; draft: JudgeDraft; answer: string }>
+    }
+  /**
    * 反过来：**提交成功之后重新收回只读**（`pageLocked`）。
    *
    * 这一条是补上一个真实的窟窿：「返回编辑」把这一页记进 `unlocked` 之后，
@@ -189,6 +218,21 @@ export function pageResultOf(session: ExerciseSession, sectionIndex: number): Pa
 /** 写回某个题号，其余题号原样保留。 */
 function withSession(state: ExerciseSessions, exerciseId: string, next: ExerciseSession): ExerciseSessions {
   return { byExercise: { ...state.byExercise, [exerciseId]: next } }
+}
+
+/**
+ * 离开某一页时，把"已放开重写"这个标记收回来——**只要那一页一个字都没改**。
+ *
+ * 判据是"草稿与那一次结果里存的那段文字是否一字不差"，因此它同时回答了两个问题：
+ *   - 没改过 ⇒ 结果还有效，这一页该回到"已批改"（用户要求：离开再回来看到的仍是批改界面）；
+ *   - 改过了 ⇒ 结果早被 answerChanged 丢掉了，这一页是一道真正待提交的题，标记留着。
+ *
+ * 两个调用点（翻页 `sectionChanged`、换栏 `pageLeft`）共用这一份，免得各写一遍。
+ */
+function releasedUnlock(session: ExerciseSession, leaving: number): number[] {
+  const left = session.pages[leaving]
+  const unchanged = left !== undefined && (session.drafts[leaving] ?? '') === left.answer
+  return unchanged ? session.unlocked.filter((index) => index !== leaving) : session.unlocked
 }
 
 /**
@@ -261,14 +305,24 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
        * 没改字就翻走 = 反悔了，这一页回到"已批改"；改过字再走，结果早已作废
        * （`pages` 里没有它了），这一页就是一道真正待提交的题，标记留着。
        */
-      const leaving = session.sectionIndex
-      const left = session.pages[leaving]
-      const leftDraft = session.drafts[leaving] ?? ''
-      const unchanged = left !== undefined && leftDraft === left.answer
       return withSession(state, action.exerciseId, {
         ...session,
         sectionIndex: action.sectionIndex,
-        unlocked: unchanged ? session.unlocked.filter((index) => index !== leaving) : session.unlocked,
+        unlocked: releasedUnlock(session, session.sectionIndex),
+      })
+    }
+
+    case 'pageLeft': {
+      /*
+       * 同一件事的另一半：**换栏**（切到术语栏、练习记录页……）也算"离开这一页"。
+       *
+       * 用户那句话里说的是翻页，但"离开过这一页"这件事在换栏时同样成立：
+       * 按过「返回编辑」没改字就去看了一眼练习记录，回来时也该看到那份批改。
+       * 页号不动——他还要回到这一页上。
+       */
+      return withSession(state, action.exerciseId, {
+        ...session,
+        unlocked: releasedUnlock(session, session.sectionIndex),
       })
     }
 
@@ -310,6 +364,26 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
           ? session.unlocked
           : [...session.unlocked, action.sectionIndex],
       })
+    }
+
+    case 'sessionRestored': {
+      /*
+       * 把记录里的那几页接回会话。两条"不覆盖"的规矩都很要紧：
+       *   - 这一页会话里已经有结果（本次刚批的），以会话为准——它更新；
+       *   - 这一页已经开始写了字（草稿在），不动它——用户正写着的字比旧记录重要。
+       * 页号、`unlocked`、用第几份原文这些一概不碰：接回来的只是"哪几页批过、批的是什么"。
+       */
+      const pages = { ...session.pages }
+      const drafts = { ...session.drafts }
+      for (const entry of action.restored) {
+        if (!pages[entry.sectionIndex]) {
+          pages[entry.sectionIndex] = { draft: entry.draft, answer: entry.answer }
+        }
+        if (drafts[entry.sectionIndex] === undefined) {
+          drafts[entry.sectionIndex] = entry.answer
+        }
+      }
+      return withSession(state, action.exerciseId, { ...session, pages, drafts })
     }
 
     case 'pageLocked': {

@@ -2999,6 +2999,48 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(pageResultOf(at('a'), 3) !== undefined, '收回只读之后结果还在')
 
     /*
+     * 换栏也算"离开这一页"（pageLeft）：按过「返回编辑」没改字就去看了一眼练习记录，
+     * 回来时也该看到那份批改——页号不动，只把放开标记收回来。
+     */
+    sessions = sessionReducer(sessions, { type: 'pageUnlocked', exerciseId: 'a' })
+    sessions = sessionReducer(sessions, { type: 'pageLeft', exerciseId: 'a' })
+    check(
+      !at('a').unlocked.includes(3) && at('a').sectionIndex === 3,
+      '换栏（pageLeft）也会把"没改字就离开"的那一页收回只读，而且页号不动',
+    )
+
+    /*
+     * 把**落盘的练习记录**接回会话（sessionRestored）：刷新之后批改过的页仍显示那次批改。
+     *
+     * 用户报的"回到当前段落，批改页面回退到编辑界面"，在会话被刷新掉时就是这个样子：
+     * 记录还在、会话没了 → 页面变回一张空作答框，而左侧进度还写着"已批 N 页"。
+     */
+    sessions = sessionReducer(sessions, { type: 'sourceRotated', exerciseId: 'z', variantIndex: 0 })
+    sessions = sessionReducer(sessions, {
+      type: 'sessionRestored',
+      exerciseId: 'z',
+      restored: [{ sectionIndex: 2, draft, answer: '第二页的译文' }],
+    })
+    check(pageResultOf(at('z'), 2) !== undefined, '接回来的那一页有结果（于是界面显示批改，而不是空作答框）')
+    check(at('z').drafts[2] === '第二页的译文', '草稿也一并接回来（按「返回编辑」面对的是一张有字的框，不是空的）')
+    check(at('z').sectionIndex === 0, '接回记录不动页号（页号仍由"上次的界面 / 没批完的那一页"决定）')
+    // 会话里已经有结果的那一页，不被记录覆盖（本次刚批出来的更新）
+    sessions = sessionReducer(sessions, {
+      type: 'sessionRestored',
+      exerciseId: 'z',
+      restored: [{ sectionIndex: 2, draft, answer: '记录里的旧版本' }],
+    })
+    check(pageResultOf(at('z'), 2)?.answer === '第二页的译文', '会话里已有的结果不被旧记录盖掉')
+    // 用户正在写的那一页：草稿不动
+    sessions = sessionReducer(sessions, { type: 'answerChanged', exerciseId: 'z', text: '我自己正在写的' })
+    sessions = sessionReducer(sessions, {
+      type: 'sessionRestored',
+      exerciseId: 'z',
+      restored: [{ sectionIndex: 0, draft, answer: '记录里的老作答' }],
+    })
+    check(at('z').drafts[0] === '我自己正在写的', '正在写的草稿不会被接回来的记录冲掉')
+
+    /*
      * 用户要求："假如当前页面处于批改后的状态，那么切换其他页，再切换回来时，
      * 也需要在批改界面，不能回到编辑界面。"
      *

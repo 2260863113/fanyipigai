@@ -1,4 +1,4 @@
-import { useMemo, useReducer, useRef, useState, type JSX } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState, type JSX } from 'react'
 import { MOCK_CASES, fixtureCorrectionFor } from '../domain/mock'
 import { scoreCorrection } from '../domain/scoring'
 import type { GradeHistoryEntry } from './GradeHistoryPicker'
@@ -406,6 +406,48 @@ export function App(): JSX.Element {
   const judgingThisPage =
     judgingTarget !== null && judgingTarget.exerciseId === exercise.id && judgingTarget.sectionIndex === sectionIndex
   const busyElsewhere = judging && !judgingThisPage
+  /**
+   * 把**落盘的练习记录**接回会话（每页取最新的一条）。
+   *
+   * 会话只在内存里：刷新一下、或者页面被热更新重载一下，整份会话就没了——
+   * 而练习记录是落盘的。不接回来的话，刚刚还显示着批改的段落会变成一张空作答框，
+   * 左边的进度却还说"已批 N 页"（用户报过："回到当前段落，批改页面回退到编辑界面"）。
+   *
+   * 只在**这道题还没有会话**时接（下面那个 effect 里的守卫），
+   * 因此它不会把用户刚作废掉的结果复活，也不会盖掉正在写的草稿（reducer 里另有两道守卫）。
+   */
+  const restoredPages = useMemo(() => {
+    const newest = new Map<number, RecordView>()
+    for (const record of records) {
+      if (record.exerciseId !== exercise.id) continue
+      const seen = newest.get(record.sectionIndex)
+      if (!seen || record.createdAt.getTime() >= seen.createdAt.getTime()) {
+        newest.set(record.sectionIndex, record)
+      }
+    }
+    return [...newest.values()].map((record) => ({
+      sectionIndex: record.sectionIndex,
+      answer: record.answer,
+      draft: {
+        correction: record.correction,
+        validated: record.validated,
+        level: record.level,
+        source: record.source,
+        // 逐页批改之后一条记录就是"一页"，因此这里恒为 1（它只是给界面看的说明）
+        sectionCount: 1,
+        raw: record.raw,
+        ...(record.refine ? { refine: record.refine } : null),
+      },
+    }))
+  }, [records, exercise.id])
+
+  useEffect(() => {
+    // 这道题本次打开里已经动过了（有会话）→ 记录只当参考，不再往会话里塞
+    if (sessions.byExercise[exercise.id]) return
+    if (restoredPages.length === 0) return
+    dispatchSession({ type: 'sessionRestored', exerciseId: exercise.id, restored: restoredPages })
+  }, [exercise.id, sessions.byExercise, restoredPages])
+
   // 两个恒定的引用：直接写 `?? []` / `?? 0` 会每帧新建，让下面的 useMemo 失效
   const generatedOptions = session.generated.length > 0 ? session.generated : EMPTY_GENERATED
 
@@ -689,6 +731,12 @@ export function App(): JSX.Element {
    * 免得"题号撞车"（比如某个来源被清掉之后，同一个 id 落到另一来源上）。
    */
   function selectTab(nextTab: Tab): void {
+    /*
+     * 换栏也算"离开这一页"：按过「返回编辑」但一个字没改就去了别的栏，
+     * 回来时该看到那份批改（与翻页同一条判据，见 session.ts 的 pageLeft）。
+     * 点的是当前这一栏就不算离开（不然"点一下当前栏"会把你刚放开的编辑状态收掉）。
+     */
+    if (nextTab !== tab) dispatchSession({ type: 'pageLeft', exerciseId: exercise.id })
     setTab(nextTab)
     setOpenRecord(null)
     /*
