@@ -73,6 +73,15 @@ export interface JudgeDraft {
 export interface PageResult {
   draft: JudgeDraft
   answer: string
+  /**
+   * 这一份结果落在**练习记录**里的那一条的 id。
+   *
+   * 为什么要把这个 id 带进会话：批改记录可以在下拉里删掉（第 11 条），而删掉之后
+   * 屏幕上不该再摆着一份"记录里已经不存在"的结果。有了它对得上号，
+   * "删的正好是这一页当前显示的那一份"才判得出来——否则只能靠分数、时间这些
+   * 会重复的东西去猜，或者干脆装作什么都没发生（那正是用户会当成 bug 的场面）。
+   */
+  recordId?: string
 }
 
 /** 一道题各自的会话状态。 */
@@ -135,7 +144,15 @@ export type SessionAction =
   | { type: 'answerAtChanged'; exerciseId: string; row: number; text: string }
   | { type: 'sectionChanged'; exerciseId: string; sectionIndex: number }
   /** 这一页批改完成：结果按页存下来，界面随之显示这一页的结果 */
-  | { type: 'pageGraded'; exerciseId: string; sectionIndex: number; draft: JudgeDraft; answer: string }
+  | {
+      type: 'pageGraded'
+      exerciseId: string
+      sectionIndex: number
+      draft: JudgeDraft
+      answer: string
+      /** 同时落在练习记录里的那一条的 id（删记录时要对得上号，见 PageResult） */
+      recordId?: string
+    }
   /**
    * 「返回编辑」：放开**当前这一页**，让它重新可写。
    *
@@ -182,7 +199,25 @@ export type SessionAction =
   | {
       type: 'sessionRestored'
       exerciseId: string
-      restored: Array<{ sectionIndex: number; draft: JudgeDraft; answer: string }>
+      restored: Array<{ sectionIndex: number; draft: JudgeDraft; answer: string; recordId?: string }>
+      /**
+       * 落盘的**草稿**（见 components/page-state.ts）：刷新之后接着写。
+       *
+       * 与 `restored` 分开传：`restored` 说的是"哪几页批过、批的是什么"，
+       * 这里说的是"哪几页写到哪儿了"。两条来源不同（练习记录 / 页状态），
+       * 合在一起会让人以为它们必然成对出现——而实际上**没批过的页也可能有草稿**，
+       * 批过的页也可能一个字都没写。
+       */
+      drafts: Array<{ sectionIndex: number; text: string }>
+      /**
+       * 这道题**本次打开该落在第几页**（来自"上次关掉的界面 / 没批完的那一段"）。
+       *
+       * ⚠️ 这一位是必须的，而且踩过一次：接回记录/草稿会**顺手把会话建起来**，
+       * 而 reducer 里那个 `sessionOf(state, exerciseId)` 在不传页号时用的是第 0 页——
+       * 于是"打开就落在上次那一页"这条规矩在被接回的那一瞬间被抹成了第 1 页
+       * （实测：把 last-view 写成第 2 页、进度写着第 1~2 页已批，打开却停在第 1 页）。
+       */
+      sectionIndex?: number
     }
   /**
    * 反过来：**提交成功之后重新收回只读**（`pageLocked`）。
@@ -331,7 +366,11 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
         ...session,
         pages: {
           ...session.pages,
-          [action.sectionIndex]: { draft: action.draft, answer: action.answer },
+          [action.sectionIndex]: {
+            draft: action.draft,
+            answer: action.answer,
+            ...(action.recordId ? { recordId: action.recordId } : null),
+          },
         },
       })
 
@@ -371,19 +410,39 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
        * 把记录里的那几页接回会话。两条"不覆盖"的规矩都很要紧：
        *   - 这一页会话里已经有结果（本次刚批的），以会话为准——它更新；
        *   - 这一页已经开始写了字（草稿在），不动它——用户正写着的字比旧记录重要。
-       * 页号、`unlocked`、用第几份原文这些一概不碰：接回来的只是"哪几页批过、批的是什么"。
+       * 页号（除非这道题还没有会话，见下）、`unlocked`、用第几份原文这些一概不碰：
+       * 接回来的只是"哪几页批过、批的是什么、哪几页写到哪儿了"。
        */
-      const pages = { ...session.pages }
-      const drafts = { ...session.drafts }
+      /*
+       * ⚠️ 会话**往往是这一刻才建起来的**（接回记录/草稿本身就是"这道题有动静了"），
+       * 因此这里必须自己把起始页号传对：`sessionOf` 的第三个参数是"新建会话从第几页开始"，
+       * 不传就用第 0 页——那会把"打开就落在上次关掉的那一页"当场抹掉。
+       * 实测：把 last-view 写成第 2 页、进度写着第 1~2 页已批，打开却停在第 1 页。
+       * 已有会话时，这一位不起作用（页号归会话自己管）。
+       */
+      const base = sessionOf(state, action.exerciseId, action.sectionIndex ?? 0)
+      const pages = { ...base.pages }
+      const drafts = { ...base.drafts }
       for (const entry of action.restored) {
         if (!pages[entry.sectionIndex]) {
-          pages[entry.sectionIndex] = { draft: entry.draft, answer: entry.answer }
+          pages[entry.sectionIndex] = {
+            draft: entry.draft,
+            answer: entry.answer,
+            ...(entry.recordId ? { recordId: entry.recordId } : null),
+          }
         }
         if (drafts[entry.sectionIndex] === undefined) {
           drafts[entry.sectionIndex] = entry.answer
         }
       }
-      return withSession(state, action.exerciseId, { ...session, pages, drafts })
+      /*
+       * 落盘的草稿排在后面、并且同样"会话里已有就不动"：用户这一轮已经敲进去的字
+       * 永远比上一次打开时存下来的那份新。
+       */
+      for (const entry of action.drafts) {
+        if (drafts[entry.sectionIndex] === undefined) drafts[entry.sectionIndex] = entry.text
+      }
+      return withSession(state, action.exerciseId, { ...base, pages, drafts })
     }
 
     case 'pageLocked': {

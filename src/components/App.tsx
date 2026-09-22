@@ -3,7 +3,6 @@ import { MOCK_CASES, fixtureCorrectionFor } from '../domain/mock'
 import { scoreCorrection } from '../domain/scoring'
 import type { GradeHistoryEntry } from './GradeHistoryPicker'
 import {
-  DIRECTION_LABEL,
   GENRE_LABEL,
   type Exercise,
   type Direction,
@@ -20,7 +19,7 @@ import { variantsFor } from '../domain/variants'
 import { GENERATION_TOPICS, type GeneratedExercise } from '../domain/generate'
 import type { JudgeFailureKind } from '../domain/ai'
 import { useSplitDrag } from './split-drag'
-import { useSettings } from './settings'
+import { resolveTheme, useSettings } from './settings'
 import { RecordsView, type RecordView } from './RecordsView'
 import { exerciseOf, loadCustom, saveCustom, type CustomExercise } from '../domain/custom'
 import {
@@ -44,10 +43,8 @@ import { CompareView } from './CompareView'
 import { ScorePane } from './ScorePane'
 import { NotesPane } from './NotesPane'
 import { TopBar } from './TopBar'
-import { ArticleBar } from './ArticleBar'
 import { ArticlePickerModal } from './ArticlePickerModal'
 import { TermRows, TermResults } from './TermRows'
-import { DomainBar } from './DomainBar'
 import {
   exerciseOfSentence,
   parseSentenceExerciseId,
@@ -69,7 +66,6 @@ import { loadSelection, saveSelection, type ArticleSelection } from './article-s
 import {
   clearGraded,
   firstUngraded,
-  gradedCount,
   isCompleted,
   loadProgress,
   markGraded,
@@ -77,12 +73,17 @@ import {
   type ProgressMap,
 } from './article-progress'
 import { exerciseSourceOf, pageCountOf } from '../domain/exercise-source'
-import { loadRecords, saveRecords } from './records-store'
+import { loadRecords, removeRecord, saveRecords } from './records-store'
 import { loadLastView, saveLastView, type ExerciseOrigin, type ViewTab } from './last-view'
 import { JudgeWaitingModal } from './JudgeWaitingModal'
 import { JudgeDoneToast } from './JudgeDoneToast'
+import { dropPageStates, loadPageStates, readPageState, writePageState, type PageStateMap } from './page-state'
+import { checkSubmit } from '../domain/submit-gate'
 
 type Tab = ViewTab
+
+/** 吐司停留多久自己消失（够读两行字，又不至于赖着不走）。 */
+const TOAST_MS = 6000
 
 interface JudgeError {
   kind: JudgeFailureKind | 'bad-request'
@@ -94,6 +95,26 @@ const ALL_CASES = MOCK_CASES
 const FIRST_ARTICLE = ARTICLES[0]
 const EMPTY_GENERATED: GeneratedExercise[] = []
 const EMPTY_LAYOUT: AnnotatedLayout = { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 }
+
+/**
+ * 把一条**落盘的练习记录**还原成会话里那份"批改结果"。
+ *
+ * 两个地方要用它、而且必须是同一份：刷新之后把记录接回会话（`restoredPages`）、
+ * 以及删掉一条记录后把屏幕上的结果换成剩下最新的那一条（`deleteRecord`）。
+ * 各写一遍的话，两处迟早会在"大改档要带上 refine、sectionCount 恒为 1"这类细节上分家。
+ */
+function judgeDraftOf(record: RecordView): JudgeDraft {
+  return {
+    correction: record.correction,
+    validated: record.validated,
+    level: record.level,
+    source: record.source,
+    // 逐页批改之后一条记录就是"一页"，因此这里恒为 1（它只是给界面看的说明）
+    sectionCount: 1,
+    raw: record.raw,
+    ...(record.refine ? { refine: record.refine } : null),
+  }
+}
 
 /** 「上一次在某一栏看的是哪道题」——切回来要回到它（见 selectTab 的注释）。 */
 interface LastInTab {
@@ -206,11 +227,39 @@ export function App(): JSX.Element {
    * 漏一项就是 bug，没有任何机制守着。现在它由 action 命名表达，写在 session.ts 里一处。
    */
   const [sessions, dispatchSession] = useReducer(sessionReducer, INITIAL_SESSIONS)
-  /** 四栏边界：默认按内容自动平衡，用户拖过之后按他定的比例 */
+  /** 四栏边界：默认按内容自动平衡，用户拖过之后按他定的比例（位置落盘，见 split-drag.ts） */
   const splitRef = useRef<HTMLElement | null>(null)
-  const { split, style: splitStyle, beginDrag, resetSplit } = useSplitDrag(splitRef)
-  /** 界面偏好：行距、是否显示填补的文字、译文看哪种视图（存 localStorage） */
+  const { split, style: splitStyle, beginDrag, resetSplit } = useSplitDrag('practice', splitRef)
+  /** 界面偏好：行距、是否显示填补的文字、译文看哪种视图、明暗主题（存 localStorage） */
   const { settings, update: updateSettings } = useSettings()
+  /**
+   * 明暗主题（第 9 条）：现在**实际生效**的那一套写到 `<html data-theme="…">`，
+   * 样式表里的两份配色靠它切换（见 styles.css 的 `:root[data-theme='dark']`）。
+   *
+   * 默认跟随系统，所以系统从浅变深时也要跟着变——但只在用户**没有手动选过**
+   * （`theme === 'system'`）时才听系统的：手动切过之后，"我按过了"比系统设置硬
+   * （见 settings.ts 的 resolveTheme）。
+   */
+  const [systemPrefersDark, setSystemPrefersDark] = useState(
+    () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches,
+  )
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const query = window.matchMedia('(prefers-color-scheme: dark)')
+    // 老浏览器只有 addListener：有 addEventListener 就先用它，没有就退回旧的（不然系统变色时不跟）
+    if (typeof query.addEventListener === 'function') {
+      const onChange = (event: MediaQueryListEvent): void => setSystemPrefersDark(event.matches)
+      query.addEventListener('change', onChange)
+      return () => query.removeEventListener('change', onChange)
+    }
+    const onLegacyChange = (event: MediaQueryListEvent): void => setSystemPrefersDark(event.matches)
+    query.addListener(onLegacyChange)
+    return () => query.removeListener(onLegacyChange)
+  }, [])
+  const theme = resolveTheme(settings.theme, systemPrefersDark)
+  useEffect(() => {
+    document.documentElement.dataset['theme'] = theme
+  }, [theme])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [genOpen, setGenOpen] = useState(false)
   const [genTopic, setGenTopic] = useState(GENERATION_TOPICS[0] ?? '')
@@ -220,21 +269,41 @@ export function App(): JSX.Element {
   const [genError, setGenError] = useState<string | null>(null)
   const [level, setLevel] = useState<PolishLevel>('polish')
   /**
-   * 正在看的是**批改记录下拉里选中的那一条**（练习记录里的 id）；null = 正在写这一页。
+   * 每一页的界面状态：**草稿、是不是在编辑、正在看第几次批改**（第 10 条）。
+   *
+   * 原先它是三个各自为政的东西：草稿在会话内存里、`unlocked` 在会话内存里、
+   * "正在看第几次"是一个**单数**的 `viewingGradeId`（翻页就清）。
+   * 现在三样按「题 + 页」存进浏览器（见 page-state.ts），于是：
+   *   - 翻到别的页再翻回来，看到的仍是**那一次**（不再是每次都回到最新一次）；
+   *   - 刷新、重开浏览器之后，写到一半的草稿还在、编辑态还在。
    *
    * 它与 `openRecord`（练习记录页里点开的那一条）刻意分开：那个是"去记录页回看"，
    * 这个是"在这一页就地看一眼之前批成什么样"，两者互不干扰。
    */
-  const [viewingGradeId, setViewingGradeId] = useState<string | null>(null)
-  /**
-   * 原文栏看的是原文还是「对照」，纯界面状态（不落盘）。
-   * 默认关：用户打开一道题的默认视线是原文本身，译文要自己按出来。
-   */
-  const [compareSource, setCompareSource] = useState(false)
+  const [pageStates, setPageStates] = useState<PageStateMap>(() => loadPageStates())
 
   const [judgingTarget, setJudgingTarget] = useState<JudgingTarget | null>(null)
   const [error, setError] = useState<JudgeError | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  /**
+   * 吐司：**"一句话说完就消失"的提示**（第 3 条要用它说清"为什么没交出去"）。
+   *
+   * 与右下角那条「批改完成通知」（JudgeDoneToast）是两回事：那条是"另一页的事跑来找人"，
+   * 要留着等人点；这条只是"刚才那一下为什么没生效"，看一眼就够，因此几秒后自己消失。
+   * 带一个自增 id 是为了让**同一句话连说两次也重新计时**（否则第二次像没反应）。
+   */
+  const [toast, setToast] = useState<{ id: number; message: string } | null>(null)
+  /** 吐司几秒后自己消失；同一句话再说一次也会重新计时（靠 id 变化触发重新订阅） */
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(() => setToast(null), TOAST_MS)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
+  /** 说一句"刚才那一下为什么没生效"。id 逐个往上加，连说两次也会重新计时。 */
+  function showToast(message: string): void {
+    setToast((previous) => ({ id: (previous?.id ?? 0) + 1, message }))
+  }
   const [selection, setSelection] = useState<Selection | null>(null)
   const [records, setRecords] = useState<RecordView[]>(() => loadRecords())
   const [openRecord, setOpenRecord] = useState<RecordView | null>(null)
@@ -425,28 +494,53 @@ export function App(): JSX.Element {
         newest.set(record.sectionIndex, record)
       }
     }
-    return [...newest.values()].map((record) => ({
-      sectionIndex: record.sectionIndex,
-      answer: record.answer,
-      draft: {
-        correction: record.correction,
-        validated: record.validated,
-        level: record.level,
-        source: record.source,
-        // 逐页批改之后一条记录就是"一页"，因此这里恒为 1（它只是给界面看的说明）
-        sectionCount: 1,
-        raw: record.raw,
-        ...(record.refine ? { refine: record.refine } : null),
-      },
-    }))
-  }, [records, exercise.id])
+    /*
+     * ⚠️ **当时处于编辑态（按过「返回编辑」）的那一页不接**（用户第 10 条的追问）：
+     * 他的答复是"刷新之后旧结果不算了，自己去『批改记录』下拉栏里重新调出来"。
+     *
+     * 为什么必须显式排除：`pageState` 里"编辑态"优先于"有结果"，因此就算把结果接回来，
+     * 屏幕上显示的也是作答框——但用户**一个字没改就翻走**时，releasedUnlock 会把编辑态收回，
+     * 那份"已经不算了"的旧结果又冒出来了。要么让它在，要么让它不在，不能看运气。
+     */
+    const editingPages = new Set(
+      Object.entries(pageStates)
+        .filter(([key, value]) => key.startsWith(`${exercise.id}#`) && value.unlocked)
+        .map(([key]) => Number(key.slice(key.indexOf('#') + 1))),
+    )
+    const restored = [...newest.values()]
+      .filter((record) => !editingPages.has(record.sectionIndex))
+      .map((record) => ({
+        sectionIndex: record.sectionIndex,
+        answer: record.answer,
+        recordId: record.id,
+        draft: judgeDraftOf(record),
+      }))
+    /*
+     * 落盘的草稿（第 10 条）：每一页写到哪儿了，与上面那份"哪几页批过"是两回事。
+     * 逐页都传，`sessionRestored` 里"会话已有就不动"，因此不会盖掉本次打开写的字。
+     */
+    const drafts = Object.entries(pageStates)
+      .filter(([key]) => key.startsWith(`${exercise.id}#`))
+      .map(([key, value]) => ({
+        sectionIndex: Number(key.slice(key.indexOf('#') + 1)),
+        text: value.draft,
+      }))
+    return { restored, drafts }
+  }, [records, exercise.id, pageStates])
 
   useEffect(() => {
     // 这道题本次打开里已经动过了（有会话）→ 记录只当参考，不再往会话里塞
     if (sessions.byExercise[exercise.id]) return
-    if (restoredPages.length === 0) return
-    dispatchSession({ type: 'sessionRestored', exerciseId: exercise.id, restored: restoredPages })
-  }, [exercise.id, sessions.byExercise, restoredPages])
+    if (restoredPages.restored.length === 0 && restoredPages.drafts.length === 0) return
+    dispatchSession({
+      type: 'sessionRestored',
+      exerciseId: exercise.id,
+      restored: restoredPages.restored,
+      drafts: restoredPages.drafts,
+      // 起始页号：接回记录/草稿会顺手把会话建起来，页号必须在这里给对（见该 action 的说明）
+      sectionIndex: resumeIndex,
+    })
+  }, [exercise.id, sessions.byExercise, restoredPages, resumeIndex])
 
   // 两个恒定的引用：直接写 `?? []` / `?? 0` 会每帧新建，让下面的 useMemo 失效
   const generatedOptions = session.generated.length > 0 ? session.generated : EMPTY_GENERATED
@@ -474,9 +568,13 @@ export function App(): JSX.Element {
   const current = sourceOptions[safeVariantIndex] ?? sourceOptions[0]
   const currentSource = current?.source ?? exercise.source
   const currentReference = current?.referenceTranslation ?? exercise.referenceTranslation
-  // AI 出的题可能换了领域与文体，顶栏要如实显示当前这一篇
+  /*
+   * 当前这一篇的话题。AI 出的题可能换了领域与文体，因此它未必等于 exercise.topic。
+   *
+   * ⚠️ 第 9 条之后顶栏不再显示"方向 / 文体 / 话题"三枚标签，因此 **currentGenre 没有去处了**：
+   * 它唯一的用途就是那枚标签。话题（currentTopic）还留着——练习记录与收藏要按它归档。
+   */
   const currentTopic = current?.topic ?? exercise.topic
-  const currentGenre = current?.genre ?? exercise.genre
 
   /**
    * 原文按**页**切分——一页 = 一个自然段（不足 50 单位的自然段与相邻段合并）。
@@ -486,7 +584,7 @@ export function App(): JSX.Element {
    *
    * 单段题（句子/段落/术语/自己贴的短题）本来就只有一段，于是原样得到一页 ✓。
    * 参考译文一起传进去：分页顺手把每一页的**逐段译文对**也算好了，
-   * 原文栏的「对照」直接拿它铺"一段原文、一段译文"。
+   * 原文栏正文末尾那个可折叠的「参考译文」直接拿它拼出来。
    */
   const sourceSections: ArticlePage[] = useMemo(
     () => paginateArticle(currentSource, currentReference, exercise.direction),
@@ -527,11 +625,12 @@ export function App(): JSX.Element {
    * 批过的页要**先按「返回编辑」**才能写——见 pageUnlocked。
    */
   const editing = pageState === 'pending' || pageState === 'editing'
-  /**
-   * 已批页数。**以落盘的进度为准**：刷新之后会话里的结果没了，但"这一篇批过哪几页"还在，
-   * 只数会话里的 pages 会显示成 0，而用户明明已经批了三四页。
+  /*
+   * ⚠️ 这里原先还算一份「已批 N 页」给原文标题栏那枚芯片用。
+   * 第 7 条把那枚芯片删掉了，因此这个数字不再需要——但**进度本身照旧在用**
+   * （见 article-progress.ts：决定"从没批完的那一段继续"与「选择文章」里的「已完成」标记），
+   * 所以 `progress` 这个 state 一个字都没动。
    */
-  const gradedPages = gradedCount(progress, exercise.id, sourceSections.length)
   /**
    * 「返回编辑」之后不再有"点回刚才那份批改"的按钮（用户要求去掉）。
    * 回看那一次靠「批改记录」下拉——它读的是**落盘的练习记录**，
@@ -564,11 +663,21 @@ export function App(): JSX.Element {
   }, [records, exercise.id, sectionIndex])
 
   /**
+   * 这一页正在看哪一次批改（第 10 条）。
+   *
+   * 它现在**按「题 + 页」存在浏览器里**（见 page-state.ts）：翻到别的页再翻回来，
+   * 看到的仍是那一次——不再是"每次翻回来都回到最新一次"。
+   * 早先它是一个单数 state，翻页时被清成 null（那正是本条要修的问题）。
+   */
+  const viewingGradeId = readPageState(pageStates, exercise.id, sectionIndex)?.viewingGradeId ?? null
+
+  /**
    * 下拉里选中的那一条记录；没选、或者它已经不属于"当前这道题 + 当前这一页"时是 null。
    *
-   * ⚠️ 过滤这两条不是可选的：`viewingGradeId` 现在**跨切栏保留**（见 clearTransientUi），
-   * 因此它随时可能指向别人家的记录。按题号与页号滤一遍，它就只可能是"这一页的某一次批改"，
-   * 留着一个暂时对不上的 id 也显示不出错东西——切回去它自己又好使了。
+   * 过滤这两条不是可选的：这条 id 跨切栏、跨刷新都留着，因此它随时可能指向别人家的记录
+   * （换了题目、记录被上限裁掉、被手动删掉）。按题号与页号滤一遍，
+   * 它就只可能是"这一页的某一次批改"，留着一个对不上的 id 也显示不出错东西——
+   * 用户要的"没得选了就退回最新一次"也就自动成立了。
    */
   const viewingGrade = useMemo(
     () =>
@@ -582,6 +691,54 @@ export function App(): JSX.Element {
         : null,
     [records, viewingGradeId, exercise.id, sectionIndex],
   )
+
+  /**
+   * 记下"某一页正在看第几次"。
+   *
+   * ⚠️ 收的是**目标页**的题号与页号，不是当前这一页：批改要十几秒，
+   * 回来那一刻人可能已经翻到别的页上了，`commit` 必须能把"看最新这一次"
+   * 记到**它自己那一页**头上（见 commit 的注释）。
+   */
+  function setViewingGrade(targetExerciseId: string, targetSectionIndex: number, id: string | null): void {
+    setPageStates((previous) =>
+      writePageState(previous, targetExerciseId, targetSectionIndex, { viewingGradeId: id }),
+    )
+  }
+
+  /**
+   * 把**当前这一页**的草稿与"在编辑"落到浏览器里（第 10 条）。
+   *
+   * 写在渲染之后（effect）而不是每个输入框的 onChange 里：能写字的入口只有两处，
+   * 但**草稿的来源有三处**（用户打字、返回编辑、刷新后接回来），逐个入口补记漏一个就前功尽弃
+   * （`lastInTabRef` 上已经踩过一次这个坑）。内容没变时 `writePageState` 一个字都不写，
+   * 因此每敲一个字跑一次并不贵。
+   */
+  useEffect(() => {
+    setPageStates((previous) =>
+      writePageState(previous, exercise.id, sectionIndex, { draft: currentAnswer, unlocked: pageUnlocked }),
+    )
+  }, [exercise.id, sectionIndex, currentAnswer, pageUnlocked])
+
+  /**
+   * 每篇文章的**最高分**（第 12 条：选文章的卡片上显示"最高分 N 分"，没得分就写 0 分）。
+   *
+   * 三条口径，都是被现实逼出来的：
+   *   1. 分数**不是存下来的**——精修档每次都是按错误列表现算（见 domain/scoring.ts），
+   *      因此只能在这里算一遍；
+   *   2. **只算精修**：大改档不打分（用户拍板"分数打分只有精修部分有"），
+   *      于是两种分数不再有"含义不同却混在一起比大小"的问题；
+   *   3. 按**题号**取最大值：一篇文章有好几页，卡片刻度是"这一篇练到过的最好水平"。
+   */
+  const maxScoreByArticle = useMemo(() => {
+    const best: Record<string, number> = {}
+    for (const record of records) {
+      if (record.refine) continue
+      const total = scoreCorrection(record.correction, record.answer, record.direction).total
+      const seen = best[record.exerciseId]
+      if (seen === undefined || total > seen) best[record.exerciseId] = total
+    }
+    return best
+  }, [records])
 
   const isFixtureAnswer = useMemo(() => {
     const trimmed = currentAnswer.trim()
@@ -618,15 +775,16 @@ export function App(): JSX.Element {
     setError(null)
     setNotice(null)
     /*
-     * ⚠️ `viewingGradeId` **不在这里清**（用户要求：切栏之后回来，看到的东西不变）。
+     * ⚠️ `viewingGradeId` 现在**按「题 + 页」落在浏览器里**（第 10 条，见 page-state.ts），
+     * 因此这里一个字都不用动它。
      *
-     * "正在看这一页的第几次批改"这条记忆属于**这一页**，不属于"此刻这一屏"。
-     * 早先切题/切栏就把它抹掉，用户从批改结果切去术语栏再切回来，屏幕上退回了作答框，
+     * 这条记忆属于**那一页**，不属于"此刻这一屏"：早先它是个全局单数 state，
+     * 切题/切栏就把它抹掉，用户从批改结果切去术语栏再切回来，屏幕上退回了作答框，
      * 看着就像批改结果被清空了——那正是他报上来的现象。
-     * 现在这个 id 原样留着，只有三种情况会让它失效：
-     *   - 用户自己点了「回到作答」；
-     *   - 翻到别的页（历史是"这一页的"，见 setSection）；
-     *   - 它解析不出来时自然落空（换了题目、记录被上限裁掉），
+     * 现在它只会在三处失效：
+     *   - 用户自己点了「回到作答」（清这一页的）；
+     *   - 换原文（那道题全部页的状态一起丢掉，见 rotateSource）；
+     *   - 解析不出来时自然落空（换了题目、记录被删掉或裁掉），
      *     解析那一处按"当前题目 + 当前页"过滤，所以留着一个对不上的 id 也不会显示错东西。
      */
   }
@@ -657,6 +815,8 @@ export function App(): JSX.Element {
     const nextIndex = (safeVariantIndex + 1) % sourceOptions.length
     // 清作答、清结果、view 回 'result' 都在 reducer 里一处做完，这里不再手写清单
     dispatchSession({ type: 'sourceRotated', exerciseId: exercise.id, variantIndex: nextIndex })
+    // 落盘的草稿与"看第几次"也要一起清：原文换了，那些字对应的已经不是这一篇了
+    setPageStates((previous) => dropPageStates(previous, exercise.id))
     setSelection(null)
     setError(null)
     setNotice(`已换成第 ${nextIndex + 1} 篇原文，这道题的作答已清空。`)
@@ -676,6 +836,8 @@ export function App(): JSX.Element {
       generated,
       variantIndex: nextIndex,
     })
+    // 与「换一换」同一条道理：原文换了，落盘的草稿与"看第几次"都要一起清
+    setPageStates((previous) => dropPageStates(previous, exercise.id))
     setSelection(null)
     setError(null)
   }
@@ -830,8 +992,14 @@ export function App(): JSX.Element {
    * （第三版之前这里由一个 async 的 goToSection 负责，它会先把没批过的页交出去）。
    */
   function setSection(nextIndex: number): void {
-    // 翻页之后历史视图失效：下拉里列的本来就是"这一页"的批改记录
-    setViewingGradeId(null)
+    /*
+     * ⚠️ 这里**不再清**"正在看第几次"（第 10 条）。
+     *
+     * 它现在按「题 + 页」各记各的（见 page-state.ts），因此翻页时一个字都不用动：
+     * 翻回来看到的仍是那一次。早先这一行写着 `setViewingGradeId(null)`，
+     * 理由是"历史是这一页的"——可清掉的是**同一页**的记忆，于是每次翻回来都退回最新一次，
+     * 那正是用户报上来的现象。
+     */
     /*
      * 人自己翻到刚批完的那一页时，右下角那条通知就该消失——
      * 已经站在这一页上了还挂着"点这里去看"，是句废话。
@@ -902,12 +1070,26 @@ export function App(): JSX.Element {
     pageAnswer: string,
     attemptLevel: PolishLevel,
   ): void {
+    /*
+     * 这一次批改在练习记录里的 id **先算出来**（不再等到写记录那一刻）：
+     * 会话里也要存同一个 id（见 PageResult.recordId），否则用户把这条记录删掉时，
+     * 界面判断不出"屏幕上摆着的就是被删掉的那一份"。
+     * 编号规则与下面那段注释一致：时间戳 + 该题已存记录里的最大次序号加一。
+     */
+    const attempts = records
+      .filter((item) => item.exerciseId === target.exerciseId)
+      .map((item) => item.attempt)
+    const nextAttempt = (attempts.length > 0 ? Math.max(...attempts) : 0) + 1
+    const now = new Date()
+    const recordId = `record-${now.getTime()}-${nextAttempt}`
+
     dispatchSession({
       type: 'pageGraded',
       exerciseId: target.exerciseId,
       sectionIndex: target.sectionIndex,
       draft: judging_,
       answer: pageAnswer,
+      recordId,
     })
     /*
      * 落一份"这一页批完了"到浏览器里（见 article-progress.ts）。
@@ -925,8 +1107,8 @@ export function App(): JSX.Element {
     dispatchSession({ type: 'pageLocked', exerciseId: target.exerciseId, sectionIndex: target.sectionIndex })
     setSelection(null)
     setOpenRecord(null)
-    // 刚交完，画面就该显示这一次的结果；不再停在历史视图上
-    setViewingGradeId(null)
+    // 刚交完，画面就该显示这一次的结果；不再停在历史视图上（记在**它自己那一页**头上）
+    setViewingGrade(target.exerciseId, target.sectionIndex, null)
     setRecords((previous) => {
       /*
        * 编号与"第几次"都不能用 previous.length 推：
@@ -935,13 +1117,10 @@ export function App(): JSX.Element {
        *   2. "第几次作答"更不能用"现有条数 + 1"，否则丢过旧记录之后次数会倒退。
        * 因此改成时间戳编号 + 按该题已存记录里的最大次序号加一。
        */
-      const attempts = previous.filter((item) => item.exerciseId === target.exerciseId).map((item) => item.attempt)
-      const nextAttempt = (attempts.length > 0 ? Math.max(...attempts) : 0) + 1
-      const now = new Date()
       const next: RecordView[] = [
         ...previous,
         {
-          id: `record-${now.getTime()}-${nextAttempt}`,
+          id: recordId,
           exerciseId: target.exerciseId,
           mode,
           direction: target.direction,
@@ -952,7 +1131,7 @@ export function App(): JSX.Element {
           answer: pageAnswer,
           correction: judging_.correction,
           validated: judging_.validated,
-          // 大改档那一次也照实存下来：练习记录要能回看"当时怎么改的、给了几分"
+          // 大改档那一次也照实存下来：练习记录要能回看"当时怎么改的"
           ...(judging_.refine ? { refine: judging_.refine } : null),
           source: judging_.source,
           raw: judging_.raw,
@@ -962,6 +1141,69 @@ export function App(): JSX.Element {
       // 存下来的是**实际落盘的**那份：写不下时会丢最旧的，界面必须跟着一致
       return saveRecords(next)
     })
+  }
+
+  /**
+   * 删掉一条批改记录（第 11 条）。
+   *
+   * 用户的原话："允许在批改记录的下拉栏中点击叉号删除记录，练习记录同步删除。"
+   * 追问"连带怎么算"时他选了：**撤掉进度 + 当前视图退回最新一次 + 点叉号确认一次**；
+   * 后来又补一句"练习记录页也加删除按钮"。两处入口因此走的是同一个函数（这一处）。
+   *
+   * 五件事按顺序做，一件都不能省：
+   *   1. **删数据**——练习记录与「批改记录」下拉读的是同一份，删一处就是两处都消失；
+   *   2. **正在看的那一条被删了** → 把"看第几次"清掉，界面自然退回最新一次
+   *      （`viewingGrade` 按题号+页号滤，对不上的 id 显示不出错东西）；
+   *   3. **屏幕上正摆着的就是这一份结果** → 换成剩下最新的那一条；
+   *      一条都不剩就退回作答框（用户第一轮的原话："没有就回到作答"）；
+   *   4. **这一页一条记录都不剩了** → 从"哪几页批过"里撤掉（第一轮拍板：删记录撤进度；
+   *      这条与「返回编辑」不同——那个是"放开重写"，用户选了进度只增不减）；
+   *   5. **记录页正打开着这一条** → 把详情关掉，不让人对着一条已经不存在的记录看。
+   */
+  function deleteRecord(record: RecordView): void {
+    const remaining = records.filter(
+      (item) =>
+        item.id !== record.id &&
+        item.exerciseId === record.exerciseId &&
+        item.sectionIndex === record.sectionIndex,
+    )
+    setRecords((previous) => removeRecord(previous, record.id))
+
+    if (readPageState(pageStates, record.exerciseId, record.sectionIndex)?.viewingGradeId === record.id) {
+      setViewingGrade(record.exerciseId, record.sectionIndex, null)
+    }
+
+    const shown = sessions.byExercise[record.exerciseId]?.pages[record.sectionIndex]
+    if (shown?.recordId === record.id) {
+      const newest = remaining.reduce<RecordView | null>(
+        (best, item) => (!best || item.createdAt.getTime() > best.createdAt.getTime() ? item : best),
+        null,
+      )
+      if (newest) {
+        dispatchSession({
+          type: 'pageGraded',
+          exerciseId: record.exerciseId,
+          sectionIndex: record.sectionIndex,
+          draft: judgeDraftOf(newest),
+          answer: newest.answer,
+          recordId: newest.id,
+        })
+      } else {
+        dispatchSession({
+          type: 'pageResultDropped',
+          exerciseId: record.exerciseId,
+          sectionIndex: record.sectionIndex,
+        })
+      }
+    }
+
+    if (remaining.length === 0) {
+      setProgress((previous) => clearGraded(previous, record.exerciseId, record.sectionIndex))
+    }
+    if (openRecord?.id === record.id) setOpenRecord(null)
+    // 删掉的记录不再拦"重复提交"（历史里已经没有它了，见 submit-gate.ts）
+    setNotice(`已删掉那一次批改记录（练习记录里同步消失）${remaining.length === 0 ? '，这一页不再算"批过"' : ''}。`)
+    setSelection(null)
   }
 
   /**
@@ -986,6 +1228,28 @@ export function App(): JSX.Element {
     if (judging) return false
     const pageAnswer = drafts[sectionIndex] ?? ''
     if (pageAnswer.trim().length === 0) return false
+
+    /*
+     * **提交前两道门**（第 3 条，判据写在 domain/submit-gate.ts）：
+     * 篇幅要够（文章题/段落题至少 31 个单位，中文数汉字、英文数词），
+     * 而且不能与这一段**之前任意一次**提交一字不差。
+     *
+     * 拦下来时**什么都不做**：不标记 judging、不弹等待窗、不发请求——
+     * 只把原因用吐司说清楚（"还差多少"或"与哪一次重复"），
+     * 用户改完还能直接再按一次。
+     */
+    const verdict = checkSubmit({
+      mode: exercise.mode,
+      direction: exercise.direction,
+      answer: pageAnswer,
+      previousAnswers: records
+        .filter((record) => record.exerciseId === exercise.id && record.sectionIndex === sectionIndex)
+        .map((record) => record.answer),
+    })
+    if (!verdict.ok) {
+      showToast(verdict.message)
+      return false
+    }
 
     // 发起之前先把"这一次批的是谁"钉下来（见 commit 的注释）
     const target = {
@@ -1372,14 +1636,18 @@ export function App(): JSX.Element {
         tab={tab}
         onSelectTab={selectTab}
         onOpenSettings={() => setSettingsOpen(true)}
+        onToggleTheme={() => updateSettings({ theme: theme === 'dark' ? 'light' : 'dark' })}
+        theme={theme}
         meta={
           tab === 'records' || tab === 'favorites' ? null : (
-            <>
-              {shown?.source === 'fixture' && <span className="chip chip-warn">内置示例批改</span>}
-              <span className="chip">{DIRECTION_LABEL[exercise.direction]}</span>
-              <span className="chip">{GENRE_LABEL[currentGenre]}</span>
-              <span className="chip">{currentTopic}</span>
-            </>
+            /*
+             * 第 9 条：方向 / 文体 / 话题这三枚小标签**都删掉**了
+             * （用户点名"去掉导航栏上『中译英』『新闻编辑』『社会』这些标签字样"）。
+             * 方向在原文标题栏里有开关、文体与话题对做题没有指导意义，留着只是噪声。
+             * 「内置示例批改」留着：它是**警告**——示例批改不是真的批改，
+             * 不标出来容易让人以为自己的译文得到了评价。
+             */
+            <>{shown?.source === 'fixture' && <span className="chip chip-warn">内置示例批改</span>}</>
           )
         }
       />
@@ -1401,50 +1669,15 @@ export function App(): JSX.Element {
           onSettingsChange={updateSettings}
           favorites={favorites}
           onToggleFavorite={(favorite) => setFavorites((previous) => toggleFavorite(previous, favorite))}
+          onDelete={deleteRecord}
         />
       ) : (
         <>
           {/*
-            文章栏：领域下拉 · 选择文章 · 方向切换（见 ArticleBar）。
-            句子栏只用领域（见 DomainBar）；术语栏由术语库供题、不需要这一行控件。
+            领域与方向这两颗控件**不再有自己的一行**（第 7 条）：它们挪进了原文标题栏，
+            紧挨着「原文」三个字（见下面 SourcePane 的 `range` 参数与 DomainSelect.tsx）。
+            文章栏方向可切；句子栏只给领域——句子题的方向由句子本身决定，不需要人来选。
           */}
-          {tab === 'article' && (
-            <ArticleBar
-              selection={articleSelection}
-              onChange={(next) => {
-                /*
-                 * 换领域或换方向时自动落到那一格的第一篇，免得停在上一个格子那篇上让人以为没生效。
-                 * 落点只存在这一格的选择里（领域 + 方向），"上次看的是哪一篇"由 last-view.ts 记，
-                 * 因此切过去之后自然会记住这一篇。
-                 */
-                setArticleSelection(next)
-                saveSelection(next)
-                const first = articlesOf(next.domain, next.direction)[0]
-                if (first) selectExercise(first.id)
-                // 用户点领域是为了挑文章，所以顺手把选文章的弹窗打开（方向切换不打开）
-                if (next.domain !== articleSelection.domain) setArticlePickerOpen(true)
-              }}
-            />
-          )}
-
-          {/*
-            句子栏只要**领域**：题目从该领域的文章里自动切句（见 sentence-exercise.ts）。
-            刻意不给"选文章"与"方向"——用户的要求就是句子题只能选领域；
-            方向由句子本身是中文还是英文决定，不需要人来选。
-            「换一句」也不在这一行：它挪到了「原文」标题栏右侧（与文章栏的「选择文章」同一个位置）。
-          */}
-          {tab === 'sentence' && (
-            <DomainBar
-              domain={articleSelection.domain}
-              onChange={(domain) => {
-                const next = { ...articleSelection, domain }
-                setArticleSelection(next)
-                saveSelection(next)
-                // 换领域后换一道该领域的句子题，免得停在上个领域的那句上让人以为没生效
-                selectExercise(sentenceExerciseId(domain, 1))
-              }}
-            />
-          )}
 
           <main className={`split${split ? ' split-manual' : ''}`} ref={splitRef} style={splitStyle}>
             <div className="split-row split-row-top">
@@ -1466,16 +1699,53 @@ export function App(): JSX.Element {
               multiSection={multiSection}
               sourceSectionCount={sourceSections.length}
               sectionIndex={sectionIndex}
-              gradedPages={gradedPages}
               pageStateHint={PAGE_STATE_HINT[pageState]}
               nextHint={nextPageHint({ hasAnswer: currentAnswer.trim().length > 0, pageState })}
               currentSection={currentSection}
               currentSource={currentSource}
               currentPairs={currentPairs}
-              compare={compareSource}
               sourceMark={sourceMark}
-              onToggleCompare={setCompareSource}
               onSectionChange={(next) => void goToSection(next)}
+              /*
+               * 「领域 × 方向」：文章栏两个都给，句子栏只给领域
+               * （见 SourcePane 的 range 说明）。术语栏与"自己贴的题"不给——
+               * 它们与领域无关，给一个点了没反应的控件比不给更糟。
+               */
+              {...(tab === 'article'
+                ? {
+                    range: {
+                      selection: articleSelection,
+                      withDirection: true,
+                      onChange: (next: ArticleSelection) => {
+                        /*
+                         * 换领域或换方向时自动落到那一格的第一篇，免得停在上一个格子那篇上让人以为没生效。
+                         * 落点只存在这一格的选择里（领域 + 方向），"上次看的是哪一篇"由 last-view.ts 记，
+                         * 因此切过去之后自然会记住这一篇。
+                         */
+                        setArticleSelection(next)
+                        saveSelection(next)
+                        const first = articlesOf(next.domain, next.direction)[0]
+                        if (first) selectExercise(first.id)
+                        // 用户点领域是为了挑文章，所以顺手把选文章的弹窗打开（方向切换不打开）
+                        if (next.domain !== articleSelection.domain) setArticlePickerOpen(true)
+                      },
+                    },
+                  }
+                : null)}
+              {...(tab === 'sentence'
+                ? {
+                    range: {
+                      selection: articleSelection,
+                      withDirection: false,
+                      onChange: (next: ArticleSelection) => {
+                        setArticleSelection(next)
+                        saveSelection(next)
+                        // 换领域后换一道该领域的句子题，免得停在上个领域的那句上让人以为没生效
+                        selectExercise(sentenceExerciseId(next.domain, 1))
+                      },
+                    },
+                  }
+                : null)}
               {...(isTermExercise ? { terms: activeTerms } : null)}
               {...(tab === 'article' ? { onPickArticle: () => setArticlePickerOpen(true) } : null)}
               {...(tab === 'sentence'
@@ -1610,8 +1880,14 @@ export function App(): JSX.Element {
                 // 放开之后这一页要重新按「提交批改」才会再批一次——翻页不会替他提交。
                 // 不弹提示语：按钮文案与页面状态已经把这件事说清楚了（用户明确要去掉这类废话）。
                 dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
-                // 这一页的结果作废了，进度里也要撤掉——否则下次打开会跳过它
-                setProgress((previous) => clearGraded(previous, exercise.id, sectionIndex))
+                /*
+                 * ⚠️ 这里**不再**把这一页从"哪几页批过"里撤掉（用户拍板：进度只增不减）。
+                 *
+                 * 早先这一行会调 clearGraded，理由是"结果作废了，进度里也该撤掉"。
+                 * 用户看过之后选了另一条：**批过就算批过**——那条进度还管着
+                 * 「选择文章」里的「已完成」标记与"整篇练完的排在最后"，撤掉会让标记闪来闪去。
+                 * （删记录那条路不一样：那一次是真的没了，所以照样撤进度，见 deleteRecord。）
+                 */
                 setOpenRecord(null)
                 setSelection(null)
                 setNotice(null)
@@ -1625,13 +1901,17 @@ export function App(): JSX.Element {
                  * 正在写的草稿一个字都不动。
                  */
                 const record = gradeHistory.find((entry) => entry.id === id)
-                setViewingGradeId(record?.id ?? null)
+                setViewingGrade(exercise.id, sectionIndex, record?.id ?? null)
                 setSelection(null)
                 setNotice(null)
               }}
               onBackToWriting={() => {
-                setViewingGradeId(null)
+                setViewingGrade(exercise.id, sectionIndex, null)
                 setSelection(null)
+              }}
+              onDeleteRecord={(id) => {
+                const record = records.find((item) => item.id === id)
+                if (record) deleteRecord(record)
               }}
               onLevelChange={setLevel}
               onSubmit={() => void submitPage(sectionIndex)}
@@ -1715,6 +1995,21 @@ export function App(): JSX.Element {
         />
       )}
 
+      {/*
+        吐司（第 3 条）：**提交被拦住**时把原因说清楚——"还差几个单位"或者
+        "与之前哪一次一字不差"。位置在**底部居中**，与右下角那条"批改完成通知"分开：
+        那条是等人点的，这条是看一眼就走的，摆在一起会让人以为它们是同一类东西。
+        `key` 用自增 id：同一句话连说两次也会重新播放（不然第二次像没反应）。
+      */}
+      {toast && (
+        <div className="toast" role="status" aria-live="polite" key={toast.id}>
+          <span className="toast-text">{toast.message}</span>
+          <button type="button" className="toast-close" onClick={() => setToast(null)} aria-label="关掉提示">
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* 设置：行距、是否显示填补的文字、译文默认视图。纯界面偏好，存在浏览器里 */}
       {settingsOpen && (
         <SettingsModal settings={settings} update={updateSettings} onClose={() => setSettingsOpen(false)} />
@@ -1727,6 +2022,7 @@ export function App(): JSX.Element {
           direction={articleSelection.direction}
           activeArticleId={activeArticle ? activeArticle.id : null}
           progress={progress}
+          maxScores={maxScoreByArticle}
           onSwitchDirection={(direction) => {
             const next: ArticleSelection = { domain: articleSelection.domain, direction }
             setArticleSelection(next)

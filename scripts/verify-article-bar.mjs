@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 验收「文章库」这一行的界面：领域下拉、方向切换、选文章弹窗、以及选中之后的界面。
  *
  * 为什么不能只靠冒烟测试：冒烟测试跑在 jsdom 里，Click 与下拉都是模拟事件；
@@ -151,18 +151,42 @@ try {
   if (!mounted) throw new Error('界面没有挂载')
   await sleep(500)
 
-  console.log('\n=== 1. 那一行是否成型 ===')
+  console.log('\n=== 1. 范围控件现在长在原文标题栏里 ===')
   const bar = await cdp.evaluate(
     `({
+       /*
+        第 7 条之后这里不再有那一行：领域与方向都搬进了原文标题栏。
+        因此判据反过来——顶层不该再有 .article-bar（那一行整个删掉了）。
+       */
        hasBar: !!document.querySelector('.article-bar'),
-       domainLabel: document.querySelector('.domain-trigger-value')?.textContent?.trim() ?? null,
-       dirButtons: [...document.querySelectorAll('.dir-btn')].map((b) => b.textContent.trim()),
-       dirActive: document.querySelector('.dir-btn-active')?.textContent?.trim() ?? null,
-       dirDisabled: [...document.querySelectorAll('.dir-btn')].map((b) => b.disabled),
+       在原文标题栏: (() => {
+         const head = document.querySelector('.pane-source .pane-head');
+         if (!head) return { 有原文标题栏: false };
+         const children = [...head.children];
+         const domain = head.querySelector('.domain-select');
+         const dir = head.querySelector('.dir-switch');
+         return {
+           有原文标题栏: true,
+           领域在标题栏里: !!domain,
+           方向在标题栏里: !!dir,
+           /* 领域必须**紧挨「原文」**（用户原话"紧靠原文的右边"）：
+              它是标题栏 meta 组里的**第一个**控件（标题右边第一样东西就是它）。 */
+           领域紧挨标题: (() => {
+              const meta = head.querySelector('.head-meta');
+              return !!(meta && domain && meta.firstElementChild === domain);
+            })(),
+           横向顺序: children.map((node) =>
+             node.tagName === 'H2' ? '原文' : (node.className || '').split(' ')[0],
+           ),
+         };
+       })(),
+       domainLabel: document.querySelector('.pane-source .domain-trigger-value')?.textContent?.trim() ?? null,
+       dirButtons: [...document.querySelectorAll('.pane-source .dir-btn')].map((b) => b.textContent.trim()),
+       dirActive: document.querySelector('.pane-source .dir-btn-active')?.textContent?.trim() ?? null,
+       dirDisabled: [...document.querySelectorAll('.pane-source .dir-btn')].map((b) => b.disabled),
        hasPickButton: [...document.querySelectorAll('.btn')].some((b) => b.textContent.includes('选择文章')),
        /*
-        用户要求「选择文章」放在**原文标题栏的右侧、靠左**（与「换一换 / AI 出题」同一行，
-        但排在它们前面），而不是原来那一行；这里连位置一起验。
+        「选择文章」仍要在**原文标题栏**里（只是排在领域与方向之后——头一组的位置让给了范围控件）。
        */
        pickInSourceHead: (() => {
          const head = document.querySelector('.pane-source .pane-head');
@@ -172,13 +196,18 @@ try {
          return { 在原文标题栏: true, 该栏按钮顺序: buttons };
        })(),
        topbarHasSettings: [...document.querySelectorAll('.topbar .btn')].some((b) => b.textContent.trim() === '设置'),
+       /* 第 9 条：顶栏那三枚小标签（方向 / 文体 / 话题）都删掉了 */
+       topbarChips: [...document.querySelectorAll('.topbar .chip')].map((c) => c.textContent.trim()),
        noOldCaseStrip: !document.querySelector('.case-strip'),
        noOldCaseTabs: document.querySelectorAll('.case-tab').length === 0,
      })`,
   )
-  check(bar.hasBar === true, '文章库那一行出现了')
+  check(bar.hasBar === false, '顶部那条「文章库那一行」整个删掉了（第 7 条：领域挪进原文标题栏）')
+  check(bar.在原文标题栏?.领域在标题栏里 === true, '领域下拉现在在**原文标题栏**里')
+  check(bar.在原文标题栏?.领域紧挨标题 === true, '它**紧挨着「原文」三个字**（用户原话"紧靠原文的右边"）', JSON.stringify(bar.在原文标题栏?.横向顺序))
+  check(bar.在原文标题栏?.方向在标题栏里 === true, '方向切换也在原文标题栏里（第 7 条追问：整条删掉，方向一起搬）')
   check(bar.domainLabel === '社会', `老按钮条已去掉、领域显示默认值（${bar.domainLabel}）`)
-  check(bar.dirButtons.join(',') === '中译英,英译中', `中间是方向切换：${bar.dirButtons.join(' / ')}`)
+  check(bar.dirButtons.join(',') === '中译英,英译中', `方向切换还是两段：${bar.dirButtons.join(' / ')}`)
   check(bar.dirActive === '英译中', `默认方向为英译中（${bar.dirActive}）`)
   check(
     bar.dirDisabled.includes(false),
@@ -188,13 +217,12 @@ try {
   check(bar.hasPickButton === true, '有「选择文章」入口')
   check(
     bar.pickInSourceHead?.在原文标题栏 === true,
-    '「选择文章」在**原文标题栏**里（不是原来那一行）',
+    '「选择文章」在**原文标题栏**里',
     JSON.stringify(bar.pickInSourceHead),
   )
   check(
-    (bar.pickInSourceHead?.该栏按钮顺序 ?? [])[0] === '选择文章',
-    '它排在原文标题栏里最靠左的位置（在「换一换 / AI 出题」前面）',
-    JSON.stringify(bar.pickInSourceHead?.该栏按钮顺序),
+    bar.topbarChips.every((chip) => !['中译英', '英译中', '新闻编译', '社会'].includes(chip)),
+    `顶栏不再挂方向/文体/话题三枚标签（现在的芯片：${JSON.stringify(bar.topbarChips)}）`,
   )
   check(bar.topbarHasSettings === true, '「设置」仍在顶栏（每一栏都够得着）')
   check(bar.noOldCaseStrip === true && bar.noOldCaseTabs === true, '旧的一排题目按钮已彻底移除')
@@ -290,6 +318,26 @@ try {
     '卡片上不再显示"来源媒体"（这批材料没有来源，也不该编一个）',
     modal.cards.map((c) => c.meta).join(' ｜ '),
   )
+  /*
+   * 最高分标签（第 12 条）：每篇文章都挂一枚，没得分的显示 0 分。
+   * 这一轮前面清过 localStorage，因此这里量的是"0 分也照实写出来"这件事；
+   * "批过之后会变成真实分数"由 verify-per-page 在批改之后量。
+   */
+  const bestBadges = await cdp.evaluate(
+    `[...document.querySelectorAll('.article-card')].map((card) => ({
+       title: card.querySelector('.article-card-title')?.textContent?.trim() ?? '',
+       best: card.querySelector('.article-card-best')?.textContent?.trim() ?? null,
+     }))`,
+  )
+  check(
+    bestBadges.every((item) => /^最高分\s*\d+\s*分$/.test(item.best ?? '')),
+    `每张卡片都有一枚「最高分 N 分」标签（${JSON.stringify(bestBadges.map((item) => item.best))}）`,
+  )
+  check(
+    bestBadges.every((item) => (item.best ?? '').includes('最高分 0 分')),
+    '还没练过 / 没得分的那些显示的是 0 分（不是把标签藏起来）',
+  )
+  console.log(`      最高分标签：${bestBadges[0]?.best ?? ''}`)
   console.log(`      示例卡片：${modal.cards[0]?.title ?? ''}`)
   console.log(`      卡片元信息：${modal.cards[0]?.meta ?? ''}`)
 
@@ -302,50 +350,119 @@ try {
        sourceText: (document.querySelector('.pane-source .source-text')?.textContent ?? ''),
        hasInput: !!document.querySelector('.answer-input'),
        buttons: [...document.querySelectorAll('.pane-source .pane-head .btn')].map((b) => b.textContent.trim()),
-       pairs: document.querySelectorAll('.pair-list .pair').length,
+       /*
+        第 7 条：标题栏那颗「对照译文」按钮删掉了，参考译文改成**正文末尾可折叠的一块**。
+        这里量三件事：按钮没了、折叠块在（当前这一页确实有参考译文时）、默认是**折着**的。
+       */
+       hasCompareButton: [...document.querySelectorAll('.pane-source .pane-head .btn')].some(
+         (b) => b.textContent.includes('对照译文'),
+       ),
+       pairs: document.querySelectorAll('.pair-list').length,
        referenceBlock: !!document.querySelector('.reference'),
+       referenceOpen: document.querySelector('.reference')?.open === true,
+       referenceSummary: document.querySelector('.reference summary')?.textContent?.trim() ?? null,
+       /* 它还必须在**正文之后**（用户原话"原文结束后有『参考译文』几个字"） */
+       afterSourceText: (() => {
+         const text = document.querySelector('.pane-source .source-text');
+         const ref = document.querySelector('.reference');
+         if (!text || !ref) return null;
+         return !!(text.compareDocumentPosition(ref) & Node.DOCUMENT_POSITION_FOLLOWING);
+       })(),
      })`,
   )
   check(picked.modalClosed === true, '选完之后弹窗自动关闭')
   check(picked.sourceText.length > 60, `原文栏加载了选中的那一页（${picked.sourceText.length} 字符）`)
   check(picked.hasInput === true, '可以开始作答（输入框在）')
-  check(picked.buttons.includes('对照译文'), '原文标题栏有「对照译文」按钮（文章库自带参考译文）', picked.buttons.join(' / '))
-  check(
-    picked.pairs === 0 && picked.referenceBlock === false,
-    '默认只看原文：对照没铺开，正文下面也没有那个旧的折叠块',
-  )
+  check(picked.hasCompareButton === false, '标题栏那颗「对照译文」按钮已经删掉（第 7 条）')
+  check(picked.referenceBlock === true, '正文末尾有「参考译文」折叠块（文章库自带参考译文）')
+  check(picked.referenceSummary === '参考译文', `折叠块上就写着「参考译文」（实际 ${picked.referenceSummary}）`)
+  check(picked.referenceOpen === false, '默认是**折着**的（不占地方）')
+  check(picked.afterSourceText === true, '它在**正文之后**（用户原话："原文结束后有『参考译文』几个字"）')
+  check(picked.pairs === 0, '旧的"一段原文一段译文交替铺开"那条路已经没有了')
 
-  console.log('\n=== 4b. 「对照译文」把这一页铺成一段原文、一段译文 ===')
-  await cdp.evaluate(
-    `[...document.querySelectorAll('.pane-source .pane-head .btn')].find((b) => b.textContent.includes('对照译文')).click()`,
+  console.log('\n=== 4b. 点「参考译文」铺开、再点折回（第 7 条）===')
+  const opened = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const summary = document.querySelector('.reference summary');
+       if (!summary) return { error: '没有「参考译文」这一行' };
+       summary.click();
+       await sleep(300);
+       const text = document.querySelector('.reference p')?.textContent?.trim() ?? '';
+       const afterOpen = {
+         打开了: document.querySelector('.reference')?.open === true,
+         译文长度: text.length,
+         译文片段: text.slice(0, 40),
+       };
+       summary.click();
+       await sleep(300);
+       const afterClose = {
+         折叠回去了: document.querySelector('.reference')?.open === false,
+         译文还看得见: (document.querySelector('.reference p')?.textContent?.trim() ?? '').length > 0,
+       };
+       return { afterOpen, afterClose };
+     })()`,
   )
-  await sleep(400)
-  const compared = await cdp.evaluate(
+  check(opened?.afterOpen?.打开了 === true, '点一下就铺开', JSON.stringify(opened?.afterOpen))
+  check(
+    (opened?.afterOpen?.译文长度 ?? 0) > 20,
+    `铺开的是这一页的参考译文（${opened?.afterOpen?.译文长度} 字：${opened?.afterOpen?.译文片段}…）`,
+  )
+  check(opened?.afterClose?.折叠回去了 === true, '再点同一处就折回去（用户原话："点击相同位置，参考译文折叠回来"）')
+
+  console.log('\n=== 4c. 没有参考译文的题连这四个字都不出现 ===')
+  const noReference = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       /* 自己贴一篇：贴进来的题没有参考译文（见 custom.ts） */
+       const tab = [...document.querySelectorAll('.mode-tab')].find((b) => b.textContent.trim() === '自定义');
+       if (tab) tab.click();
+       await sleep(500);
+       const paste = [...document.querySelectorAll('.btn')].find((b) => b.textContent.includes('贴') || b.textContent.includes('重新贴'));
+       if (paste) paste.click();
+       await sleep(400);
+       const area = document.querySelector('.gen-textarea');
+       if (area) {
+         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+         setter.call(area, '第一段自己贴进来的原文，用来验参考译文那块不出现。\\n\\n第二段也要有，这样题型会判成段落题。');
+         area.dispatchEvent(new Event('input', { bubbles: true }));
+         await sleep(200);
+         const apply = [...document.querySelectorAll('.raw-modal-backdrop .gen-foot .btn')].find(
+           (b) => b.textContent.includes('开始') || b.textContent.includes('确定') || b.textContent.includes('导入'),
+         );
+         if (apply) apply.click();
+         await sleep(700);
+       }
+       return {
+         有折叠块: !!document.querySelector('.reference'),
+         有原文: (document.querySelector('.pane-source .source-text')?.textContent ?? '').length > 10,
+       };
+     })()`,
+  )
+  check(
+    noReference?.有原文 === true ? noReference?.有折叠块 === false : true,
+    '自己贴的题没有参考译文，因此连「参考译文」四个字都不出现',
+    JSON.stringify(noReference),
+  )
+  /*
+   * 切回「文章」栏再往下走：上面为了造一道"没有参考译文"的题切到了「自定义」栏，
+   * 而后面几节量的都是文章栏上的东西（方向切换、换一换……）。
+   */
+  await cdp.evaluate(
+    `[...document.querySelectorAll('.mode-tab')].find((b) => b.textContent.trim() === '文章').click()`,
+  )
+  await sleep(700)
+  const backToArticle = await cdp.evaluate(
     `({
-       pairs: document.querySelectorAll('.pair-list .pair').length,
-       sources: [...document.querySelectorAll('.pair-list .pair-source')].map((p) => p.textContent.trim().length),
-       references: [...document.querySelectorAll('.pair-list .pair-reference')].map((p) => p.textContent.trim().length),
-       pressed: document.querySelector('.pane-source .pane-head .btn[aria-pressed="true"]')?.textContent?.trim() ?? null,
-       plainTextGone: !document.querySelector('.pane-source .source-text'),
+       有原文: (document.querySelector('.pane-source .source-text')?.textContent ?? '').length > 60,
+       又出现参考译文块: !!document.querySelector('.reference'),
      })`,
   )
   check(
-    compared.pairs >= 1 && compared.pairs === compared.sources.length && compared.pairs === compared.references.length,
-    `原封原文与译文一段一段交替（${compared.pairs} 对）`,
-    JSON.stringify(compared),
+    backToArticle?.有原文 === true && backToArticle?.又出现参考译文块 === true,
+    '切回文章栏，参考译文块又回来了（它跟着"这一页有没有译文"走）',
+    JSON.stringify(backToArticle),
   )
-  check(compared.references.every((size) => size > 0), '每一对都有译文（译文与原文逐段对齐）')
-  check(compared.pressed === '对照译文', '按钮显示为"按下"的状态')
-  check(compared.plainTextGone === true, '对照铺开时不再另画一遍纯原文（不会重复显示）')
-  // 再点一下回到只看原文，后面的检查都依赖 .source-text
-  await cdp.evaluate(
-    `[...document.querySelectorAll('.pane-source .pane-head .btn')].find((b) => b.textContent.includes('对照译文')).click()`,
-  )
-  await sleep(400)
-  const backToPlain = await cdp.evaluate(
-    `({ text: (document.querySelector('.pane-source .source-text')?.textContent ?? '').length, pairs: document.querySelectorAll('.pair-list').length })`,
-  )
-  check(backToPlain.text > 60 && backToPlain.pairs === 0, '再点一下回到只看原文')
 
   console.log('\n=== 5. 方向切换确实换了一批文章（中译英现在也有文章了）===')
   const englishSource = await cdp.evaluate(
@@ -436,6 +553,9 @@ try {
          id: document.querySelector('.app')?.getAttribute('data-exercise-id') || '',
          page: m ? Number(m[1]) : 1,
          chips: [...document.querySelectorAll('.pane-source .chip')].map((c) => c.textContent.trim()),
+         落盘进度: JSON.parse(window.localStorage.getItem('translation-practice.article-progress.v1') || '{}')[
+           document.querySelector('.app')?.getAttribute('data-exercise-id') || ''
+         ]?.graded ?? [],
          hasResult: !!document.querySelector('.annotated-lines'),
        };
      })()`,
@@ -446,10 +566,19 @@ try {
     `下次打开从没有批完的那一段继续：第 ${resumed.page} 页（已批 ${partial} 页）`,
     JSON.stringify(resumed),
   )
+  /*
+   * 「已批 N 页」那枚芯片**按用户要求删掉了**（第 7 条：去掉"已批x页""官方建议xx分钟"这些标签），
+   * 因此这条断言改成量它**背后的那份进度**：进度照旧落盘、照旧决定落点，
+   * 只是不再画在原文栏上。删的若是这份进度本身，"从没批完的那一段继续"就失效了。
+   */
   check(
-    resumed.chips.some((text) => text.includes(`已批 ${partial} 页`)),
-    '原文栏报出的是**这一篇**已批几页（进度落盘之后刷新还在）',
-    resumed.chips.join(' ｜ '),
+    resumed.chips.every((text) => !text.includes('已批') && !text.includes('官方建议')),
+    `原文栏不再显示「已批 N 页」「官方建议 N 分钟」两枚芯片（现在的芯片：${JSON.stringify(resumed.chips)}）`,
+  )
+  check(
+    Array.isArray(resumed.落盘进度) && resumed.落盘进度.length === partial,
+    `进度本身照旧落盘、照旧管着落点（这一篇记着已批 ${JSON.stringify(resumed.落盘进度)} 页）`,
+    JSON.stringify(resumed.落盘进度),
   )
   check(resumed.hasResult === false, '接着做的那一页是待批改的（不会把上一页的结果搬过来）')
 
@@ -558,6 +687,91 @@ try {
   check(sentenceLanding.tab.includes('句子'), `打开就落在句子栏（${sentenceLanding.tab}）`)
   check(sentenceLanding.id === 'sentence-v2-ecology-2', `落在那一道句子题上（${sentenceLanding.id}）`)
   check(sentenceLanding.hasInput === true, '照样能直接作答')
+
+  console.log('\n=== 8c. 暗夜模式（第 9 条）===')
+  /*
+   * 用户原话："给整个网站添加暗夜模式，在导航栏最右边（设置按钮挪到最左边，
+   * 暗夜模式按钮在设置按钮的右边）切换。"随后又改口成"设置最右边，暗夜次右边"——以最后一次为准。
+   * 默认跟随系统，手动切过之后记住（见 settings.ts 的 resolveTheme）。
+   */
+  const themeUi = await cdp.evaluate(
+    `(() => {
+       const buttons = [...document.querySelectorAll('.topbar-right .btn')].map((b) => b.textContent.trim());
+       const dark = document.querySelector('.theme-toggle');
+       return {
+         buttons,
+         theme: document.documentElement.getAttribute('data-theme'),
+         darkIsLast: (() => {
+           const all = [...document.querySelectorAll('.topbar-right .btn')];
+           return all.length >= 2 && all[all.length - 1].textContent.trim() === '设置';
+         })(),
+         darkLabel: dark ? dark.textContent.trim() : null,
+         paper: getComputedStyle(document.body).backgroundColor,
+         /* 设置按钮在暗夜按钮**右边**（用户最后一句："设置最右边，暗夜次右边"） */
+         darkBeforeSettings: (() => {
+           const all = [...document.querySelectorAll('.topbar-right .btn')];
+           const darkAt = all.findIndex((b) => b.textContent.includes('暗夜') || b.textContent.includes('日间'));
+           const setAt = all.findIndex((b) => b.textContent.trim() === '设置');
+           return darkAt >= 0 && setAt >= 0 && darkAt < setAt;
+         })(),
+       };
+     })()`,
+  )
+  check(themeUi.buttons.includes('设置'), `顶栏右侧仍有「设置」（${JSON.stringify(themeUi.buttons)}）`)
+  check(themeUi.darkLabel !== null, `顶栏右侧有暗夜开关（写着「${themeUi.darkLabel}」）`)
+  check(themeUi.darkBeforeSettings === true && themeUi.darkIsLast === true, '顺序是「暗夜 · 设置」——设置在最右（用户最后一句）')
+  check(['light', 'dark'].includes(themeUi.theme), `首屏就定好了主题（data-theme=${themeUi.theme}，不会先闪一下白屏）`)
+
+  const toggled = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const before = document.documentElement.getAttribute('data-theme');
+       document.querySelector('.theme-toggle').click();
+       await sleep(400);
+       const after = document.documentElement.getAttribute('data-theme');
+       return {
+         before,
+         after,
+         bodyBackground: getComputedStyle(document.body).backgroundColor,
+         saved: JSON.parse(window.localStorage.getItem('translation-practice.settings.v1') || '{}').theme ?? null,
+         label: document.querySelector('.theme-toggle')?.textContent?.trim() ?? '',
+       };
+     })()`,
+  )
+  check(toggled.before !== toggled.after, `点一下就换了主题（${toggled.before} → ${toggled.after}）`)
+  check(
+    (toggled.after === 'dark' && toggled.saved === 'dark') || (toggled.after === 'light' && toggled.saved === 'light'),
+    `手动切过之后记下来了（存的是 ${toggled.saved}，不再跟随系统）`,
+  )
+  /*
+   * 底色真的换了：不写死具体色值（那是样式表的细节，改配色就会假红），
+   * 只要求"暗夜时整体是深色、日间时整体是浅色"——按通道平均值判，一眼能量出来的那种。
+   */
+  const backgroundIsDark = (() => {
+    const channels = String(toggled.bodyBackground).match(/\d+/g)?.map(Number) ?? []
+    if (channels.length < 3) return null
+    const average = (channels[0] + channels[1] + channels[2]) / 3
+    return average < 90
+  })()
+  check(
+    backgroundIsDark !== null && backgroundIsDark === (toggled.after === 'dark'),
+    `${toggled.after === 'dark' ? '暗夜' : '日间'}时整体底色确实是${toggled.after === 'dark' ? '深' : '浅'}色（body 底色 ${toggled.bodyBackground}）`,
+  )
+  await cdp.send('Page.reload')
+  await sleep(2200)
+  const themeAfterReload = await cdp.evaluate(
+    `({
+       theme: document.documentElement.getAttribute('data-theme'),
+       label: document.querySelector('.theme-toggle')?.textContent?.trim() ?? '',
+     })`,
+  )
+  check(
+    themeAfterReload.theme === toggled.after,
+    `刷新之后还是刚选的那一套（${themeAfterReload.theme}），不会弹回系统那一套`,
+  )
+  // 切回原来那一套，后面的截图与断言都在同一个主题下跑
+  await cdp.evaluate(`document.querySelector('.theme-toggle').click()`)
+  await sleep(400)
 
   console.log('\n=== 9. 页面错误 ===')
   check(cdp.errors.length === 0, '全程没有页面异常', cdp.errors.join(' ｜ '))

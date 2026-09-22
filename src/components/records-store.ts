@@ -135,3 +135,20 @@ export function clearRecords(): RecordView[] {
   }
   return []
 }
+
+/**
+ * 删掉一条记录（用户要求：批改记录下拉里点叉号删掉，练习记录里同步消失）。
+ *
+ * 返回**实际存下来的**那份列表（与 saveRecords 同一套约定，调用方要拿它覆盖自己的 state）。
+ *
+ * 这里只有一个"删"的动作、没有"软删除"：练习记录与「批改记录」下拉读的是同一份数据
+ * （见 GradeHistoryPicker 的文件头），所以删一处就等于两处都没了——那正是用户要的
+ * "练习记录同步删除"，不需要第二份代码去对齐。
+ *
+ * 连带的事情（进度、正在看的那一次、屏幕上还摆着的那份结果）**不在这里做**：
+ * 那些是界面的事，写在 App 里（见 deleteRecord 的调用点），
+ * 免得一个纯存储模块反过来要知道页号与下拉选中了什么。
+ */
+export function removeRecord(records: readonly RecordView[], id: string): RecordView[] {
+  return saveRecords(records.filter((record) => record.id !== id))
+}

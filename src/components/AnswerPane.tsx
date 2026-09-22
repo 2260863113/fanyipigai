@@ -12,6 +12,9 @@
  * 因此批过的页先只读，由用户明确说一句"我要改这一页"（`onUnlock`）才放开：
  * 那一刻结果作废、草稿留着，改完自己按「提交批改」。
  *
+ * 那颗按钮与「提交批改」是**同一颗**（用户第 2 条要求）：批改之后它原地改名叫「返回编辑」，
+ * 点下去回到可写状态，名字随即变回「提交批改」——不再像早先那样"这颗消失、那颗冒出来"。
+ *
  * ## 交出去之后也一样只读
  *
  * 一页交了、结果还没回来时（`pageState === 'judging'`）同样只读：
@@ -96,6 +99,7 @@ export function AnswerPane({
   onUnlock,
   onViewAttempt,
   onBackToWriting,
+  onDeleteRecord,
   onLevelChange,
   onSubmit,
   onSubmitFixture,
@@ -143,6 +147,8 @@ export function AnswerPane({
   onViewAttempt: (id: string) => void
   /** 从历史视图回到作答框 */
   onBackToWriting: () => void
+  /** 下拉里点叉号：删掉那一次批改（练习记录里同步消失，第 11 条） */
+  onDeleteRecord: (id: string) => void
   onLevelChange: (level: PolishLevel) => void
   onSubmit: () => void
   onSubmitFixture: () => void
@@ -164,13 +170,18 @@ export function AnswerPane({
   /** 这一页已经交出去、结果还没回来：作答框只读，免得批注画在对不上的文字上 */
   const frozen = pageState === 'judging'
   /**
-   * 标题栏里那一块**作答控件**（档位 + 提交按钮）要不要画。
+   * 标题栏里那一块**作答控件**（档位 + 那颗按钮）要不要画。
    *
-   * ⚠️ 它比 `editing` 宽一点：**交出去之后也要画**（按钮变成按不动的"批改中…"）。
-   * 把整块藏掉当然也能达到"批改中不能提交"，但用户看到的是"按钮凭空消失了"，
-   * 而这一刻他最想知道的是"交上去了没有"——一颗写着"批改中…"的灰按钮正好回答它。
+   * ⚠️ 它比 `editing` 宽一点，两种"不让你写"的状态也要画：
+   *   - **交出去之后**（`frozen`）：按钮变成按不动的"批改中…"。把整块藏掉当然也能达到
+   *     "批改中不能提交"，但用户看到的是"按钮凭空消失了"，而这一刻他最想知道的是
+   *     "交上去了没有"——一颗写着"批改中…"的灰按钮正好回答它。
+   *   - **批改之后**（`graded`）：按钮原地变成「返回编辑」（用户第 2 条要求）。
+   *     以前这一档是"提交批改整块消失、另一个位置冒出一颗「返回编辑」"，
+   *     用户看到的是按钮跳了地方；现在就是同一颗按钮换了个名字。
    */
-  const showAnswerControls = editing || frozen
+  const backToEditing = !fromHistory && pageState === 'graded'
+  const showAnswerControls = editing || frozen || backToEditing
   /** 提交按钮按不下去的两种原因（文案与悬停说明分开写） */
   const blocked = judgingThisPage || busyElsewhere
   const submitTitle = judgingThisPage
@@ -192,26 +203,11 @@ export function AnswerPane({
           */}
           {showResult && <AnswerViewSwitch view={settings.answerView} onChange={onSettingsChange} locked={refine !== undefined} />}
           {/*
-            批过的页是只读的，所以这里给的是「返回编辑」而不是可写的输入框。
-            放开之后（unlocked）按钮消失，页面重新可写，并且**不再自动提交**。
-            正在看历史（fromHistory）时不给它：那一刻显示的不是"当前这一页的结果"，
-            按「返回编辑」会让人以为在放开这一页——要回作答请用旁边的「回到作答」。
-          */}
-          {!fromHistory && pageState === 'graded' && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={onUnlock}
-              title="放开这一页重写；这一页的结果会作废，改完需要自己按「提交批改」"
-            >
-              返回编辑
-            </button>
-          )}
-          {/*
             「批改记录」下拉：这一页之前每一次批改都在里面，选哪一次就显示哪一次的结果。
             它取代了原来那颗「查看上次批改」按钮与「已改过 · 待提交」提示芯片
             （用户明确要求：去掉提示、改成下拉）——旧按钮只在"一个字都没改"时才出现，
             而这条记录是落盘的，改过字也照样能回看。
+            每一条右边还有一颗叉号可以删掉它（第 11 条），练习记录里同步消失。
 
             ⚠️ 早先它只在 `editing` 时出现，那是自动提交年代的写法：那会儿批完就自动翻页，
             人很少停在"已批改"这一档上。现在批完就停在这一页（只读看结果），
@@ -224,6 +220,7 @@ export function AnswerPane({
               viewingId={viewingRecordId}
               onView={onViewAttempt}
               onBackToWriting={onBackToWriting}
+              onDelete={onDeleteRecord}
             />
           )}
           {showAnswerControls && (
@@ -241,15 +238,31 @@ export function AnswerPane({
                   </button>
                 ))}
               </div>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={onSubmit}
-                disabled={!hasAnswer || blocked}
-                title={submitTitle}
-              >
-                {judgingThisPage ? '批改中…' : '提交批改'}
-              </button>
+              {/*
+                同一颗按钮、两个名字（用户第 2 条要求）：
+                批改之后它写「返回编辑」，点下去回到可写状态，名字随即变回「提交批改」。
+                位置、字号、颜色都不动——用户要的就是"还是那颗按钮"。
+              */}
+              {backToEditing ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={onUnlock}
+                  title="放开这一页重写；改完自己按「提交批改」才会再批一次"
+                >
+                  返回编辑
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={onSubmit}
+                  disabled={!hasAnswer || blocked}
+                  title={submitTitle}
+                >
+                  {judgingThisPage ? '批改中…' : '提交批改'}
+                </button>
+              )}
             </>
           )}
         </div>

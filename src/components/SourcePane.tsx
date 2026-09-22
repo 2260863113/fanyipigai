@@ -5,17 +5,25 @@
  * 换掉就不是他自己贴的那篇了，只留一个「重新贴一篇」。
  * 内置题才有备选篇目与 AI 现出的题，因此那两个按钮也在这一栏。
  *
- * ## 「对照」按钮（用户要求）
+ * ## 标题栏里现在有什么（用户第 7 条）
  *
- * 标题栏里那颗按钮把当前这一页**铺成「一段原文、一段译文」交替**，再点一下回到只看原文。
- * 它在**所有带参考译文的题**上都出现（文章库、内置示例题、AI 出题的题），
- * 而不是只有文章栏才有——同一个"看参考译文"的动作在全站只有一套交互。
+ * 从左到右：`原文` → **领域下拉 + 方向切换**（紧挨标题，见 DomainSelect.tsx 的说明）
+ * → 「选择文章」/「换一句」 → 「换一换」「AI 出题」（或「重新贴一篇」）
+ * → 「自动判定」这一枚信息芯片。
  *
- * 因此原先正文下面那个可折叠的「参考译文」块**删掉了**：它和这颗按钮是同一件事的两种做法，
- * 留着只会让人在两处找。参考译文**只给人看、从不发给模型**（ADR 0003）。
+ * 被删掉的有三样（都是用户点名的）：
+ *   - 「对照译文」按钮——它把这一页铺成"一段原文、一段参考译文交替"，
+ *     而用户要的是正文末尾一个可点开可折叠的「参考译文」块；
+ *   - 「已批 N 页」与「官方建议 N 分钟」两枚芯片。
+ *     ⚠️ 删的只是**显示**：那份"哪几页批过"（article-progress.ts）照旧在用，
+ *     它管的是"从没批完的那一段继续"与「已完成」标记，不是这一枚芯片。
  *
- * 铺出来的"一对"是**自然段**级别的：一页可能由两个短自然段并成，
- * 那时就是 A1 / T1 / A2 / T2 四行，谁对着谁一眼可见。
+ * ## 参考译文只在正文末尾折叠出现（用户第 7 条）
+ *
+ * 用户原话："原文结束后有『参考译文』几个字，点击后，原文下方添加参考译文的内容，
+ * 点击相同位置，参考译文折叠回来。"因此它回到正文下面（练习记录页一直是这个做法），
+ * 并且**只在当前这一页确实有参考译文时**才画——自己贴的题、句子题、术语题没有译文，
+ * 连这四个字都不出现。参考译文**只给人看、从不发给模型**（ADR 0003）。
  */
 
 import type { JSX } from 'react'
@@ -23,6 +31,7 @@ import { KIND_LABEL, type Exercise, type MarkColor, type Mode } from '../domain/
 import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 import type { Section } from '../domain/sections'
 import type { Term } from '../domain/terms'
+import { DomainSelect, DirectionSelect, type ArticleSelection } from './DomainSelect'
 
 /**
  * 原文正文。带一处可选的高亮：**选中某处批改时，它在原文里对应的那一小段也标成同色**
@@ -66,15 +75,13 @@ export function SourcePane({
   multiSection,
   sourceSectionCount,
   sectionIndex,
-  gradedPages,
   pageStateHint,
   nextHint,
   currentSection,
   currentSource,
   currentPairs,
-  compare,
+  range,
   sourceMark,
-  onToggleCompare,
   onRepaste,
   onRotate,
   rotateTitle,
@@ -92,8 +99,6 @@ export function SourcePane({
   multiSection: boolean
   sourceSectionCount: number
   sectionIndex: number
-  /** 已批改过的页数（逐页批改：每一页各批各的） */
-  gradedPages: number
   /** 当前这一页在逐页批改里的状态说明（"待批改 / 批改中 / 已批改 / 编辑中"） */
   pageStateHint: string
   /** 「下一页」点下去会发生什么（只翻页，草稿留着） */
@@ -101,12 +106,17 @@ export function SourcePane({
   currentSection: Section | undefined
   currentSource: string
   /**
-   * 当前这一页**逐段配好**的原文与译文（原文栏的「对照」按它一段一段地铺）。
-   * 没有参考译文的题（自己贴的、句子、术语）是空的，那颗按钮也就不出现。
+   * 当前这一页**逐段配好**的原文与译文。
+   *
+   * 正文末尾那个可折叠的「参考译文」按它拼出来（一页可能由两个短自然段并成，
+   * 那时是两段译文拼成一块）。没有参考译文的题是空的，那一块也就不出现。
    */
   currentPairs: ReadonlyArray<{ source: string; reference: string }>
-  /** 现在看的是原文还是对照（一段原文、一段译文交替） */
-  compare: boolean
+  /**
+   * 「领域 × 方向」这两个范围控件（第 7 条：挪进原文标题栏、紧挨「原文」）。
+   * 传 null 就不画——术语题与"自己贴的题"没有领域可言（见 DomainSelect.tsx）。
+   */
+  range?: { selection: ArticleSelection; onChange: (next: ArticleSelection) => void; withDirection: boolean } | null
   /**
    * 当前选中那一处批改**对应到原文**的位置与颜色（用户要求：点译文上的某一处，
    * 左边原文栏里对应的那一处也标成同色；收起卡片就消失）。
@@ -115,7 +125,6 @@ export function SourcePane({
    * 坐标属于这一页的原文，与译文上的批注互不相干。
    */
   sourceMark?: { start: number; end: number; color: MarkColor } | null
-  onToggleCompare: (next: boolean) => void
   onRepaste: () => void
   onRotate: () => void
   /** 「换一换」的悬停说明；文章栏换的是"下一篇"，说法与换原文不同 */
@@ -134,9 +143,14 @@ export function SourcePane({
    */
   terms?: readonly Term[]
 }): JSX.Element {
-  /** 这一页确实有译文可对照时才给按钮（术语题与自定义题都没有） */
-  const pairCandidates = currentPairs.filter((pair) => pair.reference.length > 0)
-  const canCompare = mode !== 'term' && pairCandidates.length > 0
+  /**
+   * 这一页的参考译文：把逐段配好的译文拼成一块（与 sections.ts 的 referenceOfPage 同一口径，
+   * 只是这里拿到的已经是"这一页"的 pairs，不必再按页号去找）。
+   */
+  const reference = currentPairs
+    .map((pair) => pair.reference)
+    .filter((text) => text.length > 0)
+    .join('\n\n')
 
   return (
     <section className="pane pane-source">
@@ -144,9 +158,15 @@ export function SourcePane({
         <h2>原文</h2>
         <div className="head-meta">
           {/*
-            「选择文章」与「换一句」放在**原文标题栏右侧、靠左**（用户要求）。
-            它们是"换这一篇原文"的动作，摆在原文栏才对得上；而且这个位置紧挨着标题，
-            视觉上是这一栏的头一组按钮，与右边的「换一换 / AI 出题」自然分开。
+            **领域下拉与方向切换摆在最前面**，紧挨着「原文」三个字（用户第 7 条原话：
+            "将领域下拉栏挪到原文标题栏紧靠『原文』的右边"）。它们决定的是"练哪一格的题"，
+            因此排在"换哪一篇"之前——先定范围，再挑篇目。
+          */}
+          {range && <DomainSelect selection={range.selection} onChange={range.onChange} />}
+          {range?.withDirection && <DirectionSelect selection={range.selection} onChange={range.onChange} />}
+          {/*
+            「选择文章」与「换一句」跟在范围控件后面（它们以前排在最前，那是"头一组按钮"
+            的说法定下的顺序；现在头一组的位置让给了领域与方向）。
           */}
           {onPickArticle && (
             <button
@@ -204,39 +224,20 @@ export function SourcePane({
             </>
           )}
           {/*
-            「对照译文」排在"换一篇原文"那一组之后（用户早先定过：选择文章要当这一栏的头一组按钮，
-            因此不能插到它前面），又排在两个信息芯片之前——它是一个控件，
-            而"已批 N 页 / 官方建议 30 分钟"只是如实告知。
+            第 9 条与第 7 条一起砍掉了三枚芯片里的两枚：
+            「已批 N 页」与「官方建议 N 分钟」都不再显示。
+            ⚠️ 删的只是显示——"哪几页批过"那份进度（article-progress.ts）照旧在用，
+            它管的是"从没批完的那一段继续"与「选择文章」里的「已完成」标记。
+            自己贴的题留「自动判定」：它说明的是"程序把你的原文判成了哪种题型"，
+            与题目本身有关，不是进度。
           */}
-          {canCompare && (
-            <button
-              type="button"
-              className={compare ? 'btn btn-ghost btn-ghost-on' : 'btn btn-ghost'}
-              onClick={() => onToggleCompare(!compare)}
-              aria-pressed={compare}
-              title={
-                compare
-                  ? '回到只看原文（译文不再铺在下面）'
-                  : '把这一页铺成「一段原文、一段译文」交替对照，方便逐段比对自己译得差在哪'
-              }
-            >
-              对照译文
-            </button>
-          )}
-          {multiSection && (
-            <span className="chip" title="逐页批改：点「下一页」时，刚写完的那一页会自动交去批改">
-              已批 {gradedPages} 页
-            </span>
-          )}
-          {isCustom ? (
+          {isCustom && (
             <span
               className="chip"
               title="题型是按原文自己判的：多个自然段按文章题、两句以上按段落题、很短又没标点按术语题，其余按句子题"
             >
               自动判定 · {KIND_LABEL[exercise.mode]}
             </span>
-          ) : (
-            <span className="chip">官方建议 {exercise.suggestedMinutes} 分钟</span>
           )}
         </div>
       </header>
@@ -265,59 +266,64 @@ export function SourcePane({
               </li>
             ))}
           </ol>
-        ) : compare && canCompare ? (
-          <div className="pair-list">
-            {currentPairs.map((pair, index) => (
-              <div className="pair" key={index}>
-                <p className="pair-source">{pair.source}</p>
-                {pair.reference.length > 0 && <p className="pair-reference">{pair.reference}</p>}
-              </div>
-            ))}
-          </div>
         ) : (
           <SourceText
             text={multiSection ? (currentSection?.text ?? currentSource) : currentSource}
-            mark={compare ? null : (sourceMark ?? null)}
+            mark={sourceMark ?? null}
           />
         )}
 
         {/*
-          翻页导航在**原文这一栏**（用户要求「放在原文左边一栏去」）。
-          放在这里更顺手：人的眼睛在原文上，翻页是为了换一段原文，
-          而右栏是作答/结果——那里放导航会和「提交批改」挤在一起。
-
-          ⚠️ **批改中照样能翻页**（用户要求：「即使在批改过程中，用户可以手动切换页数，
-          继续翻译（但是批改过程中不能提交）」）。早先这两颗按钮上写着 `|| judging`，
-          那是"一页批完才准走"的年代留下的——现在批改在后台跑，翻页与它无关，
-          拦着反而把用户锁在原地干等。
+          「参考译文」：原文结束后这几个字，点一下把这一页的参考译文铺在原文下面，
+          再点一下折回去（用户第 7 条原话）。用原生 `<details>` 就是因为它天生是这个行为，
+          而练习记录页早就在用同一个块（见 RecordsView）。
+          **没有参考译文的题连这四个字都不出现**（自己贴的、句子题、术语题）。
         */}
-        {multiSection && (
-          <div className="section-nav">
-            <button
-              type="button"
-              className="btn"
-              onClick={() => onSectionChange(Math.max(0, sectionIndex - 1))}
-              data-nav="prev"
-              disabled={sectionIndex === 0}
-            >
-              ← 上一页
-            </button>
-            <span className="hint">
-              第 {sectionIndex + 1} / {sourceSectionCount} 页 · {pageStateHint}
-            </span>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => onSectionChange(Math.min(sourceSectionCount - 1, sectionIndex + 1))}
-              data-nav="next"
-              disabled={sectionIndex >= sourceSectionCount - 1}
-              title={nextHint}
-            >
-              下一页 →
-            </button>
-          </div>
+        {reference.length > 0 && (
+          <details className="reference">
+            <summary>参考译文</summary>
+            <p>{reference}</p>
+          </details>
         )}
       </div>
+
+      {/*
+        翻页导航**固定在原文栏的最下方**（用户第 8 条要求）。
+
+        它原先也在这条栏里，但跟着正文一起滚（在 `.pane-body` 里）——
+        一页很长的时候要滚到底才够得着「下一页」。现在它挪出滚动区，
+        作为这一栏的页脚：正文自己滚，这两颗按钮永远在同一个位置。
+
+        顺带保留两条老规矩：
+          - 导航在**原文这一栏**（人的眼睛在原文上，翻页是为了换一段原文）；
+          - **批改中照样能翻页**（用户要求：批改在后台跑，拦着反而把人锁在原地干等）。
+      */}
+      {multiSection && (
+        <footer className="pane-foot section-nav">
+          <button
+            type="button"
+            className="btn"
+            onClick={() => onSectionChange(Math.max(0, sectionIndex - 1))}
+            data-nav="prev"
+            disabled={sectionIndex === 0}
+          >
+            ← 上一页
+          </button>
+          <span className="hint">
+            第 {sectionIndex + 1} / {sourceSectionCount} 页 · {pageStateHint}
+          </span>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => onSectionChange(Math.min(sourceSectionCount - 1, sectionIndex + 1))}
+            data-nav="next"
+            disabled={sectionIndex >= sourceSectionCount - 1}
+            title={nextHint}
+          >
+            下一页 →
+          </button>
+        </footer>
+      )}
     </section>
   )
 }

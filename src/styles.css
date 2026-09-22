@@ -18,6 +18,40 @@
   --accent: #2c6bed;
 
   /*
+   * 主色块上的文字（选中的题型 tab、分词按钮、生成弹窗里选中的那一片……）。
+   * 日间是白字；暗夜模式下主色被提亮，白字会看不清，因此它也是一个可换的令牌。
+   */
+  --on-accent: #ffffff;
+
+  /* 主色的两档淡底与聚焦环：悬停一条术语、悬停一处勾画、输入框聚焦都借它 */
+  --accent-tint: rgba(44, 107, 237, 0.06);
+  --accent-tint-strong: rgba(44, 107, 237, 0.07);
+  --accent-ring: rgba(44, 107, 237, 0.12);
+
+  /*
+   * 警示（"译法待核对""内置示例批改"这类）。底色借 --mark-orange-bg，
+   * 边框与文字各两档：芯片上一档、说明块里再深一档。
+   */
+  --warn-line: #f0d5a8;
+  --warn-line-soft: #e0b070;
+  --warn-ink: #8a5200;
+  --warn-ink-strong: #7a4a00;
+  --warn-ink-soft: #b06a00;
+
+  /* "已完成""判对"这类正面**文字**的绿（与荧光绿同色系，但用在文字上要更深） */
+  --good-ink: #4a8f5f;
+
+  /* 输入框底色：比纸面略深一点点，表示"这一块可以写" */
+  --paper-input: #fcfcfd;
+
+  /* 报错块（.error-block）的边框与文字 */
+  --danger-line: #f2c4bd;
+  --danger-ink: #8f2c1f;
+
+  /* 代码片段（警示块里的键名、命令）的底色 */
+  --code-bg: rgba(0, 0, 0, 0.05);
+
+  /*
    * 正文一律用衬线体：原文、作答、批注、批注里的正确写法小字都用同一套字体。
    * 这样"哪一处被改动、改成了什么"在读感上和被批改的原句是连续的，
    * 不会出现"批注是另一种字体、看着像另一个东西"的割裂感。
@@ -30,6 +64,67 @@
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 14px rgba(16, 24, 40, 0.05);
   --topbar-h: 56px;
   --strip-h: 46px;
+}
+
+/*
+ * ── 暗夜模式（第 9 条）───────────────────────────────
+ *
+ * 用户要求："给整个网站添加暗夜模式，在导航栏最右边（设置按钮挪到最左边，
+ * 暗夜模式按钮在设置按钮的右边）切换。"
+ *
+ * 做法是**换一套令牌**，而不是给每个组件各写一份深色样式：
+ * 全站的底色、文字、分隔线、批注色本来就都走 `var(--…)`（200 多处），
+ * 因此这里把 :root 里那份重定义一遍就够，组件一行都不用改。
+ *
+ * 三条口径：
+ *   1. **纸面变深、文字变浅**（--ink 与 --paper 互换明暗关系）；
+ *   2. **批注三色要提亮**：原来的 #c0392b 之类在深底上读不清，
+ *      底色也从"淡色底"换成"深色底"——荧光笔的语义（这一处被标了）不变；
+ *   3. **主色提亮 + 主色块上的文字改成深色**：--accent 在深底上要更亮才看得清，
+ *      而亮底配白字会糊，因此 --on-accent 跟着翻过来。
+ *
+ * 写在这里而不是散在各处：将来要加"高对比""护眼"之类的主题，
+ * 照这个形状再加一段就够，不必再去翻两千多行样式表。
+ */
+:root[data-theme='dark'] {
+  --ink: #e7e9ee;
+  --ink-soft: #b3b8c2;
+  --ink-faint: #868d99;
+  --paper: #14161a;
+  --paper-soft: #1c1f25;
+  --line: #2a2e36;
+  --line-strong: #3b414c;
+
+  --mark-red: #ff8f80;
+  --mark-red-bg: #3a1f1c;
+  --mark-orange: #f0b055;
+  --mark-orange-bg: #3a2c17;
+  --mark-green: #6fd39a;
+  --mark-green-bg: #17301f;
+
+  --accent: #6f9bff;
+  --on-accent: #10131a;
+
+  --accent-tint: rgba(111, 155, 255, 0.14);
+  --accent-tint-strong: rgba(111, 155, 255, 0.18);
+  --accent-ring: rgba(111, 155, 255, 0.24);
+
+  --warn-line: #6a4a1c;
+  --warn-line-soft: #5c451f;
+  --warn-ink: #f0b055;
+  --warn-ink-strong: #f0c070;
+  --warn-ink-soft: #e0a94a;
+
+  --good-ink: #6fd39a;
+
+  --paper-input: #191c22;
+
+  --danger-line: #6b2a24;
+  --danger-ink: #ff9a8c;
+
+  --code-bg: rgba(255, 255, 255, 0.08);
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.45);
 }
 
 * {
@@ -123,7 +218,7 @@ button {
 .mode-tab-active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -148,8 +243,8 @@ button {
 
 .chip-warn {
   background: var(--mark-orange-bg);
-  border-color: #f0d5a8;
-  color: #8a5200;
+  border-color: var(--warn-line);
+  color: var(--warn-ink);
 }
 
 /* ── 术语题：五条术语五等分，一行一条、分割线隔开 ───────────
@@ -240,8 +335,8 @@ button {
 .term-unverified {
   margin-left: 6px;
   font-size: 11px;
-  color: #b06a00;
-  border: 1px solid #e0b070;
+  color: var(--warn-ink-soft);
+  border: 1px solid var(--warn-line-soft);
   border-radius: 3px;
   padding: 0 4px;
   white-space: nowrap;
@@ -305,7 +400,7 @@ button {
 
 .term-result:hover,
 .term-result:focus-visible {
-  background: rgba(44, 107, 237, 0.06);
+  background: var(--accent-tint);
   outline: none;
 }
 
@@ -347,34 +442,14 @@ button {
 }
 
 .term-mark-ok {
-  color: #4a8f5f;
+  color: var(--good-ink);
 }
 
 .term-mark-bad {
   color: var(--mark-red);
 }
 
-/* ── 文章库那一行：领域下拉 · 方向切换 · 设置 ───────────
-   它取代了原来的「题目切换条」——那条是一排按钮，题目一多就铺不完。
-   现在左边是下拉、中间是两段方向切换、右边是设置，三块各占一区。 */
-
-.article-bar {
-  flex: none;
-  min-height: var(--strip-h);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 18px;
-  background: var(--paper);
-  border-bottom: 1px solid var(--line);
-}
-
-.article-bar-right {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+/* 「文章库那一行」的样式随那条横条一起删掉了（第 7 条：领域与方向搬进了原文标题栏） */
 
 /* 领域下拉 */
 .domain-select {
@@ -458,6 +533,47 @@ button {
   font-weight: 400;
 }
 
+/*
+ * 「批改记录」下拉里的一行：左边是那一次（点它就看），右边一颗叉号（点它删掉）。
+ *
+ * 叉号**不能塞进那颗按钮里**（按钮里套按钮是非法结构，浏览器会把它拆开、点击行为也跟着乱），
+ * 因此这一行是 flex，两个兄弟节点各管各的。
+ */
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.history-row .domain-item {
+  flex: 1 1 auto;
+}
+
+.history-delete {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.history-delete:hover {
+  color: var(--danger-ink);
+  background: var(--mark-red-bg);
+}
+
+/* "确定删吗"就地展开在这一行里（不弹窗，见 GradeHistoryPicker 的说明） */
+.history-confirm {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* 方向切换（中译英 / 英译中） */
 .dir-switch {
   display: inline-flex;
@@ -488,7 +604,7 @@ button {
 
 .dir-btn-active {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -552,9 +668,21 @@ button {
   border-radius: 4px;
   font-size: 11px;
   font-weight: 400;
-  color: #4a8f5f;
+  color: var(--good-ink);
   background: var(--mark-green-bg);
   vertical-align: 1px;
+}
+
+/*
+ * 卡片上的「最高分 N 分」（第 12 条）。它与上面那行"全文 N 词 · 共 M 页"同排，
+ * 但要说清它是**成绩**，因此用主色 + 加粗，一眼能从篇幅信息里分出来。
+ */
+.article-card-best {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
 }
 
 /* ── 四栏 2×2：左上原文 / 右上译文 / 左下计分 / 右下批注 ──── */
@@ -852,44 +980,9 @@ button {
 }
 
 /*
- * 「对照译文」铺出来的样子：一对一对，**一段原文、一段译文**交替。
- *
- * 为什么要留白 + 分隔线：原文与译文都是衬线体、字号也接近，只靠紧挨着排是分不清
- * "哪一行是原文、哪一行是译文"的。这里给译文换一种颜色并在两对之间画一条虚线，
- * 一眼就能看出每段的边界在哪。一页可能由两个短自然段并成（见 sections.ts），
- * 那时会是 A1 / T1 / A2 / T2 四行，同一个规则照样成立。
+ * 「对照译文」铺出来的那份排版（.pair-list / .pair-*）随那颗按钮一起删掉了（第 7 条）：
+ * 参考译文现在只以正文末尾那个可折叠块出现（见 .reference）。
  */
-.pair-list {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.pair {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.pair + .pair {
-  border-top: 1px dashed var(--line-strong);
-  padding-top: 18px;
-}
-
-.pair-source,
-.pair-reference {
-  font-family: var(--serif);
-  font-size: 17px;
-  line-height: 1.9;
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-.pair-reference {
-  color: var(--ink-soft);
-  border-left: 3px solid var(--line-strong);
-  padding-left: 12px;
-}
 
 .source-term {
   font-size: 28px;
@@ -907,8 +1000,8 @@ button {
 }
 
 /*
- * 参考译文的折叠块：现在只出现在**练习记录页**（练习页换成了标题栏的「对照译文」开关）。
- * 记录页是只读的复盘视图，折起来更省地方。
+ * 参考译文的折叠块：**练习页与练习记录页都用它**（第 7 条之后练习页也有了）。
+ * 位置是"原文结束后"（用户原话），点这几字铺开、再点折回去。
  */
 .reference {
   border-top: 1px dashed var(--line-strong);
@@ -943,7 +1036,7 @@ button {
   font-size: 17px;
   line-height: 1.9;
   color: var(--ink);
-  background: #fcfcfd;
+  background: var(--paper-input);
   resize: none;
 }
 
@@ -960,7 +1053,7 @@ button {
 .answer-input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(44, 107, 237, 0.12);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 /* 贴题弹窗里的原文框：够高够宽，能整段贴进来 */
@@ -990,15 +1083,26 @@ button {
  * 因为它同样是 .pane-answer，样式自动一致——所以这里不再需要一份静态译文样式。
  */
 
-/* 分段导航：放在原文下方、批改结果上方 */
-.section-nav {
+/*
+ * 原文栏的页脚：**上一页 / 下一页固定在这里**（第 8 条，用户要求
+ * "上一页，下一页两个按钮固定在原文栏的最下方"）。
+ *
+ * 它原先长在 `.pane-body` 里，于是跟着正文一起滚——一页很长时得先滚到底才够得着。
+ * 现在它是这一栏的兄弟节点（不在滚动区里），正文自己滚，这两颗按钮永远在同一个位置。
+ */
+.pane-foot {
   flex: none;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+
+/* 分段导航：一行三格（上一页 / 第几页 / 下一页） */
+.section-nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
 }
 
 /*
@@ -1091,6 +1195,54 @@ button {
 }
 
 /*
+ * 吐司（第 3 条）：提交被拦住时把原因说清楚。
+ *
+ * 与右下角那条「批改完成通知」刻意分开：那条是"另一页的事跑来找人"、要等人点，
+ * 因此固定在右下；这条是"刚才那一下为什么没生效"，看完就走，
+ * 因此**底部居中**、几秒后自己消失（计时在 App 里），旁边一颗 × 让人立刻收起。
+ */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(720px, calc(100vw - 36px));
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 10px 10px 16px;
+  border: 1px solid var(--warn-line);
+  border-radius: 10px;
+  background: var(--mark-orange-bg);
+  color: var(--warn-ink);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.toast-text {
+  flex: 1 1 auto;
+}
+
+.toast-close {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0.75;
+}
+
+.toast-close:hover {
+  opacity: 1;
+}
+
+/*
  * 交出去批改之后作答框是**只读**的（改字会让回来的批注画错位），
  * 但要让"我还看得见自己的字"——因此只换底色、不置灰文字。
  */
@@ -1121,7 +1273,7 @@ button {
 
 .level-btn-active {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .btn {
@@ -1141,7 +1293,7 @@ button {
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -1153,11 +1305,15 @@ button {
   border-color: var(--line-strong);
 }
 
-/* 「对照译文」按下去之后的样子：这颗按钮是开关，得看得出它现在是开的 */
-.btn-ghost-on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+/*
+ * 「删除」这类**不可撤销**的按钮：字用报错色，边框仍在。
+ * 它出现在两处（批改记录下拉里那颗叉号展开后的「删除」、练习记录页的「删除这一条」），
+ * 两处都得让人在按下之前看出来"这个动作跟别的不一样"。
+ */
+.btn-danger {
+  color: var(--danger-ink);
+  border-color: var(--danger-line);
+  background: var(--mark-red-bg);
 }
 
 /* 小卡片里那颗按钮：卡片本来就窄，用常规尺寸会把说明挤成两三行 */
@@ -1187,12 +1343,12 @@ button {
 
 .error-block {
   background: var(--mark-red-bg);
-  border: 1px solid #f2c4bd;
+  border: 1px solid var(--danger-line);
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 13px;
   line-height: 1.8;
-  color: #8f2c1f;
+  color: var(--danger-ink);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1612,7 +1768,7 @@ button {
 
 .mk:hover,
 .mk:focus-visible {
-  background: rgba(44, 107, 237, 0.07);
+  background: var(--accent-tint-strong);
   outline: none;
   border-radius: 3px;
 }
@@ -2114,7 +2270,7 @@ button {
 
 .warn-block {
   background: var(--mark-orange-bg);
-  border: 1px solid #f0d5a8;
+  border: 1px solid var(--warn-line);
   border-radius: 8px;
   padding: 12px 14px;
 }
@@ -2123,13 +2279,13 @@ button {
   margin: 8px 0 0;
   padding-left: 18px;
   font-size: 12.5px;
-  color: #7a4a00;
+  color: var(--warn-ink-strong);
   line-height: 1.8;
 }
 
 .warn-block code {
   font-size: 11.5px;
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--code-bg);
   padding: 1px 5px;
   border-radius: 4px;
 }
@@ -2269,7 +2425,7 @@ button {
 .gen-chip-active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .gen-chip:disabled {
@@ -2291,7 +2447,7 @@ button {
 .gen-input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(44, 107, 237, 0.12);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .gen-error {
@@ -2332,7 +2488,7 @@ button {
 
 .view-btn-active {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 /* 精修档锁在对照视图上：按钮保留但点不动（见 AnswerViewSwitch 的说明） */

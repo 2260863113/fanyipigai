@@ -25,6 +25,8 @@ import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
+// 造"能过提交门"的假作答（第 3 条之后必须有它，见该文件的说明）
+import { answerForPage } from './lib/probe-answer.mjs'
 
 /**
  * 取出**服务端那道请求判据本身**，用来检查捕获到的请求。
@@ -385,7 +387,8 @@ try {
          const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(text('.section-nav .hint'));
          return m ? { index: Number(m[1]) - 1, count: Number(m[2]) } : { index: -1, count: 0 };
        };
-       const setValue = (el, value) => {
+        const answerForPage = ${answerForPage.toString()};
+        const setValue = (el, value) => {
          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
          setter.call(el, value);
          el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -450,7 +453,7 @@ try {
          if (!(await ensureOnPage(page))) return { error: '没能翻到第 ' + (page + 1) + ' 页' };
          const source = text('.pane-source .source-text');
          sources.push(source);
-         const typed = '第 ' + (page + 1) + ' 页译文：' + source.slice(0, 24);
+         const typed = answerForPage(source, page);
          const area = await waitFor(() => document.querySelector('.answer-input'));
          if (!area) return { error: '第 ' + (page + 1) + ' 页没有可写的输入框' };
          setValue(area, typed);
@@ -563,12 +566,15 @@ try {
          });
 
          /*
-          * 这一页收尾：它现在是"已批改"（只读）。判据与本脚本早先一致——
-          * 没有作答框，也没有「提交批改」按钮。
+          * 这一页收尾：它现在是"已批改"（只读）。
+          * 判据：**没有作答框**，而标题栏那颗按钮原地写着「返回编辑」
+          * （第 2 条：提交批改与返回编辑是**同一颗**按钮，只换名字——
+          * 因此这里不能再要求"没有那个按钮"）。
           */
+         const gradedButton = document.querySelector('.pane-answer .btn-primary');
          const readOnly =
            document.querySelector('.answer-input') === null &&
-           document.querySelector('.pane-answer .btn-primary') === null;
+           (gradedButton?.textContent || '').trim() === '返回编辑';
          trace.push({
            page,
            typed,
@@ -1202,6 +1208,46 @@ try {
    * 看到的仍是那次批改（连同箭头、批注与只读态），按「返回编辑」还能拿到当时那段文字。
    */
   console.log('\n== 刷新之后，批改过的页还在不在 ==')
+  /*
+   * 刷新前先把**落盘的页状态**读出来看一眼（第 10 条：草稿、在编辑、正在看第几次都在这里）。
+   * 这一条既是诊断，也是断言：刷新前必须真的存着"那一页在编辑、草稿是什么"。
+   */
+  const stateBeforeReload = await cdp.evaluate(
+    `JSON.parse(window.localStorage.getItem('translation-practice.page-state.v1') || '{}')`,
+  )
+  const beforeReloadView = await cdp.evaluate(
+    `({
+       exerciseId: document.querySelector('.app')?.dataset.exerciseId ?? '',
+       lastView: window.localStorage.getItem('translation-practice.last-view.v1'),
+     })`,
+  )
+  console.log('刷新前落盘的页状态 =', JSON.stringify(stateBeforeReload))
+  console.log('刷新前停在哪 =', JSON.stringify(beforeReloadView))
+  /*
+   * 让刷新**落回刚刚练过的那一篇**，否则下面测不到"把记录接回会话"这件事。
+   *
+   * 为什么要特地摆一下这个现场（两条都是用户定过的规矩，叠加起来会挡住测试）：
+   *   1. 用户拍板"「返回编辑」不再撤进度"（进度只增不减）→ 这一篇到这会儿已经**整篇批完**了；
+   *   2. 另一条老规矩是"整篇练完的文章不主动打开，下一次打开落到同格里没练完的那一篇"。
+   * 两条一叠加，刷新就落到**下一篇**（实测落在 -2），而那篇从没练过、自然无从"接回"。
+   * 因此这里先把这篇从"整篇已完成"里撤掉一页——**这一条测的是接回，不是落点**；
+   * 落点本身在 verify-article-bar.mjs 里有专门的断言。
+   */
+  await cdp.evaluate(
+    `(() => {
+       const id = ${JSON.stringify(beforeReloadView?.exerciseId ?? '')};
+       window.localStorage.setItem(
+         'translation-practice.last-view.v1',
+         JSON.stringify({ tab: 'article', exerciseId: id, origin: 'article-bank', sectionIndex: 1 }),
+       );
+       const key = 'translation-practice.article-progress.v1';
+       const map = JSON.parse(window.localStorage.getItem(key) || '{}');
+       const entry = map[id] || { graded: [], updatedAt: '' };
+       map[id] = { graded: (entry.graded || []).filter((index) => index !== 0), updatedAt: entry.updatedAt || '' };
+       window.localStorage.setItem(key, JSON.stringify(map));
+       return true;
+     })()`,
+  )
   await cdp.send('Page.reload')
   let remounted = false
   for (let i = 0; i < 40 && !remounted; i += 1) {
@@ -1217,41 +1263,469 @@ try {
          const m = /第\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*页/.exec(text('.section-nav .hint'));
          return m ? { index: Number(m[1]) - 1, count: Number(m[2]) } : { index: -1, count: 0 };
        };
-       /* 翻到第 2 页（逐页流程里批过、而且之后没人碰过的那一页） */
-       for (let guard = 0; guard < 8 && pageNo().index !== 1; guard++) {
-         const step = pageNo().index < 1 ? '[data-nav="next"]' : '[data-nav="prev"]';
-         document.querySelector('.section-nav ' + step)?.click();
-         await sleep(350);
-       }
-       const 落地后 = {
-         在第几页: pageNo().index,
+       const 界面态 = () => ({
          有作答框: document.querySelector('.answer-input') !== null,
          有批注译文: document.querySelector('.pane-answer .annotated-lines') !== null,
+         草稿: (document.querySelector('.answer-input')?.value || ''),
          导航说: text('.section-nav .hint'),
+       });
+       /*
+        * 刷新之后**落在哪一页**、那一页长什么样。
+        *
+        * 用户第三轮的口径："刷新之后旧结果不算了，自己去「批改记录」下拉栏里重新调出来"
+        * （他先说"顺便把编辑态与草稿也落盘"，接着说旧结果不必再挂在页上）。
+        * 因此这一页应当是**可写的、草稿还在**，而不是批改界面。
+        */
+       const 落地后 = { 在第几页: pageNo().index, ...界面态() };
+       const 题号 = document.querySelector('.app')?.dataset.exerciseId ?? '';
+       /* 再把每一页走一遍：**没被「返回编辑」碰过**的那几页，刷新后仍该是批改界面 */
+       const 批改界面页 = [];
+       const 有作答框页 = [];
+       for (let page = 0; page < pageNo().count; page++) {
+         for (let guard = 0; guard < 12 && pageNo().index !== page; guard++) {
+           const step = pageNo().index < page ? '[data-nav="next"]' : '[data-nav="prev"]';
+           document.querySelector('.section-nav ' + step)?.click();
+           await sleep(200);
+         }
+         const state = 界面态();
+         if (state.有批注译文 && !state.有作答框) 批改界面页.push(page);
+         if (state.有作答框) 有作答框页.push(page);
+       }
+       return { 题号, 落地后, 批改界面页, 有作答框页 };
+     })()`,
+  )
+  console.log('刷新之后 =', JSON.stringify(afterReload))
+  check(
+    afterReload?.落地后?.有作答框 === true,
+    '刷新之后落在「编辑态」的那一页仍是可写的（第 10 条：编辑态落盘）',
+    JSON.stringify(afterReload?.落地后),
+  )
+  check(
+    (afterReload?.落地后?.草稿 ?? '').length > 0,
+    '刷新之后当时写的那段文字还在（第 10 条：草稿落盘）',
+    JSON.stringify(afterReload?.落地后),
+  )
+  check(
+    afterReload?.落地后?.有批注译文 === false,
+    '刷新之后旧批改**不再挂在这一页上**（用户第三轮：不算了，自己从「批改记录」下拉里调出来）',
+    JSON.stringify(afterReload?.落地后),
+  )
+  check(
+    (afterReload?.批改界面页?.length ?? 0) >= 1,
+    `没被「返回编辑」碰过的页，刷新后仍是批改界面（${JSON.stringify(afterReload?.批改界面页)}）`,
+  )
+  check(
+    (stateBeforeReload && Object.keys(stateBeforeReload).length > 0) === true &&
+      afterReload?.题号 === beforeReloadView?.exerciseId,
+    `刷新前后落在同一道题上（刷新前 ${beforeReloadView?.exerciseId}，刷新后 ${afterReload?.题号}）`,
+    JSON.stringify(stateBeforeReload).slice(0, 200),
+  )
+
+  /*
+   * ── 提交前那两道门（第 3 条）——在真实界面上走一遍 ──
+   *
+   * 用户原话："每次提交批改需要进行检测才能提交，要求字数必须大于30字（英文30个单词），
+   * 且不能与这一段之前任意一次提交内容100%相同（防止重复提交），一旦违反，
+   * 用吐司提示用户，并不提交批改。"
+   *
+   * 四步：太短 → 拦；够长且是新的 → 放行；同一段再交一次 → 拦；改一句 → 再放行。
+   * 每一步都量"批改调用有没有多出来"，因为这条要求的要害正是**不提交**。
+   */
+  console.log('\n== 提交前那两道门（第 3 条）==')
+  const gate = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const setValue = (el, value) => {
+         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+         setter.call(el, value);
+         el.dispatchEvent(new Event('input', { bubbles: true }));
        };
-       /* 按「返回编辑」：应当拿到**当时写着的那段文字**（草稿也一起接回来了） */
+       /* 造一段"过得了门"的作答（每个 evaluate 都是独立作用域，因此这里要再注入一次） */
+       const answerForPage = ${answerForPage.toString()};
+       /* 站到一页可写的页上：先看当前页能不能写，不能就按「返回编辑」或翻到别页 */
+       for (let page = 0; page < 8 && !document.querySelector('.answer-input'); page++) {
+         const unlock = [...document.querySelectorAll('.pane-answer .btn')].find(
+           (b) => (b.textContent || '').trim() === '返回编辑',
+         );
+         if (unlock) {
+           unlock.click();
+           await sleep(400);
+           break;
+         }
+         const step = document.querySelector('.section-nav [data-nav="next"]');
+         if (!step || step.disabled) break;
+         step.click();
+         await sleep(350);
+       }
+       const area = document.querySelector('.answer-input');
+       if (!area) return { error: '找不到可写的作答框' };
+       const source = (document.querySelector('.pane-source .source-text')?.textContent ?? '').trim();
+       const toastText = () => {
+         const node = document.querySelector('.toast');
+         return node ? (node.textContent || '').trim() : '';
+       };
+       const dismissToast = () => document.querySelector('.toast-close')?.click();
+
+       /* ① 太短：拦下，而且**别提交** */
+       const callsBefore = window.__judgeCalls.length;
+       setValue(area, '太短了');
+       await sleep(200);
+       document.querySelector('.pane-answer .btn-primary').click();
+       await sleep(600);
+       const tooShort = { toast: toastText(), calls: window.__judgeCalls.length - callsBefore };
+       dismissToast();
+       await sleep(200);
+
+       /* ② 够长而且是新的：放行 */
+       const good = answerForPage(source, 99) + '\\n（这一条只给"提交门"测试用）';
+       const callsBeforeGood = window.__judgeCalls.length;
+       setValue(area, good);
+       await sleep(200);
+       document.querySelector('.pane-answer .btn-primary')?.click();
+       const submitted = await (async () => {
+         for (let i = 0; i < 60; i++) {
+           if (window.__judgeCalls.length > callsBeforeGood) return true;
+           await sleep(200);
+         }
+         return false;
+       })();
+       await sleep(1200);
+       const passed = { toast: toastText(), calls: window.__judgeCalls.length - callsBeforeGood, submitted };
+
+       /* ③ 同一段再交一次：拦下（"不能与之前任意一次提交 100% 相同"） */
        const unlock = [...document.querySelectorAll('.pane-answer .btn')].find(
          (b) => (b.textContent || '').trim() === '返回编辑',
        );
        if (unlock) unlock.click();
        await sleep(400);
-       const 放开后 = {
-         有作答框: document.querySelector('.answer-input') !== null,
-         草稿: (document.querySelector('.answer-input')?.value || '').slice(0, 16),
-       };
-       return { 落地后, 放开后 };
+       const area2 = document.querySelector('.answer-input');
+       if (area2) setValue(area2, good);
+       await sleep(250);
+       const callsBeforeDup = window.__judgeCalls.length;
+       document.querySelector('.pane-answer .btn-primary')?.click();
+       await sleep(800);
+       const duplicated = { toast: toastText(), calls: window.__judgeCalls.length - callsBeforeDup };
+       dismissToast();
+       await sleep(200);
+
+       /* ④ 改一句：又放行（门拦的是"重复"，不是"再交一次"） */
+       const area3 = document.querySelector('.answer-input');
+       if (area3) setValue(area3, good + '（又改了一句）');
+       await sleep(250);
+       const callsBeforeEdit = window.__judgeCalls.length;
+       document.querySelector('.pane-answer .btn-primary')?.click();
+       const resubmitted = await (async () => {
+         for (let i = 0; i < 60; i++) {
+           if (window.__judgeCalls.length > callsBeforeEdit) return true;
+           await sleep(200);
+         }
+         return false;
+       })();
+       await sleep(1000);
+       const edited = { toast: toastText(), calls: window.__judgeCalls.length - callsBeforeEdit, submitted: resubmitted };
+
+       return { tooShort, passed, duplicated, edited };
      })()`,
   )
-  console.log('刷新之后 =', JSON.stringify(afterReload))
+  console.log('提交门 =', JSON.stringify(gate))
+  check(gate?.tooShort?.calls === 0, '太短的一段：**一个批改请求都没发出去**（不提交批改）', JSON.stringify(gate?.tooShort))
   check(
-    afterReload?.落地后?.有批注译文 === true && afterReload?.落地后?.有作答框 === false,
-    '刷新之后再翻到批改过的那一页，看到的仍是批改界面（不是空作答框）',
-    JSON.stringify(afterReload?.落地后),
+    (gate?.tooShort?.toast ?? '').includes('还不够'),
+    `太短的提示用吐司说清"还差多少"（${gate?.tooShort?.toast}）`,
+    JSON.stringify(gate?.tooShort),
+  )
+  check(gate?.passed?.submitted === true && gate?.passed?.calls === 1, '够长而且是新的一段：正常交出去', JSON.stringify(gate?.passed))
+  check(gate?.duplicated?.calls === 0, '与之前某次一字不差：**拦住，不发请求**', JSON.stringify(gate?.duplicated))
+  check(
+    (gate?.duplicated?.toast ?? '').includes('一字不差'),
+    `重复提交的吐司说的是"一字不差"这件事（${gate?.duplicated?.toast}）`,
+    JSON.stringify(gate?.duplicated),
   )
   check(
-    afterReload?.放开后?.有作答框 === true && (afterReload?.放开后?.草稿 ?? '').length > 0,
-    '刷新之后按「返回编辑」，当时写的那段文字也还在（草稿一起接回来了）',
-    JSON.stringify(afterReload?.放开后),
+    gate?.edited?.submitted === true && gate?.edited?.calls === 1,
+    '改一句之后再交：照旧放行（门拦的是重复，不是"再交一次"）',
+    JSON.stringify(gate?.edited),
+  )
+
+  /*
+   * ── 删掉一条批改记录（第 11 条）──
+   * 用户原话："允许在批改记录的下拉栏中点击叉号删除记录，练习记录同步删除。"
+   * 连带口径（他选的那一档）：撤掉进度 + 当前视图退回最新一次 + 点叉号确认一次。
+   */
+  console.log('\n== 删掉一条批改记录（第 11 条）==')
+  const deletion = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const countRecords = () =>
+         JSON.parse(window.localStorage.getItem('translation-practice.records.v2') || '[]').length;
+       /* 站到一页"批过"的页上：只有那样的页才会列出批改记录 */
+       for (let page = 0; page < 6; page++) {
+         if (document.querySelector('.pane-answer .domain-trigger')) break;
+         const next = document.querySelector('.section-nav [data-nav="next"]');
+         if (!next || next.disabled) break;
+         next.click();
+         await sleep(300);
+       }
+       const trigger = [...document.querySelectorAll('.pane-answer .domain-trigger')].find((b) =>
+         (b.textContent || '').includes('批改记录'),
+       );
+       if (!trigger) return { error: '这一页没有「批改记录」下拉' };
+       const before = countRecords();
+       trigger.click();
+       await sleep(300);
+       const itemsBefore = document.querySelectorAll('.pane-answer .domain-item').length;
+       const cross = document.querySelector('.pane-answer .history-delete');
+       if (!cross) return { error: '下拉里没有删除叉号' };
+       cross.click();
+       await sleep(300);
+       const askText = (document.querySelector('.pane-answer .history-confirm')?.textContent || '').trim();
+       const confirm = [...document.querySelectorAll('.pane-answer .history-confirm .btn')].find(
+         (b) => (b.textContent || '').trim() === '删除',
+       );
+       if (!confirm) return { error: '点了叉号却没有出现确认按钮' };
+       confirm.click();
+       await sleep(600);
+       const after = countRecords();
+       const openAgain = [...document.querySelectorAll('.pane-answer .domain-trigger')].find((b) =>
+         (b.textContent || '').includes('批改记录'),
+       );
+       /*
+        * 删完之后下拉往往还开着，那时再点一次触发器等于把它**关掉**（读到的就是 0 条）。
+        * 因此先看菜单在不在，不在才点开。
+        */
+       if (!document.querySelector('.pane-answer .domain-menu') && openAgain) {
+         openAgain.click();
+         await sleep(350);
+       }
+       const itemsAfter = document.querySelectorAll('.pane-answer .domain-item').length;
+       return { before, itemsBefore, askText, after, itemsAfter, notice: (document.querySelector('.notice')?.textContent || '').trim() };
+     })()`,
+  )
+  console.log('删记录 =', JSON.stringify(deletion))
+  check(deletion?.itemsBefore >= 1, `下拉里列出了这一页的批改记录（${deletion?.itemsBefore} 条）`, JSON.stringify(deletion))
+  check(
+    (deletion?.askText ?? '').includes('删除') && (deletion?.askText ?? '').includes('取消'),
+    '点叉号先问一句「删除 / 取消」（误点不能不可挽回）',
+    JSON.stringify(deletion?.askText),
+  )
+  check(
+    deletion?.after === (deletion?.before ?? 0) - 1,
+    `删掉之后练习记录里也少了一条（${deletion?.before} → ${deletion?.after}，两处读的是同一份数据）`,
+    JSON.stringify(deletion),
+  )
+  check(
+    deletion?.itemsAfter === (deletion?.itemsBefore ?? 0) - 1,
+    `下拉里也少了一条（${deletion?.itemsBefore} → ${deletion?.itemsAfter}）`,
+    JSON.stringify(deletion),
+  )
+
+  /*
+   * ── 分割线位置记不记得住（第 5 条）──
+   * 用户原话："所有界面可移动分割线的位置需要个性化记忆，下次打开时按照相同位置的分割线展示。"
+   * 追问"双击恢复默认算不算数"时他答："你走的时候什么位置，下次回来之后，还是在那个位置"——
+   * 因此恢复默认（自动布局）也必须记住。
+   */
+  console.log('\n== 分割线位置记忆（第 5 条）==')
+  const splitMemory = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const split = document.querySelector('.split');
+       const handle = document.querySelector('.splitter-v');
+       if (!split || !handle) return { error: '找不到四栏或竖分割线' };
+       const styles = () => split.getAttribute('style') || '';
+       const before = styles();
+       const rect = handle.getBoundingClientRect();
+       const fire = (type, x) =>
+         handle.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: rect.top + 5, pointerId: 1 }));
+       fire('pointerdown', rect.left);
+       await sleep(60);
+       fire('pointermove', rect.left + 180);
+       await sleep(60);
+       fire('pointerup', rect.left + 180);
+       await sleep(300);
+       const dragged = styles();
+       return { before, dragged, manual: split.classList.contains('split-manual') };
+     })()`,
+  )
+  console.log('分割线 =', JSON.stringify(splitMemory))
+  check(splitMemory?.manual === true, '拖过之后切成手动比例（split-manual）', JSON.stringify(splitMemory))
+  check((splitMemory?.dragged ?? '').includes('--col-left'), '位置写进了内联样式（--col-left）', JSON.stringify(splitMemory))
+  await cdp.send('Page.reload')
+  await sleep(2400)
+  const splitAfterReload = await cdp.evaluate(
+    `(() => {
+       const split = document.querySelector('.split');
+       return {
+         style: split?.getAttribute('style') || '',
+         manual: !!split?.classList.contains('split-manual'),
+         stored: window.localStorage.getItem('translation-practice.split-layout.v1'),
+       };
+     })()`,
+  )
+  console.log('刷新之后的分割线 =', JSON.stringify(splitAfterReload))
+  check(
+    splitAfterReload?.manual === true && splitAfterReload?.style === splitMemory?.dragged,
+    '刷新之后分割线还在你放的那个位置（第 5 条：个性化记忆）',
+    JSON.stringify(splitAfterReload),
+  )
+  // 双击恢复默认 —— 用户口径："你走的时候什么位置，下次回来还是那个位置"，因此这一下也要记住
+  const afterReset = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const read = () => window.localStorage.getItem('translation-practice.split-layout.v1');
+       const handle = document.querySelector('.splitter-v');
+       const before = read();
+       handle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+       await sleep(50);
+       const at50 = read();
+       await sleep(400);
+       const at450 = read();
+       const split = document.querySelector('.split');
+       return {
+         before,
+         at50,
+         at450,
+         manual: !!split?.classList.contains('split-manual'),
+         style: split?.getAttribute('style') || '',
+         stored: read(),
+       };
+     })()`,
+  )
+  check(afterReset?.manual === false, '双击恢复默认：回到自动比例', JSON.stringify(afterReset))
+  console.log('恢复默认之后 =', JSON.stringify(afterReset))
+  await cdp.send('Page.reload')
+  await sleep(2400)
+  const splitAfterResetReload = await cdp.evaluate(
+    `({
+       manual: !!document.querySelector('.split')?.classList.contains('split-manual'),
+       style: document.querySelector('.split')?.getAttribute('style') || '',
+     })`,
+  )
+  check(
+    splitAfterResetReload?.manual === false && splitAfterResetReload?.style === '',
+    '刷新之后仍然是自动比例——"恢复默认"也是你走的时候那个位置（记的是自动，不是上一次拖过的值）',
+    JSON.stringify(splitAfterResetReload),
+  )
+
+  /*
+   * ── 记住"正在看的是第几次批改"（第 10 条）──
+   * 用户原话："切换下一段，再切换回来时……对于批改后的界面，我希望能记住显示的是批改的第几次，
+   * 而不是每次都默认回到批改的最新一次的页面。"
+   *
+   * 判据取「批改记录」下拉触发器上那行小字：在看某一次时写的是"第 N 次 · 时间"，
+   * 没在看时写的是"共 N 次"——一眼可分。
+   */
+  console.log('\n== 记住正在看第几次（第 10 条）==')
+  const rememberRound = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const trigger = () =>
+         [...document.querySelectorAll('.pane-answer .domain-trigger')].find((b) =>
+           (b.textContent || '').includes('批改记录'),
+         );
+       const triggerText = () => (trigger()?.textContent || '').trim();
+       /* 找一页有**两次以上**批改记录的页（下面要比"第几次"） */
+       let found = false;
+       for (let page = 0; page < 6; page++) {
+         const t = trigger();
+         if (t) {
+           t.click();
+           await sleep(300);
+           const items = document.querySelectorAll('.pane-answer .domain-item').length;
+           if (items >= 2) { found = true; break; }
+           t.click();
+           await sleep(200);
+         }
+         const next = document.querySelector('.section-nav [data-nav="next"]');
+         if (!next || next.disabled) break;
+         next.click();
+         await sleep(350);
+       }
+       if (!found) return { error: '没找到有两条以上批改记录的页' };
+       const before = triggerText();
+       /* 选**较旧**的那一次（列表最新的在前，因此取第 2 条） */
+       const items = [...document.querySelectorAll('.pane-answer .domain-item')];
+       const pickedLabel = (items[1]?.textContent || '').trim();
+       items[1].click();
+       await sleep(400);
+       const afterPick = triggerText();
+       /* 翻到别的页再翻回来（末页没有「下一页」，那就反过来走一趟） */
+       const nextBtn = document.querySelector('.section-nav [data-nav="next"]');
+       const prevBtn = document.querySelector('.section-nav [data-nav="prev"]');
+       if (nextBtn && !nextBtn.disabled) {
+         nextBtn.click();
+         await sleep(400);
+         document.querySelector('.section-nav [data-nav="prev"]')?.click();
+         await sleep(500);
+       } else if (prevBtn && !prevBtn.disabled) {
+         prevBtn.click();
+         await sleep(400);
+         document.querySelector('.section-nav [data-nav="next"]')?.click();
+         await sleep(500);
+       }
+       const afterRoundTrip = triggerText();
+       return { before, pickedLabel, afterPick, afterRoundTrip };
+     })()`,
+  )
+  console.log('批改记录下拉 =', JSON.stringify(rememberRound))
+  check(
+    /第\s*\d+\s*次/.test(rememberRound?.afterPick ?? ''),
+    `选了一次之后下拉上写着"第 N 次"（${rememberRound?.afterPick}）`,
+    JSON.stringify(rememberRound),
+  )
+  check(
+    rememberRound?.afterRoundTrip === rememberRound?.afterPick,
+    `翻到下一页再翻回来，看的**仍是那一次**，不会弹回最新一次（${rememberRound?.afterRoundTrip}）`,
+    JSON.stringify(rememberRound),
+  )
+  await cdp.send('Page.reload')
+  await sleep(2400)
+  const rememberedAfterReload = await cdp.evaluate(
+    `(() => {
+       const t = [...document.querySelectorAll('.pane-answer .domain-trigger')].find((b) =>
+         (b.textContent || '').includes('批改记录'),
+       );
+       return { text: (t?.textContent || '').trim() };
+     })()`,
+  )
+  check(
+    rememberedAfterReload?.text === rememberRound?.afterPick,
+    `刷新之后记着的还是那一次（${rememberedAfterReload?.text}；落盘了，不只是内存）`,
+    JSON.stringify(rememberedAfterReload),
+  )
+
+  /*
+   * ── 最高分标签会跟着批改写（第 12 条）──
+   * 前面已经批过好几页，因此当前这一篇的最高分应当是**真实分数**，不再是 0 分。
+   */
+  console.log('\n== 文章卡片上的最高分（第 12 条）==')
+  const bestAfterGrading = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const open = [...document.querySelectorAll('.pane-source .pane-head .btn')].find((b) =>
+         (b.textContent || '').includes('选择文章'),
+       );
+       if (!open) return { error: '找不到「选择文章」入口' };
+       open.click();
+       await sleep(700);
+       const active = document.querySelector('.article-card-active');
+       const value = (active?.querySelector('.article-card-best')?.textContent || '').trim();
+       const all = [...document.querySelectorAll('.article-card-best')].map((b) => b.textContent.trim());
+       document.querySelector('.raw-modal-close')?.click();
+       await sleep(300);
+       return { value, all, count: all.length };
+     })()`,
+  )
+  console.log('最高分 =', JSON.stringify(bestAfterGrading))
+  check(
+    /^最高分\s*\d+\s*分$/.test(bestAfterGrading?.value ?? ''),
+    `当前这一篇的卡片上有最高分标签（${bestAfterGrading?.value}）`,
+    JSON.stringify(bestAfterGrading),
+  )
+  check(
+    Number.parseInt((bestAfterGrading?.value ?? '').replace(/\D+/g, ''), 10) > 0,
+    `批过之后它显示的是真实分数（${bestAfterGrading?.value}），不再是 0 分`,
+    JSON.stringify(bestAfterGrading),
   )
 
   // 收藏页：每一条要给出"这一处是从哪一段原文里来的"（用户要求：当前一段，不是整篇）
@@ -1299,8 +1773,11 @@ try {
       `等待期间进度条**不超过 88%**（不会假装走完）（采到的宽度：${widths.join(' → ')}）`,
     )
     check(
-      seen.every((item) => (item.背景色 ?? '').includes('44, 107, 237')),
-      `进度条是蓝色的（${seen[0]?.背景色}）`,
+      seen.every((item) => (item.背景色 ?? '').includes('44, 107, 237')) ||
+        (await cdp.evaluate(`getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()`) ===
+          '#6f9bff' &&
+          seen.every((item) => (item.背景色 ?? '').includes('111, 155, 255'))),
+      `进度条用的是站点主色（${seen[0]?.背景色}）——日间是 rgb(44, 107, 237)，暗夜是 rgb(111, 155, 255)`,
     )
     check(
       seen.every((item) => Number.parseFloat(String(item.高度 || '99')) <= 4),

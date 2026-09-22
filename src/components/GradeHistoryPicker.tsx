@@ -51,6 +51,7 @@ export function GradeHistoryPicker({
   viewingId,
   onView,
   onBackToWriting,
+  onDelete,
 }: {
   /** 这一页的全部批改，**最新的在前** */
   history: readonly GradeHistoryEntry[]
@@ -58,8 +59,12 @@ export function GradeHistoryPicker({
   viewingId: string | null
   onView: (id: string) => void
   onBackToWriting: () => void
+  /** 删掉某一条（练习记录里同步消失；连带的事由 App 处理，见 records-store 的 removeRecord） */
+  onDelete: (id: string) => void
 }): JSX.Element | null {
   const [open, setOpen] = useState(false)
+  /** 正在问"确定删这一条吗"的那一条；null = 没在问 */
+  const [confirming, setConfirming] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement | null>(null)
 
   // 点外面或按 Esc 就收起（与文章栏、句子栏那几个下拉同一套做法）
@@ -68,9 +73,14 @@ export function GradeHistoryPicker({
     const onDocumentClick = (event: MouseEvent): void => {
       if (event.target instanceof Node && ref.current?.contains(event.target)) return
       setOpen(false)
+      // "确定删吗"这句问话只属于打开着的这一次：收起下拉就当作没问过
+      setConfirming(null)
     }
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') {
+        setOpen(false)
+        setConfirming(null)
+      }
     }
     document.addEventListener('click', onDocumentClick)
     window.addEventListener('keydown', onKey)
@@ -106,7 +116,7 @@ export function GradeHistoryPicker({
         {open && (
           <ul className="domain-menu" role="listbox" aria-label="批改记录">
             {history.map((entry) => (
-              <li key={entry.id}>
+              <li key={entry.id} className="history-row">
                 <button
                   type="button"
                   role="option"
@@ -123,6 +133,40 @@ export function GradeHistoryPicker({
                     <span className="record-refine">{LEVEL_LABEL[entry.level].split('（')[0]}</span>
                   )}
                 </button>
+                {/*
+                  删掉这一次（用户第 11 条要求）。**先问一句再删**：
+                  记录一删就是真的没了（练习记录里那条同时消失），误点无法挽回。
+                  问话就地展开在这一行里，不弹窗——下拉本来就是"轻动作"，
+                  为它盖一层弹窗会把"我就想删掉这一条"变成一件大事。
+                */}
+                {confirming === entry.id ? (
+                  <span className="history-confirm">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-danger"
+                      onClick={() => {
+                        onDelete(entry.id)
+                        setConfirming(null)
+                      }}
+                      title="删掉这一次批改；练习记录里那一条也会一起消失"
+                    >
+                      删除
+                    </button>
+                    <button type="button" className="btn btn-ghost" onClick={() => setConfirming(null)}>
+                      取消
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="history-delete"
+                    onClick={() => setConfirming(entry.id)}
+                    aria-label={`删除第 ${entry.ordinal} 次批改`}
+                    title="删掉这一次批改（练习记录里同步消失）"
+                  >
+                    ✕
+                  </button>
+                )}
               </li>
             ))}
           </ul>

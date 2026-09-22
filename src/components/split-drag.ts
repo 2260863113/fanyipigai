@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
+import { clampRatio, loadSplit, saveSplit, type SplitScope, type SplitState } from './split-layout'
 
 /**
  * 四栏布局的边界拖动。
@@ -11,28 +12,29 @@ import { useCallback, useRef, useState, type CSSProperties, type PointerEvent as
  *
  * 拖动起点取"当前实际比例"（量出来的），不是 0.5——
  * 否则从自动布局切到手动的一瞬间画面会跳一下。
+ *
+ * ## 位置是**落盘**的（用户第 5 条）
+ *
+ * 用户原话："所有界面可移动分割线的位置需要个性化记忆，下次打开时按照相同位置的分割线展示。"
+ * 因此这一版的 `split` 从 localStorage 里读初值，并且**双击恢复默认也写回存储**——
+ * 用户对"恢复默认算不算数"的答复是"反正就是，你走的时候什么位置，下次回来之后，
+ * 还是在那个位置"，所以恢复默认之后的自动布局就是他要记住的那个位置
+ * （见 split-layout.ts 的文件头）。
+ *
+ * 写的时机只有两处：**一次拖动结束**与**双击恢复默认**。
+ * 拖动过程中每一帧都写 localStorage 是没必要的开销（而且中途离开页面时那半截比例
+ * 也不是用户想要的位置），因此移动只改内存状态，落盘发生在手松开的那一刻。
  */
-export interface SplitState {
-  /** 左栏占的横向比例（0–1） */
-  left: number
-  /** 上排占的纵向比例（0–1） */
-  top: number
-}
 
-const MIN = 0.15
-const MAX = 0.85
+export type { SplitState }
 
-function clamp(value: number): number {
-  return Math.min(MAX, Math.max(MIN, value))
-}
-
-export function useSplitDrag(containerRef: RefObject<HTMLElement | null>): {
+export function useSplitDrag(scope: SplitScope, containerRef: RefObject<HTMLElement | null>): {
   split: SplitState | null
   style: CSSProperties | undefined
   beginDrag: (axis: 'v' | 'h', event: ReactPointerEvent<HTMLElement>) => void
   resetSplit: () => void
 } {
-  const [split, setSplit] = useState<SplitState | null>(null)
+  const [split, setSplit] = useState<SplitState | null>(() => loadSplit(scope))
   const splitRef = useRef<SplitState | null>(null)
   splitRef.current = split
 
@@ -61,8 +63,8 @@ export function useSplitDrag(containerRef: RefObject<HTMLElement | null>): {
     const sumX = leftWidth + rightWidth
     const sumY = topHeight + bottomHeight
     return {
-      left: sumX > 0 ? clamp(leftWidth / sumX) : 0.5,
-      top: sumY > 0 ? clamp(topHeight / sumY) : 0.5,
+      left: sumX > 0 ? clampRatio(leftWidth / sumX) : 0.5,
+      top: sumY > 0 ? clampRatio(topHeight / sumY) : 0.5,
     }
   }, [containerRef])
 
@@ -75,19 +77,23 @@ export function useSplitDrag(containerRef: RefObject<HTMLElement | null>): {
       const startX = event.clientX
       const startY = event.clientY
       const handle = event.currentTarget
+      // 最后一次算出来的位置：松手那一刻要落盘的是它，而不是"上一帧渲染过的"那个
+      let latest = start
       setSplit(start)
 
       const onMove = (move: PointerEvent): void => {
         const next: SplitState = {
-          left: axis === 'v' && rect.width > 0 ? clamp(start.left + (move.clientX - startX) / rect.width) : start.left,
-          top: axis === 'h' && rect.height > 0 ? clamp(start.top + (move.clientY - startY) / rect.height) : start.top,
+          left: axis === 'v' && rect.width > 0 ? clampRatio(start.left + (move.clientX - startX) / rect.width) : start.left,
+          top: axis === 'h' && rect.height > 0 ? clampRatio(start.top + (move.clientY - startY) / rect.height) : start.top,
         }
+        latest = next
         setSplit(next)
       }
       const finish = (): void => {
         handle.removeEventListener('pointermove', onMove)
         handle.removeEventListener('pointerup', finish)
         handle.removeEventListener('pointercancel', finish)
+        saveSplit(scope, latest)
       }
       // setPointerCapture 在 jsdom 里可能不存在，可选调用
       handle.setPointerCapture?.(event.pointerId)
@@ -95,10 +101,14 @@ export function useSplitDrag(containerRef: RefObject<HTMLElement | null>): {
       handle.addEventListener('pointerup', finish)
       handle.addEventListener('pointercancel', finish)
     },
-    [containerRef, measure],
+    [containerRef, measure, scope],
   )
 
-  const resetSplit = useCallback((): void => setSplit(null), [])
+  const resetSplit = useCallback((): void => {
+    setSplit(null)
+    // 「恢复默认」也是"你走的时候的位置"（见文件头），因此照样写回存储
+    saveSplit(scope, null)
+  }, [scope])
 
   const style: CSSProperties | undefined = split
     ? ({

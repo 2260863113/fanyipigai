@@ -1847,9 +1847,25 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         '左上角如实标出"这是按哪种题型批改的"（自己贴的题没有官方建议用时）',
         custom.afterPaste.slice(0, 80),
       )
+      /*
+       * 第 9 条把顶栏那三枚小标签（方向 / 文体 / 话题）删掉了，因此这条断言反过来量：
+       * **它们确实不再出现**。以前它量的是"方向标签跟着原文变"，
+       * 而那枚标签现在整站都没有了（方向在原文标题栏的开关里）。
+       * 只看顶栏那一段 HTML：这三样字样在别处（练习记录、选文章弹窗）本来就该有。
+       */
+      const topbarHtml = (() => {
+        const start = customProbe.html.indexOf('class="topbar"')
+        const end = customProbe.html.indexOf('</header>', start)
+        return start >= 0 && end > start ? customProbe.html.slice(start, end) : ''
+      })()
       check(
-        customProbe.html.includes('中译英'),
-        '顶栏的方向标签跟着这篇原文变（有汉字就是中译英）',
+        topbarHtml.length > 0 &&
+          !topbarHtml.includes('中译英') &&
+          !topbarHtml.includes('英译中') &&
+          !topbarHtml.includes('新闻编译') &&
+          !topbarHtml.includes('社会'),
+        '顶栏不再挂方向/文体/话题三枚标签（第 9 条）',
+        topbarHtml.slice(0, 120),
       )
       check(custom.storedSource.includes('碳达峰与碳中和'), '贴进来的原文存进了浏览器（刷新后还在）')
       check(custom.historyCount >= 1, '按题号留了档，练习记录翻旧题时显示得出原文')
@@ -2104,7 +2120,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     if (panels) {
       check(panels.hasSplitter, '四栏之间是可见可拖的分隔条')
       check(panels.manualApplied, '拖动之后切换成手动比例（split-manual）')
-      check(panels.canReturnToResult, '批过的页是只读的（没有输入框、也没有提交按钮），但给着「返回编辑」')
+      check(panels.canReturnToResult, '批过的页是只读的（没有输入框），而那颗按钮原地写着「返回编辑」')
       check(panels.editorShown, '点「返回编辑」回到作答框，可以接着改')
       check(
         panels.submitLabelAfterUnlock.trim() === '提交批改',
@@ -3020,6 +3036,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       type: 'sessionRestored',
       exerciseId: 'z',
       restored: [{ sectionIndex: 2, draft, answer: '第二页的译文' }],
+      drafts: [],
     })
     check(pageResultOf(at('z'), 2) !== undefined, '接回来的那一页有结果（于是界面显示批改，而不是空作答框）')
     check(at('z').drafts[2] === '第二页的译文', '草稿也一并接回来（按「返回编辑」面对的是一张有字的框，不是空的）')
@@ -3029,6 +3046,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       type: 'sessionRestored',
       exerciseId: 'z',
       restored: [{ sectionIndex: 2, draft, answer: '记录里的旧版本' }],
+      drafts: [],
     })
     check(pageResultOf(at('z'), 2)?.answer === '第二页的译文', '会话里已有的结果不被旧记录盖掉')
     // 用户正在写的那一页：草稿不动
@@ -3037,6 +3055,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       type: 'sessionRestored',
       exerciseId: 'z',
       restored: [{ sectionIndex: 0, draft, answer: '记录里的老作答' }],
+      drafts: [],
     })
     check(at('z').drafts[0] === '我自己正在写的', '正在写的草稿不会被接回来的记录冲掉')
 
@@ -3188,7 +3207,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
    * ②写不下时怎么办（一条记录可能几十 KB，而 localStorage 通常只有 5 MB）。
    */
   try {
-    const { loadRecords, saveRecords, MAX_RECORDS } = await import('../src/components/records-store')
+    const { loadRecords, saveRecords, removeRecord, MAX_RECORDS } = await import('../src/components/records-store')
     const makeRecord = (n: number, exerciseId = 'x-1'): RecordView => ({
       id: `record-test-${n}`,
       exerciseId,
@@ -3337,8 +3356,267 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     storageProto.setItem = originalSetItem
     check(nothing.length === 0, `一条都写不下时返回空（不谎报存下了），实际 ${nothing.length}`)
     check(attempts > 1, `确实做了多次重试（尝试了 ${attempts} 次）`)
+
+    /*
+     * 删掉一条（第 11 条）：练习记录与「批改记录」下拉读的是同一份数据，
+     * 因此"删一处 = 两处都没了"这件事就落在 removeRecord 上——它必须真的落盘。
+     */
+    window.localStorage.removeItem('translation-practice.records.v2')
+    const forDelete = saveRecords([makeRecord(1), makeRecord(2), makeRecord(3)])
+    const target = forDelete[1]
+    const afterDelete = target ? removeRecord(forDelete, target.id) : []
+    check(afterDelete.length === forDelete.length - 1, `删掉一条之后少一条（${forDelete.length} → ${afterDelete.length}）`)
+    check(
+      target ? !afterDelete.some((record) => record.id === target.id) : false,
+      '被删的那一条不在了',
+    )
+    check(
+      loadRecords().length === afterDelete.length && !loadRecords().some((record) => record.id === target?.id),
+      '删是**真落盘**的（重新读回来也没有它）——所以练习记录与下拉会一起消失',
+    )
+    check(
+      afterDelete.every((record) => record.id !== target?.id) && afterDelete.length === 2,
+      '其余两条原样留着（删一条不该动别的）',
+    )
   } catch (error) {
     check(false, '练习记录落盘可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 提交前那两道门（第 3 条）。
+   *
+   * 用户的原话："每次提交批改需要进行检测才能提交，要求字数必须大于30字（英文30个单词），
+   * 且不能与这一段之前任意一次提交内容100%相同（防止重复提交），一旦违反，
+   * 用吐司提示用户，并不提交批改。"
+   *
+   * 这里量四件事：门槛是"**多于** 30"（也就是至少 31）、中文数汉字而英文数词、
+   * 只管文章题与段落题、以及重复判定的口径（去掉首尾空白后逐字符）。
+   */
+  try {
+    const { checkSubmit, countAnswerUnits, SUBMIT_MIN_UNITS, gatedByLength } = await import(
+      '../src/domain/submit-gate'
+    )
+    const words = (n: number, word = 'word'): string => Array.from({ length: n }, () => word).join(' ')
+    const chars = (n: number): string => '译'.repeat(n)
+
+    check(SUBMIT_MIN_UNITS === 30, `篇幅下限就是 30（实际 ${SUBMIT_MIN_UNITS}）`)
+    check(
+      gatedByLength('article') && gatedByLength('paragraph') && !gatedByLength('sentence') && !gatedByLength('term'),
+      '门槛只管文章题与段落题（句子题、术语题不拦）',
+    )
+
+    // 中译英：作答是英文，数**词**
+    check(countAnswerUnits(words(31), 'zh-to-en') === 31, '中译英数的是单词（31 个词就是 31）')
+    check(countAnswerUnits(chars(40), 'en-to-zh') === 40, '英译中数的是汉字（40 个汉字就是 40）')
+    check(
+      !checkSubmit({ mode: 'article', direction: 'zh-to-en', answer: words(30), previousAnswers: [] }).ok,
+      '30 个词不行（要求"大于 30"，也就是至少 31）',
+    )
+    check(
+      checkSubmit({ mode: 'article', direction: 'zh-to-en', answer: words(31), previousAnswers: [] }).ok,
+      '31 个词可以交',
+    )
+    check(
+      !checkSubmit({ mode: 'article', direction: 'en-to-zh', answer: chars(30), previousAnswers: [] }).ok,
+      '30 个汉字不行',
+    )
+    check(checkSubmit({ mode: 'article', direction: 'en-to-zh', answer: chars(31), previousAnswers: [] }).ok, '31 个汉字可以交')
+    // 短句在句子题上照旧能交（门槛不管它）
+    check(
+      checkSubmit({ mode: 'sentence', direction: 'en-to-zh', answer: '很短的一句', previousAnswers: [] }).ok,
+      '句子题不受篇幅门槛约束（否则短句永远交不出去）',
+    )
+    check(
+      checkSubmit({ mode: 'term', direction: 'en-to-zh', answer: '术语', previousAnswers: [] }).ok,
+      '术语题同样不受门槛约束',
+    )
+
+    // 提示语要能读：说清"还差多少"
+    const short = checkSubmit({ mode: 'article', direction: 'zh-to-en', answer: words(12), previousAnswers: [] })
+    check(
+      !short.ok && short.message.includes('12') && short.message.includes('31'),
+      '拦下来的那句提示里写着"现在多少个、要多少个"',
+      short.ok ? '' : short.message,
+    )
+
+    // 重复：去掉首尾空白后逐字符相同就算重复
+    /*
+     * ⚠️ 拿来测重复的这段作答必须**自己先过篇幅那道门**（40 个词），
+     * 否则拦下它的是篇幅、而不是重复——那样这两条断言看着是绿的，其实什么都没测到。
+     */
+    const longForDup = words(40)
+    const history = [`  ${longForDup}  `]
+    const same = checkSubmit({
+      mode: 'article',
+      direction: 'zh-to-en',
+      answer: longForDup,
+      previousAnswers: history,
+    })
+    check(!same.ok, '与之前某次提交一字不差（只差首尾空白）→ 拦下')
+    check(
+      !same.ok && same.message.includes('重复'),
+      '提示语说的是"重复提交"这件事（而不是"太短"）',
+      same.ok ? '' : same.message,
+    )
+    check(
+      checkSubmit({
+        mode: 'article',
+        direction: 'zh-to-en',
+        answer: `${longForDup}.`,
+        previousAnswers: history,
+      }).ok,
+      '改了一个标点就不算重复（口径是逐字符，不做标点归一）',
+    )
+    check(
+      checkSubmit({
+        mode: 'article',
+        direction: 'zh-to-en',
+        answer: longForDup.toUpperCase(),
+        previousAnswers: history,
+      }).ok,
+      '只改大小写不算重复（大小写敏感）',
+    )
+
+    /*
+     * 探针与截屏脚本共用的那份"合格作答"必须真的过这道门。
+     *
+     * 这条断言是**防漂移**的：那把造作答的函数在 scripts/lib/probe-answer.mjs 里
+     * （截屏要把它的源码塞进页面执行，因此它不能 import 任何东西），
+     * 与这里测的判据是两份实现。门一改（比如下限从 30 调到 50），
+     * 这里就会当场变红，而不是等到"截图里看不到批改结果"才发现。
+     */
+    const { answerForPage } = await import('./lib/probe-answer.mjs')
+    check(
+      checkSubmit({
+        mode: 'article',
+        direction: 'zh-to-en',
+        answer: answerForPage('这是一段中文原文', 0),
+        previousAnswers: [],
+      }).ok,
+      '探针给中译英造的假作答过得了门（词数够）',
+    )
+    check(
+      checkSubmit({
+        mode: 'article',
+        direction: 'en-to-zh',
+        answer: answerForPage('This is an English source sentence.', 0),
+        previousAnswers: [],
+      }).ok,
+      '探针给英译中造的假作答过得了门（汉字够）',
+    )
+  } catch (error) {
+    check(false, '提交前的两道门可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 每一页的界面状态（第 10 条）：草稿、在编辑、正在看第几次批改。
+   *
+   * 用户要的是三件事：切段再切回来看到的是**那一次**（不是最新一次）、
+   * 刷新之后草稿与编辑态还在、以及换原文时这些状态一起清掉
+   * （否则旧原文的草稿会贴着新原文回来，比丢掉更糟）。
+   */
+  try {
+    const { loadPageStates, readPageState, writePageState, dropPageStates, MAX_PAGES } = await import(
+      '../src/components/page-state'
+    )
+    const key = 'translation-practice.page-state.v1'
+    window.localStorage.removeItem(key)
+
+    let map = loadPageStates()
+    check(Object.keys(map).length === 0, '没记过时是空的')
+
+    map = writePageState(map, 'art-a', 1, { draft: '第一页的字' }, new Date(2026, 0, 1, 10))
+    map = writePageState(map, 'art-a', 2, { draft: '第二页的字', unlocked: true }, new Date(2026, 0, 1, 11))
+    map = writePageState(map, 'art-b', 0, { draft: '别的题' }, new Date(2026, 0, 1, 12))
+    check(readPageState(map, 'art-a', 2)?.draft === '第二页的字', '按「题 + 页」各存各的（第 2 页的字没被第 1 页盖掉）')
+    check(readPageState(map, 'art-a', 2)?.unlocked === true, '「这一页在编辑」也记住了')
+    check(readPageState(map, 'art-a', 1)?.unlocked === false, '没按过「返回编辑」的页不会被顺手记成在编辑')
+
+    // 正在看第几次：这是第 10 条的核心
+    map = writePageState(map, 'art-a', 2, { viewingGradeId: 'record-7' })
+    check(readPageState(loadPageStates(), 'art-a', 2)?.viewingGradeId === 'record-7', '「正在看第几次」落盘了（刷新之后还认得出）')
+    check(readPageState(loadPageStates(), 'art-a', 1)?.viewingGradeId === null, '别的页不受影响（每页各记各的）')
+
+    // 内容没变就不写：打字时每敲一个字都会调它，别动不动整份序列化
+    const before = window.localStorage.getItem(key)
+    const same = writePageState(map, 'art-a', 2, { draft: '第二页的字' })
+    check(same === map, '内容没变时一个字都不写（返回的是同一份 map）')
+    check(window.localStorage.getItem(key) === before, '存储也没被动过')
+
+    // 换原文：那道题的页状态全部丢掉，别的题不动
+    const dropped = dropPageStates(map, 'art-a')
+    check(readPageState(dropped, 'art-a', 1) === undefined && readPageState(dropped, 'art-a', 2) === undefined, '换原文把这道题的页状态清光')
+    check(readPageState(dropped, 'art-b', 0)?.draft === '别的题', '别的题不受影响')
+    check(Object.keys(loadPageStates()).length === 1, '清也是真落盘的')
+
+    // 条数上限：草稿可能很长，不能让它无限堆在 5MB 的 localStorage 里
+    window.localStorage.removeItem(key)
+    let capped = loadPageStates()
+    for (let index = 0; index < MAX_PAGES + 20; index += 1) {
+      capped = writePageState(capped, 'art-c', index, { draft: `第 ${index} 页` }, new Date(2026, 0, 1, 0, 0, index))
+    }
+    check(
+      Object.keys(loadPageStates()).length <= MAX_PAGES,
+      `超过上限时按"最久没动过的先丢"裁剪（留下 ${Object.keys(loadPageStates()).length} ≤ ${MAX_PAGES}）`,
+    )
+    check(
+      readPageState(loadPageStates(), 'art-c', MAX_PAGES + 19)?.draft === `第 ${MAX_PAGES + 19} 页`,
+      '最新那一页一定留着（裁的是最旧的）',
+    )
+    window.localStorage.removeItem(key)
+  } catch (error) {
+    check(false, '每一页的界面状态可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 分割线位置（第 5 条）：**走的时候在哪儿，下次回来还在哪儿**。
+   *
+   * 用户对"双击恢复默认算不算数"的答复是"反正就是，你走的时候什么位置，
+   * 下次回来之后，还是在那个位置"——因此自动布局（null）也要记。
+   */
+  try {
+    const { loadSplit, saveSplit, clampSplit, SPLIT_MIN, SPLIT_MAX } = await import('../src/components/split-layout')
+    const key = 'translation-practice.split-layout.v1'
+    window.localStorage.removeItem(key)
+
+    check(loadSplit('practice') === null, '没拖过时是自动布局')
+    saveSplit('practice', { left: 0.3, top: 0.7 })
+    saveSplit('records-nested', { left: 0.2, top: 0.8 })
+    check(loadSplit('practice')?.left === 0.3, '拖过的位置记下来了')
+    check(loadSplit('records-nested')?.top === 0.8, '三组位置各记各的（互不覆盖）')
+    check(loadSplit('records-outer') === null, '没动过的那一组仍是自动布局')
+
+    // 双击恢复默认：写的是 null，也必须记得住
+    saveSplit('practice', null)
+    check(loadSplit('practice') === null, '双击恢复默认之后仍是自动布局')
+    check(loadSplit('records-nested')?.left === 0.2, '恢复某一组不影响别组')
+
+    // 坏数据：越界的比例要夹回来，不能把某一栏拖到看不见
+    window.localStorage.setItem(key, JSON.stringify({ practice: { left: 5, top: -3 }, junk: '嗨' }))
+    const clamped = loadSplit('practice')
+    check(
+      clamped?.left === SPLIT_MAX && clamped?.top === SPLIT_MIN,
+      `越界的比例被夹进 ${SPLIT_MIN}–${SPLIT_MAX}（否则栏会塌掉）`,
+    )
+    check(clampSplit({ left: 9, top: 0.5 }).left === SPLIT_MAX, 'clampSplit 与读取时同一套口径')
+
+    window.localStorage.setItem(key, '{不是 JSON')
+    check(loadSplit('practice') === null, '存储坏了就当没记过（回到自动布局，不把界面弄崩）')
+    window.localStorage.removeItem(key)
+  } catch (error) {
+    check(false, '分割线位置可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /* 明暗主题（第 9 条）：跟随系统是默认，手动切过之后就不再听系统的。 */
+  try {
+    const { resolveTheme, DEFAULT_SETTINGS } = await import('../src/components/settings')
+    check(DEFAULT_SETTINGS.theme === 'system', '默认主题是"跟随系统"')
+    check(resolveTheme('system', true) === 'dark', '跟随系统：系统深色就是深色')
+    check(resolveTheme('system', false) === 'light', '跟随系统：系统浅色就是浅色')
+    check(resolveTheme('light', true) === 'light', '手动选过浅色之后，系统再深也不跟（否则那颗按钮看着是坏的）')
+    check(resolveTheme('dark', false) === 'dark', '手动选过深色之后同理')
+  } catch (error) {
+    check(false, '主题口径可以验证', error instanceof Error ? error.message : String(error))
   }
 
   return { checks, failures, skipped }

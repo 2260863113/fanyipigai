@@ -179,8 +179,10 @@ async function checkServedModules(base) {
     '/src/components/FixLayer.tsx',
     '/src/components/App.tsx',
     '/src/components/AnswerPane.tsx',
-    '/src/components/ArticleBar.tsx',
     '/src/components/ArticlePickerModal.tsx',
+    // 领域下拉与方向切换从 ArticleBar.tsx 搬进了这个文件（第 7 条），
+    // 原先那条横条组件已经删掉——这一行跟着换，否则这个脚本一上来就报"取不到"
+    '/src/components/DomainSelect.tsx',
   ]
   for (const target of targets) {
     let body

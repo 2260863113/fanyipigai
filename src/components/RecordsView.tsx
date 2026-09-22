@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { Correction, Direction, Mode, PolishLevel } from '../domain/types'
 import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
 import { pageReferenceOf, pageSourceOf } from '../domain/exercise-source'
@@ -67,6 +67,13 @@ interface Props {
   /** 收藏列表：右下角那颗「收藏」要知道这一处是不是已经收藏过 */
   favorites: readonly Favorite[]
   onToggleFavorite: (favorite: Favorite) => void
+  /**
+   * 删掉一条记录（用户第 11 条要求：练习记录里也加删除按钮，与「批改记录」下拉里那颗叉号是同一件事）。
+   *
+   * 连带的事（进度、正在看的那一次、屏幕上摆着的那份结果）由 App 处理：
+   * 这一页只知道"用户要删哪一条"。
+   */
+  onDelete: (record: RecordView) => void
 }
 
 /**
@@ -75,7 +82,9 @@ interface Props {
  * 顶部导航栏里的一栏，因此占据整个主体区域：左边是全部记录的列表，
  * 右边沿用练习页的四栏结构——上排是题干原文与当时写的译文，下排是计分与逐处批注。
  */
-export function RecordsView({ records, openRecord, onOpen, selection, settings, onSettingsChange, onSelect, favorites, onToggleFavorite }: Props) {
+export function RecordsView({ records, openRecord, onOpen, selection, settings, onSettingsChange, onSelect, favorites, onToggleFavorite, onDelete }: Props) {
+  /** 正在问"确定删这一条吗"的那一条；null = 没在问（与批改记录下拉里那颗叉号同一套做法） */
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null)
   /*
    * 题干原文：**这一条记录当时做的那一段**，不是整篇。
    *
@@ -115,9 +124,9 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
    * 三条都各自一个实例（双层嵌套的 split 各有各的比例）。
    */
   const splitRef = useRef<HTMLElement | null>(null)
-  const { split, style: splitStyle, beginDrag, resetSplit } = useSplitDrag(splitRef)
+  const { split, style: splitStyle, beginDrag, resetSplit } = useSplitDrag('records-outer', splitRef)
   const nestedRef = useRef<HTMLDivElement | null>(null)
-  const nested = useSplitDrag(nestedRef)
+  const nested = useSplitDrag('records-nested', nestedRef)
 
   /** 当前选中那一处的收藏内容（记录页也要能收藏） */
   const favorite = openRecord
@@ -225,6 +234,37 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
           </h2>
           {openRecord && (
             <div className="head-meta">
+              {/*
+                删掉这一条（用户第 11 条要求）。它与「批改记录」下拉里那颗叉号删的是**同一条数据**，
+                因此两处的文案与后果必须一模一样：删掉就真没了，练习记录与下拉同步消失。
+              */}
+              {confirmingDelete === openRecord.id ? (
+                <>
+                  <span className="hint">删掉这一条？练习记录里也会消失。</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-danger"
+                    onClick={() => {
+                      onDelete(openRecord)
+                      setConfirmingDelete(null)
+                    }}
+                  >
+                    删除
+                  </button>
+                  <button type="button" className="btn btn-ghost" onClick={() => setConfirmingDelete(null)}>
+                    取消
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setConfirmingDelete(openRecord.id)}
+                  title="删掉这一条记录（批改记录下拉里也会消失）"
+                >
+                  删除这一条
+                </button>
+              )}
               <button type="button" className="btn btn-ghost" onClick={() => onOpen(null)}>
                 关闭
               </button>

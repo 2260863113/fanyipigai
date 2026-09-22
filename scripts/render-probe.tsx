@@ -15,6 +15,8 @@ import { validateCorrection } from '../src/domain/validate'
 import { toAiShape } from '../src/domain/parse'
 import { LENGTH_RULE, measureLength, toGeneratedExercise, type GeneratedArticle } from '../src/domain/generate'
 import type { Direction, Genre, Mode } from '../src/domain/types'
+// 造"能过提交门"的假作答（第 3 条之后必须有它，见该文件的说明）
+import { answerForPage, appendNote } from './lib/probe-answer.mjs'
 
 /** 顶层导航的标签文案，用于按题型切换（与 types.ts 的 MODE_TABS 保持一致）。 */
 const MODE_TAB_LABEL: Record<string, string> = {
@@ -1010,29 +1012,36 @@ export async function renderApp(
   }
 
   /*
-   * 没有内置示例作答（文章库/句子库/自定义题）时，把**屏幕上的原文**当作答打进去。
-   * 这样提交流程照样能跑通，结构断言（提交后换成带批注的译文、四栏就位、接口调用次数）
-   * 仍然有效；批改内容来自接口桩的固定响应，不代表真实错误样本。
+   * 没有内置示例作答（文章库/句子库/自定义题）时，**造一段合规的假译文**打进去
+   * （见 scripts/lib/probe-answer.mjs）。
+   *
+   * ⚠️ 以前这里是把**屏幕上的原文**当作答打进去的。第 3 条之后那样行不通了：
+   * 提交前要数篇幅（文章题/段落题必须多于 30 个单位，英译中数汉字、中译英数单词），
+   * 而把中文原文当"英文译文"交上去只有 1 个词——门一拦，一次批改都不会发出去
+   * （表现为"批改调用 0 次"，很容易被误读成功能坏了）。
+   *
+   * 造出来的假译文够长、且与页号相关（各页互不相同），因此两道门都过，
+   * 而批改内容仍然来自接口桩的固定响应，不代表真实错误样本。
    *
    * 多段原文要**一段一段读**：原文栏一次只显示当前那一页，因此这里翻到最后再翻回来，
-   * 把每一页的文字收集起来（这一步只翻页、不写不打字，因此不会触发任何自动提交）。
+   * 把每一页的**原文**收集起来（用来判断该页该填中文还是英文），再据此造作答。
+   * 这一步只翻页、不写不打字，因此不会触发任何提交。
    */
-  const fallbackAnswer = (): string =>
+  const fallbackSource = (): string =>
     (container.querySelector('.pane-source .source-text')?.textContent ?? '').trim()
 
   /**
-   * 把"现在这一篇"的每一页原文读下来。
+   * 把"现在这一篇"的每一页原文读下来，并据此造出每一页的合格作答。
    *
-   * 只在题库里没有这道题（文章库 / 句子库 / 自定义题）时用得上。
    * 读完之后会翻回第 1 页——**用实际读到的页号决定翻几次**，不要用读到的段数：
    * 中途点不动时"读了几段"和"走了几页"会对不上，用段数回退就会回退过头，
    * 现象是整个逐页流程在错误的页码上跑（踩过：探针在第 1 页上重复写了 8 遍）。
    */
   const readPagesFromScreen = async (): Promise<string[]> => {
-    if (!container.querySelector('.section-nav')) return [fallbackAnswer()]
+    if (!container.querySelector('.section-nav')) return [answerForPage(fallbackSource(), 0)]
     const collected: string[] = []
     for (;;) {
-      collected.push(fallbackAnswer())
+      collected.push(answerForPage(fallbackSource(), collected.length))
       const next = container.querySelector<HTMLButtonElement>('.section-nav [data-nav="next"]')
       if (!next || next.disabled) break
       await clickNav('next')
@@ -1532,7 +1541,12 @@ export async function renderApp(
     for (let index = sectionIndexNow(); index < sectionsToFill.length - 1; index += 1) await clickNav('next')
     const lastSection = sectionsToFill[sectionsToFill.length - 1] ?? ''
     await ensureEditable()
-    await typeInto(lastSection)
+    /*
+     * ⚠️ 必须**改一句再交**：这一页在逐页流程里已经用同样的文字交过一次，
+     * 而第 3 条之后"与之前任何一次提交一字不差"会被拦下（那是"防重复提交"的正经作用）。
+     * 追加一句既保证过篇幅那道门（只会更长），又让它与上一次不同。
+     */
+    await typeInto(appendNote(lastSection, '（收场：探针在这里加了一句，好让这次提交不被"重复提交"拦住）'))
     await submitCurrentPage()
 
     /*
@@ -1729,10 +1743,17 @@ export async function renderApp(
     const unlock = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
       (node) => node.textContent?.trim() === '返回编辑',
     )
-    // 批过的那一页现在是结果视图：没有输入框，也没有「提交批改」
+    /*
+     * 批过的那一页现在是结果视图：**没有输入框**，而标题栏那颗按钮写的是「返回编辑」。
+     *
+     * ⚠️ 第 2 条之后这里不能再要求"没有提交按钮"了：那颗按钮**一直在同一个位置**，
+     * 只是名字在两种状态之间换（批改后叫「返回编辑」，点是回到可写；回到可写又叫「提交批改」）。
+     * 因此判据改成"它在、而且写着「返回编辑」"——那正是"同一颗按钮，两个名字"的证据。
+     */
+    const gradedButton = container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')
     const readonlyBeforeUnlock =
       container.querySelector('.answer-input') === null &&
-      container.querySelector('.pane-answer .btn-primary') === null
+      gradedButton?.textContent?.trim() === '返回编辑'
     if (unlock) {
       await act(async () => {
         unlock.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
@@ -1789,8 +1810,13 @@ export async function renderApp(
      * ⚠️ 这条比早先更强：那时翻页仍会自动提交（只有"改过的页"例外），
      * 因此这里量的是"改过的页不自动提交"；现在自动提交整个取消了，
      * 翻页无论改没改过都只是翻页——`judgeCallsAfterReturn` 必须是 0。
+     *
+     * 改的方式是**在原文后面追加一句**（而不是整段换成一句短话）：
+     * 下面要拿这段文字去"手动提交"，而第 3 条之后重复提交会被拦下、
+     * 太短也会被拦下（篇幅那道门）——整段换成一句短话两条都过不了。
      */
-    await typeInto('（改了一下）')
+    const textBeforeEdit = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
+    await typeInto(appendNote(textBeforeEdit, '（改了一下：探针追加一句，好让重新提交不被拦住）'))
     const submitLabelAfterEdit =
       container.querySelector<HTMLButtonElement>('.pane-answer .btn-primary')?.textContent?.trim() ?? ''
     /** 改过字之后下拉**仍然在**（这正是它比旧的「查看上次批改」强的地方） */
@@ -1880,6 +1906,13 @@ export async function renderApp(
     const activeLevel = container.querySelector('.level-btn-active')?.textContent?.trim() ?? ''
 
     // 2) 重新提交：这一次走的是 /api/refine
+    /*
+     * ⚠️ 交之前先**改一句**：这一页刚刚用同样的文字交过一次，
+     * 而第 3 条之后"与之前任何一次提交一字不差"会被拦下（不发出任何请求）。
+     * 追加一句既过篇幅那道门，也过"防重复提交"那道门。
+     */
+    const beforeRefineText = container.querySelector<HTMLTextAreaElement>('.answer-input')?.value ?? ''
+    await typeInto(appendNote(beforeRefineText, '（大改：探针追加一句，好让这次提交不被"重复提交"拦住）'))
     const callsBeforeRefine = judgeFetch.calls()
     await submitCurrentPage()
     const refineCalls = judgeFetch.calls() - callsBeforeRefine

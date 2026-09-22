@@ -20,6 +20,8 @@ import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { findBrowser, BROWSER_HINT } from './lib/find-browser'
 import { removeDir } from './lib/clear-dir'
+// 造"能过提交门"的假作答；它会被**注入到页面里**执行，因此下面取它的源码
+import { answerForPage } from './lib/probe-answer.mjs'
 
 export interface ScreenshotResult {
   ok: boolean
@@ -223,6 +225,22 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
       answerSectionsByExercise.set(id, fixture.answerSections)
     }
 
+    /**
+     * 这一张截图用的作答记号。
+     *
+     * ⚠️ 每张截图都必须**换一段文字**再交，这不是好看：
+     * 几张截图在**同一个浏览器**里一张一张跑，而练习记录是落盘的；
+     * 同一道题、同一页交了一模一样的文字会被"不能与之前任何一次提交一字不差"那道门拦下
+     * （第 3 条），截图就永远等不到批改结果（实测：03-marks 卡在这里）。
+     * 记号追加在**末尾**，因此批注的字符区间（从开头数起）一个字都不动，
+     * 接口桩那份假批改照样能落在对的位置上。
+     */
+    const shotTag = (shot: { name: string }): string => `\n（截图 ${shot.name}：这一份作答只给截图用，不是真的翻译）`
+
+    /** 这一张截图用的桩表：把记号加在答案上，桩才能按"提交回来的文字"找到它。 */
+    const shotTableFor = (shot: { name: string }): Array<{ answer: string; payload: unknown }> =>
+      stubTable.map((entry) => ({ answer: `${entry.answer}${shotTag(shot)}`, payload: entry.payload }))
+
     for (const shot of shots) {
       const target = (await (
         await fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, { method: 'PUT' })
@@ -238,7 +256,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
           deviceScaleFactor: 2,
           mobile: shot.width < 700,
         })
-        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: buildStubSource(stubTable) })
+        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: buildStubSource(shotTableFor(shot)) })
         await cdp.send('Page.navigate', { url: pageUrl })
 
         let mounted = false
@@ -288,6 +306,12 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
           // 分段题按**逐页批改**走：填一页 → 点「下一页」（这一页自动交出去批）→ 填下一页，
           // 最后一页再手动按「提交批改」。见下面那段里的说明。
           const fixtureSections = answerSectionsByExercise.get(shot.exerciseId ?? DEFAULT_EXERCISE_ID) ?? []
+          /*
+           * 注入给页面的那份实现：直接取上面 import 进来的函数源码。
+           * 这样"造作答"的口径只有一处（探针、截屏、验收脚本共用同一份），
+           * 不会出现"探针改了、截屏忘了改"这种各说各话。
+           */
+          const answerForPageSource = answerForPage.toString()
           const outcome = await cdp.evaluate(
             `(async () => {
                const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -303,20 +327,39 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                 */
                const fromFixture = ${JSON.stringify(fixtureSections)};
                /*
+                * 造作答的那段实现**注入进来**（而不是在这里重写一遍）：
+                * 它必须与探针、验收脚本用的是同一份口径（见 scripts/lib/probe-answer.mjs）。
+                * 第 3 条之后"把屏幕原文当作答"过不了提交门——中文原文按单词数只有 1 个词，
+                * 门一拦就一次批改都不发，截图里永远看不到批改结果。
+                */
+               const answerForPage = ${answerForPageSource};
+               /*
+                * 每张截图自己带一个记号，追加在作答末尾。
+                *
+                * ⚠️ 这是**必须的**，不是好看：几张截图在**同一个浏览器**里一张一张跑，
+                * 而练习记录是落盘的——同一道题、同一页的第二张截图如果交了一模一样的文字，
+                * 会被"不能与之前任何一次提交一字不差"那道门拦下（第 3 条），
+                * 截图就永远等不到批改结果（实测：03-marks 卡在这里）。
+                * 记号追加在**末尾**，因此批注的字符区间（从开头数起）一个字都不动，
+                * 桩里那份假批改照样落在对的位置上——桩表里也按**加了记号的**文字登记（见 shotTableFor）。
+                */
+               const shotTag = ${JSON.stringify(shotTag(shot))};
+               const withTag = (text) => text + '\\n' + shotTag;
+               /*
                 * 要送哪一段作答：
                 *   - 屏幕上**有翻页导航**（文章题那种逐页作答）→ 用表里的示例作答逐页填；
                 *   - 表里有示例、屏幕上是单页题 → 也送**表里的示例作答**，
                 *     这样接口桩能认出它是哪道内置示例，从而回一批批注，
                 *     截图才点得到勾画（否则回的是"没有批注"的空结果，02-result 无点可点）；
-                *   - 表里没有（文章库/句子库供题）→ 只好把屏幕原文当作答。
+                *   - 表里没有（文章库/句子库供题）→ 造一段合格的假译文（见上）。
                 */
                const onScreen = (document.querySelector('.pane-source .source-text')?.textContent ?? '').trim();
                const hasSectionNav = !!document.querySelector('.section-nav');
                const sections = fromFixture.length === 0
-                 ? [onScreen]
+                 ? [withTag(answerForPage(onScreen, 0))]
                  : hasSectionNav
-                   ? fromFixture
-                   : [fromFixture.join('\\n\\n')];
+                   ? fromFixture.map(withTag)
+                   : [withTag(fromFixture.join('\\n\\n'))];
                if (!sections[0]) return '原文栏是空的，拿不到可填的作答';
 
                const waitForResult = async () => {
@@ -390,7 +433,7 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                  const ta = await waitForFreshInput(hasSectionNav ? i : 0);
                  if (typeof ta === 'string') return ta;
                  if (!ta) return '第 ' + (i + 1) + ' 页没有等到可写的输入框';
-                 setValue(ta, sections[i] ?? onScreen);
+                 setValue(ta, sections[i] ?? withTag(answerForPage(onScreen, i)));
                  await sleep(200);
 
                  if (i === total - 1) {
@@ -404,8 +447,10 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                    break;
                  }
                  /*
-                  * 点「下一页」本身就是提交：界面会先把这一页交出去批，再翻过去。
-                  * 因此这里要等到**新的一页出现**才算真翻过去了。
+                  * 点「下一页」**只是翻页**（第 0017 号决定：翻页不再自动提交），
+                  * 因此截屏这里也照着真实交互走——中间那些页不提交，只填草稿；
+                  * 要交的就是**末页**那一次手动「提交批改」（上面那个 if）。
+                  * 这一段历史注释曾写成"点下一页就是提交"，那是自动提交年代的写法。
                   */
                  const next = document.querySelector('.section-nav [data-nav="next"]');
                  if (!next) return '翻页导航里找不到「下一页」按钮（本张用了 ' + total + ' 页，第 ' + (i + 1) + ' 页）';
