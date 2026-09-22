@@ -1891,9 +1891,17 @@ export function App(): JSX.Element {
               onSelect={toggleSelection}
               onSettingsChange={updateSettings}
               onUnlock={() => {
-                // 「返回编辑」：放开这一页重写（文字还在 drafts 里），结果作废。
-                // 放开之后这一页要重新按「提交批改」才会再批一次——翻页不会替他提交。
-                // 不弹提示语：按钮文案与页面状态已经把这件事说清楚了（用户明确要去掉这类废话）。
+                /*
+                 * 「返回编辑」：只要屏幕上是结果就按它（第 2／3／4／6 条）——
+                 * 既包括"刚批出来的这一页"，也包括"从「批改记录」里翻出来看的那一次"。
+                 *
+                 * 因此这里要做两件事：
+                 *   1. **离开历史视图**（清掉这一页"正在看第几次"）——否则屏幕会一边显示
+                 *      那一次的结果、一边让你改字，两者对不上；
+                 *   2. 放开这一页（文字还在 drafts 里）。
+                 * 用户第 6 条把「回到作答」那颗按钮删了，出口就收在这一颗按钮上。
+                 */
+                setViewingGrade(exercise.id, sectionIndex, null)
                 dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
                 /*
                  * ⚠️ 这里**不再**把这一页从"哪几页批过"里撤掉（用户拍板：进度只增不减）。
@@ -1919,10 +1927,6 @@ export function App(): JSX.Element {
                 setViewingGrade(exercise.id, sectionIndex, record?.id ?? null)
                 setSelection(null)
                 setNotice(null)
-              }}
-              onBackToWriting={() => {
-                setViewingGrade(exercise.id, sectionIndex, null)
-                setSelection(null)
               }}
               onDeleteRecord={(id) => {
                 const record = records.find((item) => item.id === id)

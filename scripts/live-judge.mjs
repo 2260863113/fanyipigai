@@ -139,6 +139,22 @@ if (!outcome.ok) {
         (error.targetText ? ` → 「${error.targetText}」` : ''),
     )
     console.log(`        ${error.explanation}`)
+    /*
+     * 「点批注 → 原文栏同色标出对应位置」这件事**只取决于模型给不给 sourceText**
+     * （程序不做补猜，见 ADR 0003 的补充）。因此这里把它逐条打出来：
+     * 没有这一行，用户报"中译英点批注原文不标色"时只能靠猜——是模型没给，还是定位失败。
+     */
+    console.log(
+      `        对应原文：${
+        error.sourceText
+          ? `「${error.sourceText}」${
+              error.sourceAnchor
+                ? `（已定位到原文 [${error.sourceAnchor.start},${error.sourceAnchor.end})）`
+                : '（⚠ 模型给了，但在原文里找不到）'
+            }`
+          : '（⚠ 模型没给这个字段）'
+      }`,
+    )
   }
 
   console.log(`\n  亮点 ${outcome.validated.highlights.length} 处：`)

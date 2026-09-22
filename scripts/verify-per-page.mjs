@@ -840,8 +840,12 @@ try {
          const callsBeforeReturn = window.__judgeCalls.length;
          if (items[0]) items[0].click();
          await sleep(500);
-         const backToWriting = [...document.querySelectorAll('.pane-answer .btn')]
-           .find((b) => (b.textContent || '').trim() === '回到作答');
+         /*
+          * 第 6 条之后**没有「回到作答」了**：正在看历史时标题栏那颗按钮写「返回编辑」，
+          * 它既是"离开历史视图"的出口，也把这一页还回可写。
+          */
+         const backToWriting = [...document.querySelectorAll('.pane-answer .btn-primary')]
+           .find((b) => (b.textContent || '').trim() === '返回编辑');
          returnToResult = {
            点之前: before,
            点之后: {
@@ -851,7 +855,7 @@ try {
            },
            新增调用: window.__judgeCalls.length - callsBeforeReturn,
          };
-         // 回到作答框，后面的检查仍在"正在写"的状态上跑
+         // 回到作答框（点「返回编辑」），后面的检查仍在"正在写"的状态上跑
          if (backToWriting) backToWriting.click();
          await sleep(400);
        }
@@ -1141,7 +1145,11 @@ try {
     walked.revisit.有批改记录下拉 === true,
     '只读的已批改状态下「批改记录」下拉也在（批完就停在这一页，回看不必先按「返回编辑」）',
   )
-  check(walked.afterUnlock.hasInput && !walked.afterUnlock.hasAnnotated, '点「返回编辑」回到作答框，可以接着改')
+  check(
+    walked.afterUnlock.hasInput && !walked.afterUnlock.hasAnnotated,
+    '点「返回编辑」回到作答框，可以接着改',
+    JSON.stringify(walked.afterUnlock),
+  )
   check(
     walked.afterUnlock.button === '提交批改',
     `放开之后按钮是普通的「提交批改」（实际 ${JSON.stringify(walked.afterUnlock.button)}）`,
@@ -1909,6 +1917,326 @@ try {
       `「批改记录」下拉里那几次也不再显示分数（${JSON.stringify(refineLayout.historyScoreCells)}）`,
     )
   }
+  /*
+   * ── 用户报的四件事：叉号删不掉、按钮文案、"回到作答"、批改后还能点提交 ──
+   *
+   * ⚠️ 这里**用真实鼠标事件**（CDP Input.dispatchMouseEvent）点那颗叉号：
+   * 用户遇到的现象是"点叉号下拉直接收起、而且什么都没删"，而脚本里原来的
+   * `element.click()` **测不出这个 bug**（它只发一个 click 事件，走不到真实鼠标那条路）。
+   */
+  console.log('\n== 批改记录下拉：叉号、按钮文案（用户报的 1／3／4／6）==')
+  {
+    /*
+     * ⚠️ 这里**用真实鼠标**点触发器（与下面点叉号同一套）：合成的 `element.click()`
+     * 在某些状态下打不开这个下拉，而用户用的是真鼠标——验就要验用户那条路。
+     */
+    const triggerBox = await cdp.evaluate(
+      `(() => {
+         const wasOpen = !!document.querySelector('.pane-answer .domain-menu');
+         if (wasOpen) return { wasOpen: true };
+         const trigger = [...document.querySelectorAll('.pane-answer .domain-trigger')].find((b) =>
+           (b.textContent || '').includes('批改记录'),
+         );
+         if (!trigger) return { error: '这一页没有「批改记录」下拉' };
+         const box = trigger.getBoundingClientRect();
+         const x = Math.round(box.left + box.width / 2);
+         const y = Math.round(box.top + box.height / 2);
+         const hit = document.elementFromPoint(x, y);
+         return {
+           wasOpen: false,
+           x, y,
+           hitIsTrigger: hit === trigger || (hit ? trigger.contains(hit) : false),
+           hit: hit ? String(hit.className || hit.tagName) : null,
+         };
+       })()`,
+    )
+    if (triggerBox && triggerBox.wasOpen === false && triggerBox.hitIsTrigger) {
+      for (const type of ['mousePressed', 'mouseReleased']) {
+        await cdp.send('Input.dispatchMouseEvent', {
+          type,
+          x: triggerBox.x,
+          y: triggerBox.y,
+          button: 'left',
+          clickCount: 1,
+        })
+      }
+      await sleep(350)
+    }
+    const beforeCross = await cdp.evaluate(
+      `({
+         open: !!document.querySelector('.pane-answer .domain-menu'),
+         items: document.querySelectorAll('.pane-answer .domain-item').length,
+         buttons: [...document.querySelectorAll('.pane-answer .btn-primary')].map((b) => (b.textContent || '').trim()),
+         nav: (document.querySelector('.section-nav .hint') || {}).textContent || '',
+       })`,
+    )
+    check(
+      beforeCross?.open === true && (beforeCross?.items ?? 0) > 0,
+      `「批改记录」下拉能用真实鼠标点开（${JSON.stringify(beforeCross)}）`,
+      JSON.stringify({ triggerBox, beforeCross }),
+    )
+
+    /* 找到叉号的屏幕坐标，用真实鼠标点它 */
+    const crossBox = await cdp.evaluate(
+      `(() => {
+         const node = document.querySelector('.pane-answer .history-delete');
+         if (!node) return null;
+         const box = node.getBoundingClientRect();
+         const x = Math.round(box.left + box.width / 2);
+         const y = Math.round(box.top + box.height / 2);
+         const hit = document.elementFromPoint(x, y);
+         return {
+           x, y,
+           box: { left: Math.round(box.left), top: Math.round(box.top), w: Math.round(box.width), h: Math.round(box.height) },
+           hit: hit ? String(hit.className || hit.tagName) : null,
+           hitIsCross: hit === node,
+         };
+       })()`,
+    )
+    console.log('叉号的位置 =', JSON.stringify(crossBox))
+    if (crossBox) {
+      for (const type of ['mousePressed', 'mouseReleased']) {
+        await cdp.send('Input.dispatchMouseEvent', {
+          type,
+          x: crossBox.x,
+          y: crossBox.y,
+          button: 'left',
+          clickCount: 1,
+        })
+      }
+    }
+    await sleep(400)
+    const afterCross = await cdp.evaluate(
+      `({
+         menuOpen: !!document.querySelector('.pane-answer .domain-menu'),
+         hasConfirm: !!document.querySelector('.pane-answer .history-confirm'),
+         confirmText: (document.querySelector('.pane-answer .history-confirm')?.textContent || '').trim(),
+         menuHtml: (document.querySelector('.pane-answer .domain-menu')?.innerHTML || '').slice(0, 160),
+       })`,
+    )
+    console.log('点叉号之后 =', JSON.stringify(afterCross))
+    check(crossBox !== null, '下拉里有一颗删除叉号', JSON.stringify(crossBox))
+    check(
+      afterCross.menuOpen === true,
+      '**真实鼠标点叉号，下拉不会收起**（用户报的：以前一点就关，还什么都没删）',
+      JSON.stringify(afterCross),
+    )
+    check(
+      afterCross.hasConfirm === true && afterCross.confirmText.includes('删除'),
+      `叉号点左右就地展开「删除 / 取消」（${afterCross.confirmText}）`,
+      JSON.stringify(afterCross),
+    )
+    /* 收尾：取消掉，别把记录删了（后面的断言还要用） */
+    await cdp.evaluate(
+      `[...document.querySelectorAll('.pane-answer .history-confirm .btn')].find((b) => (b.textContent || '').trim() === '取消')?.click()`,
+    )
+    await sleep(200)
+  }
+
+  {
+    /*
+     * 按钮文案（用户第 3／4／6 条）：
+     *   1. 刚拿到批改（graded）→ 只有「返回编辑」，**看不到「提交批改」**；
+     *   2. 从「批改记录」里翻出旧的一次看着 → 仍然是「返回编辑」，而且**没有「回到作答」**；
+     *   3. 点它 → 回到作答框（历史视图一起退出）。
+     */
+    const gradedButtons = await cdp.evaluate(
+      `(() => {
+         const texts = [...document.querySelectorAll('.pane-answer .btn, .pane-answer .btn-primary')].map((b) =>
+           (b.textContent || '').trim(),
+         );
+         return {
+           texts,
+           primary: (document.querySelector('.pane-answer .btn-primary')?.textContent || '').trim(),
+           hasSubmit: texts.includes('提交批改'),
+           hasReturn: texts.includes('返回编辑'),
+           hasBackToWriting: texts.includes('回到作答'),
+         };
+       })()`,
+    )
+    console.log('批改后的按钮 =', JSON.stringify(gradedButtons))
+    check(
+      gradedButtons.hasReturn === true && gradedButtons.hasSubmit === false,
+      '批改后的视图下：按钮是「返回编辑」，**没有可点的「提交批改」**（第 3、4 条）',
+      JSON.stringify(gradedButtons),
+    )
+
+    const inHistory = await cdp.evaluate(
+      `(async () => {
+         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+         const trigger = [...document.querySelectorAll('.pane-answer .domain-trigger')].find((b) =>
+           (b.textContent || '').includes('批改记录'),
+         );
+         if (!trigger) return { error: '没有「批改记录」下拉' };
+         /* 菜单可能还开着（上一段点过叉号又取消了），那就别再点一次触发器把它关掉 */
+         if (!document.querySelector('.pane-answer .domain-menu')) {
+           trigger.click();
+           await sleep(300);
+         }
+         const items = [...document.querySelectorAll('.pane-answer .domain-item')];
+         const last = items[items.length - 1];
+         if (!last) return { error: '下拉里没有记录', count: items.length };
+         last.click();
+         await sleep(500);
+         const texts = [...document.querySelectorAll('.pane-answer .btn, .pane-answer .btn-primary')].map((b) =>
+           (b.textContent || '').trim(),
+         );
+         return {
+           texts,
+           triggerText: (trigger.textContent || '').trim(),
+           hasReturn: texts.includes('返回编辑'),
+           hasBackToWriting: texts.includes('回到作答'),
+         };
+       })()`,
+    )
+    console.log('翻旧记录时 =', JSON.stringify(inHistory))
+    check(
+      inHistory.hasBackToWriting === false,
+      '「回到作答」已经删掉了（第 6 条）',
+      JSON.stringify(inHistory),
+    )
+    check(
+      inHistory.hasReturn === true,
+      '正在看旧的那一次时，按钮也是「返回编辑」（第 3 条：不必先点「回到作答」再点一次）',
+      JSON.stringify(inHistory),
+    )
+
+    const backToEdit = await cdp.evaluate(
+      `(async () => {
+         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+         const btn = [...document.querySelectorAll('.pane-answer .btn-primary')].find(
+           (b) => (b.textContent || '').trim() === '返回编辑',
+         );
+         if (!btn) return { error: '找不到「返回编辑」' };
+         btn.click();
+         await sleep(500);
+         return {
+           有作答框: document.querySelector('.answer-input') !== null,
+           按钮: (document.querySelector('.pane-answer .btn-primary')?.textContent || '').trim(),
+           下拉说: ([...document.querySelectorAll('.pane-answer .domain-trigger')]
+             .find((b) => (b.textContent || '').includes('批改记录'))?.textContent || '').trim(),
+         };
+       })()`,
+    )
+    console.log('点返回编辑之后 =', JSON.stringify(backToEdit))
+    check(
+      backToEdit.有作答框 === true && backToEdit.按钮 === '提交批改',
+      '点「返回编辑」→ 回到作答框，按钮变回「提交批改」',
+      JSON.stringify(backToEdit),
+    )
+    check(
+      !backToEdit.下拉说.includes('第'),
+      `历史视图也一起退出了（下拉上不再写着"第 N 次"：${backToEdit.下拉说}）`,
+    )
+  }
+
+  /*
+   * ── 练习记录页：竖线能拖（第 5 条）──
+   *
+   * 用户报的是"右下角批注栏很窄、右边一大片空白"。根因是那一排**少了一条竖分割线**：
+   * `.split-manual > .split-row` 按**三列**排（左 / 8px / 右），而记录页的底部那排
+   * 原来只有两块内容（评分、批注）——一旦拖过任意一条分割线（现在还会落盘），
+   * 批注就被塞进那 8px 的第二列、第三列空着。这里量真实矩形。
+   */
+  console.log('\n== 练习记录页的版式与拖动（第 5 条）==')
+  /*
+   * 先给这一节一个**明确的视口**：无头浏览器默认窗口很窄很矮
+   * （实测 `.app` 只有 127px 高），那样量出来的"记录页版式"全是塌的，
+   * 与用户看到的东西不是一回事。
+   */
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 1280,
+    height: 900,
+    deviceScaleFactor: 1,
+    mobile: false,
+  })
+  await sleep(400)
+  const recordsLayout = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const tab = [...document.querySelectorAll('.mode-tab')].find((b) => (b.textContent || '').trim() === '练习记录');
+       if (!tab) return { error: '导航栏里没有「练习记录」' };
+       tab.click();
+       await sleep(800);
+       const first = document.querySelector('.record-item');
+       if (!first) return { error: '练习记录页里没有记录可点' };
+       first.click();
+       await sleep(700);
+       const nested = document.querySelector('.split-nested');
+       if (!nested) return { error: '记录页右侧没有嵌套布局' };
+       const rect = (sel) => {
+         const node = document.querySelector(sel);
+         if (!node) return null;
+         const box = node.getBoundingClientRect();
+         return { top: Math.round(box.top), bottom: Math.round(box.bottom), left: Math.round(box.left), right: Math.round(box.right), w: Math.round(box.width), h: Math.round(box.height) };
+       };
+       const before = {
+         nested: rect('.split-nested'),
+         /* 容器链：量不到高度时才知道是哪一层塌了（用户报的"记录页版式"问题要靠它定位） */
+         chain: ['.app', 'main.split-records', '.screen-right', '.split-nested'].map((sel) => {
+           const node = document.querySelector(sel);
+           const box = node?.getBoundingClientRect();
+           return { sel, h: box ? Math.round(box.height) : null, display: node ? getComputedStyle(node).display : null };
+         }),
+         viewport: { w: window.innerWidth, h: window.innerHeight },
+         bottomRowPanes: [...document.querySelectorAll('.split-nested > .split-row-bottom > .pane')].map((node) => {
+           const box = node.getBoundingClientRect();
+           return { cls: node.className.replace('pane ', ''), w: Math.round(box.width), right: Math.round(box.right) };
+         }),
+         bottomRowSplitters: document.querySelectorAll('.split-nested > .split-row-bottom > .splitter').length,
+         hSplitter: rect('.split-nested > .splitter-h'),
+         style: nested.getAttribute('style') || '',
+       };
+       /* 拖那条横线：上排该变矮、下排该变高 */
+       const handle = document.querySelector('.split-nested > .splitter-h');
+       if (!handle) return { error: '记录页里没有横分割线', before };
+       const box = handle.getBoundingClientRect();
+       const fire = (type, y) =>
+         handle.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: box.left + 20, clientY: y, pointerId: 3 }));
+       fire('pointerdown', box.top + 4);
+       await sleep(80);
+       fire('pointermove', box.top + 120);
+       await sleep(80);
+       fire('pointerup', box.top + 120);
+       await sleep(400);
+       const after = {
+         style: nested.getAttribute('style') || '',
+         manual: nested.classList.contains('split-manual'),
+         topRowH: rect('.split-nested > .split-row-top')?.h ?? null,
+         bottomRowH: rect('.split-nested > .split-row-bottom')?.h ?? null,
+         bottomRowPanes: [...document.querySelectorAll('.split-nested > .split-row-bottom > .pane')].map((node) => {
+           const box = node.getBoundingClientRect();
+           return { cls: node.className.replace('pane ', ''), w: Math.round(box.width), right: Math.round(box.right) };
+         }),
+       };
+       return { before, after };
+     })()`,
+  )
+  console.log('记录页版式 =', JSON.stringify(recordsLayout))
+  check(!recordsLayout?.error, '练习记录页能打开一条记录', recordsLayout?.error)
+  if (!recordsLayout?.error) {
+    const before = recordsLayout.before
+    const after = recordsLayout.after
+    check(
+      before.bottomRowSplitters >= 1,
+      `底部那一排有竖分割线（实际 ${before.bottomRowSplitters} 条）——缺了它，手动比例下批注栏会被塞进 8px 那一列`,
+    )
+    const panes = before.bottomRowPanes
+    check(
+      panes.length === 2 && Math.abs(panes[0].w - panes[1].w) <= 12,
+      `评分与批注两栏宽度基本相等（${JSON.stringify(panes.map((p) => p.w))}）`,
+    )
+    check(
+      panes.length === 2 && Math.abs(panes[1].right - (before.nested?.right ?? 0)) <= 3,
+      `批注栏一直铺到右边缘（右边不该留一大片空白：批注右边缘 ${panes[1]?.right}、容器右边缘 ${before.nested?.right}）`,
+    )
+    check(after.manual === true && after.style.includes('--row-top'), '横分割线**拖得动**（拖完写成手动比例）', JSON.stringify(after))
+    check(
+      after.topRowH !== null && before.nested && after.topRowH > (before.hSplitter?.top ?? 0) - (before.nested.top ?? 0),
+      `拖动之后上排真的变高了（${JSON.stringify({ 上排: after.topRowH, 下排: after.bottomRowH })}）`,
+    )
+  }
+
   // 收藏页：每一条要给出"这一处是从哪一段原文里来的"（用户要求：当前一段，不是整篇）
   await cdp.evaluate(
     `[...document.querySelectorAll('.mode-tab')].find((b) => b.textContent.trim() === '收藏').click()`,

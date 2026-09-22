@@ -391,6 +391,23 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
               </div>
             </section>
 
+            {/*
+              ⚠️ 这一条竖分割线**不能省**（用户报的 bug：右下角批注栏很窄、右边一大片空白）。
+              原因是 `.split-manual > .split-row` 把每一排都排成**三列**
+              （`--col-left` / 8px / `--col-right`）。原来这一排只有两块（评分、批注），
+              一旦拖过任意一条分割线（现在还会**落盘**，所以拖一次就永远是手动模式），
+              三列模板配两块内容 → 批注被塞进那 8px 的第二列、第三列空着。
+              练习页的同一排本来就有这一条，两处结构因此一致。
+            */}
+            <div
+              className="splitter splitter-v"
+              role="separator"
+              aria-orientation="vertical"
+              title="拖动调整左右宽度；双击恢复自动"
+              onPointerDown={(event) => nested.beginDrag('v', event)}
+              onDoubleClick={nested.resetSplit}
+            />
+
             <section className="pane pane-notes">
               <header className="pane-head">
                 <h2>逐处批注</h2>

@@ -574,6 +574,18 @@ button {
   gap: 4px;
 }
 
+/*
+ * 「批改记录」这个下拉挂在**译文栏标题栏的右侧**，而菜单是**绝对定位、左对齐**的
+ * （`.domain-menu` 的 `left: 0`），因此窗口一窄，它就从右边溢出去——
+ * 每一行右边那颗删除叉号会有一半落在窗口外，**根本点不到**
+ * （实测：`document.elementFromPoint` 在叉号中心返回 null，真实鼠标点在窗口外）。
+ * 这一个修饰类把它改成**右对齐**：菜单的右边缘跟着触发器走，永远在窗口里。
+ */
+.domain-menu-end {
+  left: auto;
+  right: 0;
+}
+
 /* 方向切换（中译英 / 英译中） */
 .dir-switch {
   display: inline-flex;

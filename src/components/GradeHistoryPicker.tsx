@@ -50,7 +50,6 @@ export function GradeHistoryPicker({
   history,
   viewingId,
   onView,
-  onBackToWriting,
   onDelete,
 }: {
   /** 这一页的全部批改，**最新的在前** */
@@ -58,7 +57,6 @@ export function GradeHistoryPicker({
   /** 正在看的那一条；null 表示正在写 */
   viewingId: string | null
   onView: (id: string) => void
-  onBackToWriting: () => void
   /** 删掉某一条（练习记录里同步消失；连带的事由 App 处理，见 records-store 的 removeRecord） */
   onDelete: (id: string) => void
 }): JSX.Element | null {
@@ -71,6 +69,19 @@ export function GradeHistoryPicker({
   useEffect(() => {
     if (!open) return
     const onDocumentClick = (event: MouseEvent): void => {
+      /*
+       * ⚠️ 判"点的是不是下拉里面"，**不能只看 `ref.current.contains(event.target)`**。
+       *
+       * 这个下拉里有一颗叉号，点它会**当场换掉自己**（换成"删除/取消"那两颗按钮）。
+       * React 的重渲染发生在事件冒泡到 document **之前**，于是事件里的 target 已经
+       * 从文档里摘掉了（`isConnected === false`），`contains` 对它必然返回 false——
+       * 结果就是用户看到的现象：**点叉号下拉直接收起、而且什么都没删**（它被当成"点了外面"）。
+       *
+       * `composedPath()` 是**派发那一刻**定下来的路径，它记得点击起点当初在哪棵子树里，
+       * 因此对"点了之后自己被换掉"的按钮依然成立。
+       */
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : []
+      if (ref.current && path.includes(ref.current)) return
       if (event.target instanceof Node && ref.current?.contains(event.target)) return
       setOpen(false)
       // "确定删吗"这句问话只属于打开着的这一次：收起下拉就当作没问过
@@ -114,7 +125,7 @@ export function GradeHistoryPicker({
         </button>
 
         {open && (
-          <ul className="domain-menu" role="listbox" aria-label="批改记录">
+          <ul className="domain-menu domain-menu-end" role="listbox" aria-label="批改记录">
             {history.map((entry) => (
               <li key={entry.id} className="history-row">
                 <button
@@ -172,17 +183,14 @@ export function GradeHistoryPicker({
           </ul>
         )}
       </div>
-      {/* 正在看历史时才给「回到作答」：它是"离开历史视图"的唯一入口，不能藏在菜单里 */}
-      {viewing && (
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={onBackToWriting}
-          title="回到这一页的作答框（历史只是看一眼，不会改动你正在写的文字）"
-        >
-          回到作答
-        </button>
-      )}
+      {/*
+        ⚠️ 「回到作答」那颗按钮**删掉了**（用户第 6 条："英译中的我的译文栏目，去掉『回到作答』"）。
+        它原来是"离开历史视图"的唯一入口，因此删它必须同时把出口补上：
+        现在**标题栏那颗按钮在"屏幕上是结果"时一律写「返回编辑」**，
+        点它就离开历史视图、回到这一页的作答框（见 AnswerPane 的 `showingResult`）。
+        这样"看结果"与"回到作答"合成一颗按钮，与用户第 3 条说的
+        "提交后得到批改后就显示『返回编辑』，而不是点了『回到作答』还要再点一次返回编辑"一致。
+      */}
     </>
   )
 }

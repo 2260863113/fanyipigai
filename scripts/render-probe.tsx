@@ -148,6 +148,8 @@ export interface RenderProbe {
     manualApplied: boolean
     editorShown: boolean
     canReturnToResult: boolean
+    /** 第 4 条：批改后的视图下**没有**「提交批改」这颗按钮 */
+    submitVisibleInGraded: boolean
     resultBack: boolean
     judgeCallsAfterReturn: number
     /** 刚按「返回编辑」时的提交按钮文案（还没动字，应当是普通的「提交批改」） */
@@ -310,8 +312,9 @@ export interface RenderProbe {
     viewingAfter: string
     /** 切回来之后右栏还是带批注的译文 */
     resultShown: boolean
-    /** 切回来之后「回到作答」还在（它是"正在看历史"的出口） */
-    backButtonAfter: boolean
+    /** 切回来之后那颗按钮写「返回编辑」（看历史时的唯一出口），而且「回到作答」已经不在了 */
+    returnToEditAfter: boolean
+    backToWritingGone: boolean
   }
   /** 顶部导航里的模式标签 */
   modeTabLabels: string[]
@@ -1603,23 +1606,30 @@ export async function renderApp(
     await clickTab('术语')
     await clickTab(backTabLabel)
     await tick()
+    /*
+     * 第 6 条之后**没有「回到作答」那颗按钮了**：正在看历史时，标题栏那颗按钮写「返回编辑」，
+     * 点它就离开历史视图、回到这一页的作答框（看下面的收场）。
+     */
+    const returnToEditButtons = () =>
+      [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].filter(
+        (node) => node.textContent?.trim() === '返回编辑',
+      )
     historyView = {
       picked: pickedFromPicker,
       before: pickerBefore,
       viewingBefore: viewingLabelBefore,
       viewingAfter: pickerTriggerText(),
       resultShown: container.querySelector('.pane-answer .annotated-lines') !== null,
-      backButtonAfter: [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].some(
+      returnToEditAfter: returnToEditButtons().length > 0,
+      backToWritingGone: ![...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].some(
         (node) => node.textContent?.trim() === '回到作答',
       ),
     }
-    // 收场：点「回到作答」，把这一页还回"看这一页结果"的样子
-    const backToCurrent = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
-      (node) => node.textContent?.trim() === '回到作答',
-    )
-    if (backToCurrent) {
+    // 收场：点「返回编辑」，离开历史视图、把这一页还回可写
+    const toEdit = returnToEditButtons()[0]
+    if (toEdit) {
       await act(async () => {
-        backToCurrent.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        toEdit.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       })
     }
   }
@@ -1770,6 +1780,13 @@ export async function renderApp(
     const readonlyBeforeUnlock =
       container.querySelector('.answer-input') === null &&
       gradedButton?.textContent?.trim() === '返回编辑'
+    /*
+     * 第 4 条：**批改后的视图下不该能点「提交批改」**。
+     * 判据就是"标题栏那颗主按钮上写的是不是提交批改"——那一档根本不画提交按钮。
+     */
+    const submitVisibleInGraded = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn-primary')].some(
+      (node) => node.textContent?.trim() === '提交批改',
+    )
     if (unlock) {
       await act(async () => {
         unlock.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
@@ -1811,9 +1828,12 @@ export async function renderApp(
       又是只读: container.querySelector('.answer-input') === null,
       新增调用: judgeFetch.calls() - callsBeforeGoBack,
     }
-    // 点「回到作答」回到作答框，再放开一次，接着走后面那些断言
+    /*
+     * 点「返回编辑」离开历史视图（第 6 条之后这是唯一出口），再走后面那些断言。
+     * 它同时把这一页放开成可写——下面的"改一个字再提交"就是从这个状态开始的。
+     */
     const backToWriting = [...container.querySelectorAll<HTMLButtonElement>('.pane-answer .btn')].find(
-      (node) => node.textContent?.trim() === '回到作答',
+      (node) => node.textContent?.trim() === '返回编辑',
     )
     if (backToWriting) {
       await act(async () => {
@@ -1874,6 +1894,8 @@ export async function renderApp(
       manualApplied: container.querySelector('.split-manual') !== null,
       editorShown,
       canReturnToResult: readonlyBeforeUnlock && Boolean(unlock),
+      /** 第 4 条：批改后的那一档**看不到提交按钮** */
+      submitVisibleInGraded,
       resultBack: submitLabelAfterEdit.includes('提交批改'),
       judgeCallsAfterReturn: judgeCallsAfterReturn - callsBeforeUnlock,
       submitLabelAfterUnlock,

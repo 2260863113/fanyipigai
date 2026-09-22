@@ -10,14 +10,45 @@
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import type { Connect, Plugin } from 'vite'
-import { DEFAULT_JUDGE_CONFIG, generateExercise, judgeAnswer, refineAnswer } from './src/domain/ai'
+import type { Connect, Plugin, ViteDevServer } from 'vite'
+import type {
+  GenerationOutcome,
+  JudgeConfig,
+  JudgeOutcome,
+  JudgeSectionsInput,
+  RefineOutcome,
+} from './src/domain/ai'
 import { FailureCollector, archiveFailure, type FailureKind } from './src/domain/archive'
 import { rebuildFromSections, type Section } from './src/domain/sections'
 import { PROBLEM_JSON_PARSE_FAILED, PROBLEM_NO_ANCHOR_MATCH, PROBLEM_NO_JSON_OBJECT } from './src/domain/parse'
 import { PROBLEM_ANCHOR_NOT_FOUND } from './src/domain/locate'
 import { ANCHOR_MISMATCH_MARKER } from './src/domain/validate'
 import type { Direction, Genre, Mode, PolishLevel } from './src/domain/types'
+
+/**
+ * 按请求取一份**当前**的批改/出题模块（见 handler 里那段说明）。
+ *
+ * `ssrLoadModule` 走的是 vite 的模块图与它的失效机制，因此改 `src/domain/*.ts`
+ * 之后**下一次提交就用新的**，不必重启 dev server——这正是我们想要的开发体验。
+ * 这里只借用类型（`import type` 不产生运行时代码，因此不会把旧模块钉死）。
+ */
+async function loadDomain(server: ViteDevServer): Promise<{
+  judgeAnswer: (
+    input: JudgeSectionsInput,
+    config: JudgeConfig,
+    onRetry?: (info: { attempt: number; problems: string[] }) => void,
+    collector?: FailureCollector,
+  ) => Promise<JudgeOutcome>
+  refineAnswer: (
+    input: { source: string; direction: Direction; genre: Genre; level: PolishLevel; answer: string },
+    config: JudgeConfig,
+    collector?: FailureCollector,
+  ) => Promise<RefineOutcome>
+  generateExercise: (input: unknown, config: JudgeConfig) => Promise<GenerationOutcome>
+  DEFAULT_JUDGE_CONFIG: typeof import('./src/domain/ai').DEFAULT_JUDGE_CONFIG
+}> {
+  return (await server.ssrLoadModule('/src/domain/ai.ts')) as never
+}
 
 const VALID_DIRECTIONS: readonly Direction[] = ['zh-to-en', 'en-to-zh']
 const VALID_GENRES: readonly Genre[] = ['political', 'news', 'literature', 'expository']
@@ -163,16 +194,27 @@ export function judgeApiPlugin(): Plugin {
       const root = server.config.root
       const devVars = readDevVars(root)
       const apiKey = devVars.DEEPSEEK_API_KEY ?? ''
-      const model = devVars.DEEPSEEK_MODEL ?? DEFAULT_JUDGE_CONFIG.model
-
-      if (!apiKey) {
-        server.config.logger.warn(
-          '[judge-api] 没有在 .dev.vars 里找到 DEEPSEEK_API_KEY，提交批改会返回明确错误。\n' +
-            '            要先用内置示例看批注效果，可以点界面上的「查看内置示例批改」。',
-        )
-      } else {
-        server.config.logger.info(`[judge-api] 已就绪，模型 ${model}`)
-      }
+      /*
+       * 启动时只报一句"就绪"，模型名要**从当前那份领域模块里读**——
+       * 这里不能写死一个默认值：`.dev.vars` 里通常没有 DEEPSEEK_MODEL，
+       * 真正的默认值在 `ai.ts` 的 DEFAULT_JUDGE_CONFIG 里（写在这里就等于把它覆盖掉，
+       * 实测踩过：日志从 deepseek-flash 变成了 deepseek-chat，也就是请求真换了模型）。
+       */
+      void (async () => {
+        if (!apiKey) {
+          server.config.logger.warn(
+            '[judge-api] 没有在 .dev.vars 里找到 DEEPSEEK_API_KEY，提交批改会返回明确错误。\n' +
+              '            要先用内置示例看批注效果，可以点界面上的「查看内置示例批改」。',
+          )
+          return
+        }
+        try {
+          const domain = await loadDomain(server)
+          server.config.logger.info(`[judge-api] 已就绪，模型 ${devVars.DEEPSEEK_MODEL ?? domain.DEFAULT_JUDGE_CONFIG.model}`)
+        } catch {
+          server.config.logger.info('[judge-api] 已就绪（模型名待第一次请求时再解析）')
+        }
+      })()
 
       /*
        * AI 出题：同一条路径、同一把密钥，只是提示词与校验不同。
@@ -208,7 +250,9 @@ export function judgeApiPlugin(): Plugin {
           }
 
           const started = Date.now()
-          const outcome = await generateExercise(body, { ...DEFAULT_JUDGE_CONFIG, apiKey, model })
+          const domain = await loadDomain(server)
+          const model = devVars.DEEPSEEK_MODEL ?? domain.DEFAULT_JUDGE_CONFIG.model
+          const outcome = await domain.generateExercise(body, { ...domain.DEFAULT_JUDGE_CONFIG, apiKey, model })
           const elapsed = ((Date.now() - started) / 1000).toFixed(1)
           server.config.logger.info(
             `[judge-api] 出题${outcome.ok ? '完成' : '失败'}，用时 ${elapsed}s` +
@@ -269,7 +313,25 @@ export function judgeApiPlugin(): Plugin {
             },
             sections: answerSections,
           }
-          const outcome = await judgeAnswer(judgeInput, { ...DEFAULT_JUDGE_CONFIG, apiKey, model }, undefined, collector)
+          /*
+           * ⚠️ 每个请求都**重新取一遍应用代码**（而不是用文件顶上那份静态 import）。
+           *
+           * 原因是一次真实故障：改了 `src/domain/prompt.ts` 之后，用户重新提交批改，
+           * 却看到"中译英点批注、原文不出现颜色标注"——因为 dev server 是**启动时**把
+           * 这份插件（以及它静态 import 的整个领域模块图）加载进来的，
+           * 改 `src/domain/*.ts` 不会让 vite 重启（只有改 vite.config.ts 才会），
+           * 于是服务端一直在用**改动前的旧提示词**，模型自然没给 sourceText。
+           * 这种"代码明明改了、行为却没变"的现象最难查，所以这里改成按请求动态加载：
+           * `ssrLoadModule` 走的是 vite 的模块图，文件一变它就给新的那份。
+           */
+          const domain = await loadDomain(server)
+          const model = devVars.DEEPSEEK_MODEL ?? domain.DEFAULT_JUDGE_CONFIG.model
+          const outcome = await domain.judgeAnswer(
+            judgeInput,
+            { ...domain.DEFAULT_JUDGE_CONFIG, apiKey, model },
+            undefined,
+            collector,
+          )
           const elapsed = ((Date.now() - started) / 1000).toFixed(1)
           const sectionNote = answerSections.length > 1 ? `，共 ${answerSections.length} 段并行批改` : ''
 
@@ -304,7 +366,7 @@ export function judgeApiPlugin(): Plugin {
             : await archiveFailure(
                 body,
                 model,
-                classifyFailure(outcome, DEFAULT_JUDGE_CONFIG.maxAttempts),
+                classifyFailure(outcome, 3),
                 collector,
                 fullAnswer,
                 outcome.message,
@@ -365,7 +427,9 @@ export function judgeApiPlugin(): Plugin {
           const collector = new FailureCollector()
           const answerSections = toSections(body.answerSections)
           const fullAnswer = rebuildFromSections(answerSections)
-          const outcome = await refineAnswer(
+          const domain = await loadDomain(server)
+          const model = devVars.DEEPSEEK_MODEL ?? domain.DEFAULT_JUDGE_CONFIG.model
+          const outcome = await domain.refineAnswer(
             {
               source: body.source,
               direction: body.direction,
@@ -373,7 +437,7 @@ export function judgeApiPlugin(): Plugin {
               level: body.level,
               answer: fullAnswer,
             },
-            { ...DEFAULT_JUDGE_CONFIG, apiKey, model },
+            { ...domain.DEFAULT_JUDGE_CONFIG, apiKey, model },
             collector,
           )
           const elapsed = ((Date.now() - started) / 1000).toFixed(1)
@@ -392,7 +456,7 @@ export function judgeApiPlugin(): Plugin {
             : await archiveFailure(
                 body,
                 model,
-                classifyFailure(outcome, DEFAULT_JUDGE_CONFIG.maxAttempts),
+                classifyFailure(outcome, 3),
                 collector,
                 fullAnswer,
                 outcome.message,

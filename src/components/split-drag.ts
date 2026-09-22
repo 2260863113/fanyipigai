@@ -95,8 +95,19 @@ export function useSplitDrag(scope: SplitScope, containerRef: RefObject<HTMLElem
         handle.removeEventListener('pointercancel', finish)
         saveSplit(scope, latest)
       }
-      // setPointerCapture 在 jsdom 里可能不存在，可选调用
-      handle.setPointerCapture?.(event.pointerId)
+      /*
+       * ⚠️ `setPointerCapture` 必须包在 try 里：它只在"真有活动指针"时才成立。
+       * 合成事件（浏览器验收脚本里 dispatch 出来的 PointerEvent）没有活动指针，
+       * 调用会抛 `NotFoundError: No active pointer with the given id`，
+       * 而它抛在 React 的事件处理函数里 —— 整棵组件树会因此被兜底界面换掉
+       * （实测踩过：练习记录页拖一下横线，整页白屏）。
+       * 捕获指针只是"手指滑出元素也继续收事件"的保险，没有它监听器照样在那个元素上。
+       */
+      try {
+        handle.setPointerCapture?.(event.pointerId)
+      } catch {
+        /* 合成事件 / 老浏览器：不捕获也能拖 */
+      }
       handle.addEventListener('pointermove', onMove)
       handle.addEventListener('pointerup', finish)
       handle.addEventListener('pointercancel', finish)

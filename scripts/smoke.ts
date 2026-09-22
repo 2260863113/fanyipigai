@@ -2296,7 +2296,18 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         history.viewingAfter === history.viewingBefore,
         `切到别的栏再切回来，看的还是那一次（前 ${JSON.stringify(history.viewingBefore)} / 后 ${JSON.stringify(history.viewingAfter)}）`,
       )
-      check(history.resultShown && history.backButtonAfter, '切回来时右栏还是那一次的批注，「回到作答」也还在')
+      /*
+       * 切回来时右栏仍是那一次的批注，而且标题栏那颗按钮写「返回编辑」——
+       * 用户第 6 条把「回到作答」删掉了，出口收在这一颗上（点它就离开历史视图、回到作答框）。
+       */
+      check(
+        history.resultShown && history.returnToEditAfter,
+        `切回来时右栏还是那一次的批注，按钮写「返回编辑」（实际 ${JSON.stringify(history.returnToEditAfter)}）`,
+      )
+      check(
+        history.backToWritingGone === true,
+        '「回到作答」已经删掉了（第 6 条：出口收在「返回编辑」那一颗上）',
+      )
     }
     roundTrip.restore()
 
@@ -2331,6 +2342,10 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       check(panels.hasSplitter, '四栏之间是可见可拖的分隔条')
       check(panels.manualApplied, '拖动之后切换成手动比例（split-manual）')
       check(panels.canReturnToResult, '批过的页是只读的（没有输入框），而那颗按钮原地写着「返回编辑」')
+      check(
+        panels.submitVisibleInGraded === false,
+        '批改后的视图下**看不到「提交批改」**（第 4 条：那一档不该能点提交）',
+      )
       check(panels.editorShown, '点「返回编辑」回到作答框，可以接着改')
       check(
         panels.submitLabelAfterUnlock.trim() === '提交批改',

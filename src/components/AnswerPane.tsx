@@ -21,6 +21,13 @@
  * 那一刻改字，回来的批注画的就不是屏幕上这一段了。但**翻页不拦**——
  * 用户可以先去下一页接着译，这一页批完会在右下角通知他（见 JudgeDoneToast）。
  *
+ * ## 屏幕上是结果时，那颗按钮一律写「返回编辑」（用户第 2／3／4／6 条）
+ *
+ * 两种来路：刚批出来的这一页，以及从「批改记录」里翻出来看的那一次（哪怕这一页正放开着写）。
+ * 那一刻**没有可点的「提交批改」**——否则用户可能看着旧记录、按下的却是提交草稿。
+ * 点「返回编辑」= 离开历史视图（如果正在看历史）+ 回到作答框。
+ * 原来那颗「回到作答」按钮因此删掉了（用户第 6 条）。
+ *
  * 「哪一页批过没有」不在这个组件里判断：它由 App 按 session.pages 推出来，
  * 这里只按 `pageState` / `editing` 渲染。
  */
@@ -98,7 +105,6 @@ export function AnswerPane({
   onSettingsChange,
   onUnlock,
   onViewAttempt,
-  onBackToWriting,
   onDeleteRecord,
   onLevelChange,
   onSubmit,
@@ -145,8 +151,6 @@ export function AnswerPane({
   onUnlock: () => void
   /** 下拉里选了某一次：把右栏切成那一次的结果（只读，不动正在写的文字） */
   onViewAttempt: (id: string) => void
-  /** 从历史视图回到作答框 */
-  onBackToWriting: () => void
   /** 下拉里点叉号：删掉那一次批改（练习记录里同步消失，第 11 条） */
   onDeleteRecord: (id: string) => void
   onLevelChange: (level: PolishLevel) => void
@@ -170,18 +174,20 @@ export function AnswerPane({
   /** 这一页已经交出去、结果还没回来：作答框只读，免得批注画在对不上的文字上 */
   const frozen = pageState === 'judging'
   /**
-   * 标题栏里那一块**作答控件**（档位 + 那颗按钮）要不要画。
+   * **屏幕上是结果**（而不是作答框）——看下面那颗按钮的两种名字。
    *
-   * ⚠️ 它比 `editing` 宽一点，两种"不让你写"的状态也要画：
-   *   - **交出去之后**（`frozen`）：按钮变成按不动的"批改中…"。把整块藏掉当然也能达到
-   *     "批改中不能提交"，但用户看到的是"按钮凭空消失了"，而这一刻他最想知道的是
-   *     "交上去了没有"——一颗写着"批改中…"的灰按钮正好回答它。
-   *   - **批改之后**（`graded`）：按钮原地变成「返回编辑」（用户第 2 条要求）。
-   *     以前这一档是"提交批改整块消失、另一个位置冒出一颗「返回编辑」"，
-   *     用户看到的是按钮跳了地方；现在就是同一颗按钮换了个名字。
+   * 两种来路都算：
+   *   - 这一页批过、没被「返回编辑」放开（`!editing`）；
+   *   - 用户从「批改记录」下拉里翻出某一次来看（`fromHistory`）——**即使这一页正放开着写**。
+   *
+   * ⚠️ 第二种是用户报的那个不一致（第 3／4／6 条）：这一页按过「返回编辑」进到编辑态之后，
+   * 再从下拉里翻出一条旧记录看，屏幕上显示的是**那份结果**，而按钮却写着「提交批改」——
+   * 那一刻按下去等于把手里这段草稿交出去，而看到的却是别人（旧记录）的结果，
+   * 正是"批改后的视图下不该能点提交批改"这件事。现在只要屏幕上是结果，按钮就写「返回编辑」，
+   * 点它就离开历史视图回到作答框。
    */
-  const backToEditing = !fromHistory && pageState === 'graded'
-  const showAnswerControls = editing || frozen || backToEditing
+  const showingResult = !frozen && shown !== null && (fromHistory || !editing)
+  const showAnswerControls = editing || frozen || showingResult
   /** 提交按钮按不下去的两种原因（文案与悬停说明分开写） */
   const blocked = judgingThisPage || busyElsewhere
   const submitTitle = judgingThisPage
@@ -219,7 +225,6 @@ export function AnswerPane({
               history={gradeHistory}
               viewingId={viewingRecordId}
               onView={onViewAttempt}
-              onBackToWriting={onBackToWriting}
               onDelete={onDeleteRecord}
             />
           )}
@@ -239,16 +244,17 @@ export function AnswerPane({
                 ))}
               </div>
               {/*
-                同一颗按钮、两个名字（用户第 2 条要求）：
-                批改之后它写「返回编辑」，点下去回到可写状态，名字随即变回「提交批改」。
-                位置、字号、颜色都不动——用户要的就是"还是那颗按钮"。
+                同一颗按钮、两个名字（用户第 2／3／4／6 条）：
+                **只要屏幕上是结果**（不管是刚批出来的、还是从「批改记录」里翻出来看的那一次），
+                它一律写「返回编辑」——点下去就回到可写状态（顺带离开历史视图），名字随即变回「提交批改」。
+                "批改后的视图下不该能点提交批改"就是靠这一条保证的：那一档根本不画提交按钮。
               */}
-              {backToEditing ? (
+              {showingResult ? (
                 <button
                   type="button"
                   className="btn btn-primary"
                   onClick={onUnlock}
-                  title="放开这一页重写；改完自己按「提交批改」才会再批一次"
+                  title="回到这一页的作答框；改完自己按「提交批改」才会再批一次"
                 >
                   返回编辑
                 </button>
