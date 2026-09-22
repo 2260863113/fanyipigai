@@ -654,9 +654,11 @@ export function App(): JSX.Element {
         ordinal: index + 1,
         createdAt: record.createdAt,
         level: record.level,
-        score: record.refine
-          ? record.refine.score
-          : scoreCorrection(record.correction, record.answer, record.direction).total,
+        /*
+         * ⚠️ 大改档**没有分数**（ADR 0020）：`null` 表示"这一档不打分"，
+         * 而不是"分数是 0"——界面据此显示"不打分"，不显示数字。
+         */
+        score: record.refine ? null : scoreCorrection(record.correction, record.answer, record.direction).total,
         refined: record.refine !== undefined,
       }))
     return mine.reverse()
@@ -1679,7 +1681,20 @@ export function App(): JSX.Element {
             文章栏方向可切；句子栏只给领域——句子题的方向由句子本身决定，不需要人来选。
           */}
 
-          <main className={`split${split ? ' split-manual' : ''}`} ref={splitRef} style={splitStyle}>
+          {/*
+            版式：**大改档另有一套**（第 4 条）。
+            用户对那一档的答复是："相当于分成左右两个部分，左边部分再分成上下两个部分，
+            左上角为原文，左下角为总评，右边整个为批改界面。"
+            实现上只加一个类（`.split-refine`），DOM 一个字都不动——
+            样式表里把那两个 `.split-row` 设成 `display: contents`，
+            它们里面的三块就直接参与外层网格的排布（见 styles.css 的说明）。
+            精修档（批改视图）因此**一行都没改**——用户特意交代过"批改视图不受影响"。
+          */}
+          <main
+            className={`split${split ? ' split-manual' : ''}${shown?.refine ? ' split-refine' : ''}`}
+            ref={splitRef}
+            style={splitStyle}
+          >
             <div className="split-row split-row-top">
             <SourcePane
               exercise={exercise}

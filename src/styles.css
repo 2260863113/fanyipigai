@@ -813,9 +813,87 @@ button {
   flex: 1 1 0;
 }
 
+/*
+ * ── 大改档的版式：左栏分上下，右栏整栏（第 4 条）─────────────────
+ *
+ * 用户对第 4 条的答复："相当于分成左右两个部分，左边部分再分成上下两个部分，
+ * 左上角为原文，左下角为总评，右边整个为批改界面。"
+ *
+ * ⚠️ **DOM 一个字都没动**：两个 `.split-row` 在这里设成 `display: contents`——
+ * 它们自己不生成盒子，里面的三块（原文 / 排内竖线 / 对照）就直接参与**外层**网格的排布。
+ * 这样做的理由是"批改视图不受影响"：精修档的 DOM 与样式完全照旧，
+ * 大改档只是换了一套网格排布规则（若改成在 JSX 里分两套 DOM，两份 40 个参数的组件
+ * 迟早会分家）。
+ *
+ * 排布（3 列 × 3 行）：
+ *   ┌──────────┬─┬──────────┐
+ *   │ 原文      │ │          │
+ *   ├──────────┤ │ 对照      │
+ *   │ （横线）  │ │（整栏）   │
+ *   ├──────────┤ │          │
+ *   │ 总评      │ │          │
+ *   └──────────┴─┴──────────┘
+ *
+ * 右下角那一栏（批注详情）**整块不画**（用户要求"去掉右下角批注详情栏目"）：
+ * 大改档本来就没有批注可点，它在那一档里只显示一句静态说明，那块地方合并给右边的对照。
+ */
+.split-refine {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8px minmax(0, 1fr);
+  /* 没拖过时：左栏上 3 下 1，两块各留一个下限，谁也不至于被压没 */
+  grid-template-rows: minmax(180px, 3fr) 8px minmax(120px, 1fr);
+}
+
+/* 拖过分割线：照旧按 --col-left / --row-top 分（与精修档同一套变量） */
+.split-refine.split-manual {
+  grid-template-columns: minmax(0, var(--col-left)) 8px minmax(0, var(--col-right));
+  grid-template-rows: minmax(0, var(--row-top)) 8px minmax(0, var(--row-bottom));
+}
+
+/* 两排不再自己生成盒子：里面的块直接落到外层网格上 */
+.split-refine > .split-row-top,
+.split-refine > .split-row-bottom {
+  display: contents;
+}
+
+.split-refine .pane-source {
+  grid-area: 1 / 1 / 2 / 2;
+}
+
+/* 左栏那条横线：只横跨左栏（右栏是整栏，不该被它切开） */
+.split-refine > .splitter-h {
+  grid-area: 2 / 1 / 3 / 2;
+}
+
+.split-refine .pane-score {
+  grid-area: 3 / 1 / 4 / 2;
+}
+
+/*
+ * 左右之间那条竖线：留**上排那一条**，让它竖跨三行（全高），
+ * 下排那一条没有存在的意义（右下角已经没有了），因此不画。
+ */
+.split-refine .split-row-top > .splitter-v {
+  grid-area: 1 / 2 / 4 / 3;
+}
+
+.split-refine .split-row-bottom > .splitter-v {
+  display: none;
+}
+
+/* 右栏整栏都是对照 */
+.split-refine .pane-answer {
+  grid-area: 1 / 3 / 4 / 4;
+  border-bottom: none;
+}
+
+/* 右下角那一栏整块去掉（它在大改档里本来就只有一句静态说明） */
+.split-refine .pane-notes {
+  display: none;
+}
+
 /* 练习记录页：左边记录列表，右边沿用四栏结构 */
-.split-records {
-  display: flex;
+.split-records {  display: flex;
   flex-direction: row;
 }
 
@@ -1383,6 +1461,27 @@ button {
   font-size: 11.5px;
   line-height: 1.6;
   color: var(--ink-faint);
+}
+
+/*
+ * 漏译那一行（第 13 条：漏译按字数扣分，单独列出来）。
+ * 用橙色的那套警示配色：它说的是"这里扣了多少"，而不是一句普通说明。
+ */
+.score-omission {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border: 1px solid var(--warn-line);
+  border-radius: 6px;
+  background: var(--mark-orange-bg);
+  color: var(--warn-ink);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* 大改档那一栏：不打分、也没有总评，只有一句说明 */
+.score-noscore {
+  font-size: 12.5px;
+  line-height: 1.8;
 }
 
 .score-legend {
@@ -2520,6 +2619,35 @@ button {
 }
 
 /*
+ * 大改档那一组最上面的一行：**这一句对应的原文**（第 4 条）。
+ *
+ * 它不加任何颜色——那是题目给的文字，不是被改内容，也不是改成了什么。
+ * 字号与译文行一致、颜色最淡（三层里最靠后的一层）。
+ */
+.compare-source {
+  margin: 0 0 2px;
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--ink-faint);
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+/* 与原文对不上时的一个小标记（模型改写了几个字；照实说，别让人当真） */
+.compare-source-warn {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px dashed var(--warn-line);
+  border-radius: 4px;
+  background: var(--mark-orange-bg);
+  color: var(--warn-ink);
+  font-family: var(--sans);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/*
  * 「一句译文、一句修改后译文」**各占一行、上下交替**（用户要求）。
  * 两句都允许在内部自动折行——长句子不会被截断，也不会把栏撑宽。
  */
@@ -2572,6 +2700,11 @@ button {
 
 .compare-label-after {
   color: var(--accent);
+}
+
+/* 「原文」那个标签：三层里最淡的一层，免得抢了译文与修改译文的注意力 */
+.compare-label-source {
+  color: var(--ink-faint);
 }
 
 /*

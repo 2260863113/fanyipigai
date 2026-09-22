@@ -3,7 +3,7 @@ import type { Correction, ErrorCategory } from '../domain/types'
 import { CATEGORY_LABEL, COLOR_LABEL, LEVEL_LABEL, type Direction, type PolishLevel } from '../domain/types'
 import { colorForCategory, type ValidatedCorrection } from '../domain/validate'
 import { hasLengthSeverity } from '../domain/severity'
-import { scoreCorrection, SCORING_RULE_TEXT } from '../domain/scoring'
+import { omissionPenaltyText, scoreCorrection, SCORING_RULE_TEXT } from '../domain/scoring'
 import { MARK_COLOR_VALUE } from '../domain/color'
 
 interface Props {
@@ -39,6 +39,15 @@ export function ScoreSummary({ correction, validated, answer, direction, level, 
         <span className="score-unit">/ 100</span>
       </div>
       <p className="score-rule">{SCORING_RULE_TEXT}</p>
+
+      {/*
+        漏译的扣分**单独写一行**（用户第 13 条：漏译按字数扣分）。
+        不写出来的话用户只会看到一个总数，而"漏了 20 个字扣 20 分"这件事是他自己定下的规矩，
+        必须让他核得出来。
+      */}
+      {score.omissionPenalty > 0 && (
+        <p className="score-omission">{omissionPenaltyText({ units: score.omissionUnits, penalty: score.omissionPenalty }, direction)}</p>
+      )}
 
       <ul className="score-legend">
         <li style={{ color: MARK_COLOR_VALUE.red }}>

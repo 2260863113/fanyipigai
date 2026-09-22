@@ -1,7 +1,7 @@
 /**
  * 用真实 DeepSeek API 跑一次**大改档**，检查那套提示词与解析器是否真的对得上。
  *
- * 大改是另一条链路（整篇逐句重写 + 逐句解释 + AI 总评，见 domain/refine.ts），
+ * 大改是另一条链路（整篇逐句重写 + 每句对应的原文 + 逐句解释，**不打分**，见 domain/refine.ts），
  * 提示词、返回格式、解析器都是新的，因此它值得一次**真调用**——
  * 光靠桩测试只能证明"程序接得住一份形状正确的返回"，
  * 证明不了"模型真的会按这个格式返回"。
@@ -102,15 +102,21 @@ if (!outcome.ok) {
 } else {
   const { refine } = outcome
   console.log(`\n✓ 大改成功（用时 ${elapsed}s，尝试 ${outcome.attempts} 次）`)
+  /* 大改**不打分**了（用户拍板，见 ADR 0020）：这里只报逐句条数与每句的原文是否对得上 */
+  const matched = refine.sentences.filter((sentence) => sentence.sourceMatched).length
   console.log(
-    `  AI 总评 ${refine.score} / 100（逐句 ${refine.sentences.length} 条，其中改过 ${changedSentenceCount(refine)} 条）`,
+    `  逐句 ${refine.sentences.length} 条，其中改过 ${changedSentenceCount(refine)} 条；` +
+      `给出了原文的 ${refine.sentences.filter((s) => s.sourceText.length > 0).length} 条，` +
+      `其中能在原文里定位到的 ${matched} 条（这一档不打分）`,
   )
-  console.log(`  评语：${refine.comment}`)
 
   console.log('\n  逐句：')
   for (const sentence of refine.sentences) {
     const mark = sentence.changed ? '改' : '留'
     console.log(`    [${mark}] ${sentence.id} 「${sentence.oldText}」`)
+    if (sentence.sourceText.length > 0) {
+      console.log(`         原文：${sentence.sourceMatched ? '' : '（对不上）'}「${sentence.sourceText}」`)
+    }
     if (sentence.changed) console.log(`         → 「${sentence.rewritten}」`)
     console.log(`         为什么：${sentence.explanation}`)
   }

@@ -379,9 +379,9 @@ export function judgeApiPlugin(): Plugin {
           const elapsed = ((Date.now() - started) / 1000).toFixed(1)
 
           if (outcome.ok) {
+            // 大改档**不打分**了（用户拍板），因此日志里只报逐句条数
             server.config.logger.info(
-              `[judge-api] 精修完成，用时 ${elapsed}s，逐句 ${outcome.refine.sentences.length} 条，` +
-                `AI 评分 ${outcome.refine.score}`,
+              `[judge-api] 大改完成，用时 ${elapsed}s，逐句 ${outcome.refine.sentences.length} 条（这一档不打分）`,
             )
             json(res, 200, outcome)
             return

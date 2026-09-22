@@ -4,37 +4,36 @@
  * 只放"一眼能扫完"的东西（分数、三色各自的处数、错误分类分布）——
  * 逐处批注在右下栏，这里不重复。没提交过就只给一句提示。
  *
- * ## 大改档的分数是**另一种东西**（务必标出来源）
+ * ## 大改档**不打分**（用户拍板，ADR 0020）
  *
- * 精修档的分数由程序按错误列表算（可解释、可复算）；大改档不逐处批改，算不出"扣了几分"，
- * 因此那个分数是**模型按整篇印象给的总评**。同一个 0–100 在两档下含义不同、**不可比**，
- * 所以大改档这一栏明确写着「AI 总评」并附上模型给的理由，免得用户以为"换一档分数就掉了"。
+ * 大改原先由 AI 给一个"整篇印象分"＋一段理由。两个 0–100 含义不同、还不能直接比，
+ * 用户的选择是**干脆取消它**："大改页面取消分数打分，分数打分只有精修部分有。"
+ * 追问"总评文字要不要留"时，他选的是"连文字总评也去掉"。
+ *
+ * 因此这一栏在大改档下只写一句"大改档不打分"，并说明分数为什么只有精修档才有——
+ * **不留一个空白的分数位**：那会让人以为是加载失败。
  */
 
 import type { JSX } from 'react'
 import { ScoreSummary } from './ScoreSummary'
 import type { ShownCorrection } from './AnswerPane'
-import type { RefineResult } from '../domain/refine'
 
 /**
- * 大改档的分数块：AI 给的总分 + 它给的理由 + 一句"这个分数与精修档不可比"。
+ * 大改档的分数块：**只有一句说明**（不打分、也不给总评）。
  *
  * 抽出来是因为练习记录页也要显示同一块（记录里若存的是大改档的那一次，回看时看到的必须是同一套说法）。
  */
-export function RefineScore({ refine }: { refine: RefineResult }): JSX.Element {
+export function RefineNoScore(): JSX.Element {
   return (
     <div className="score-summary">
-      <div className="score-total">
-        <span className="score-number">{refine.score}</span>
-        <span className="score-unit">/ 100</span>
-      </div>
-      <div className="stats">
-        <h3>为什么是这个分数</h3>
-        <p className="hint">{refine.comment}</p>
-      </div>
+      <p className="hint score-noscore">
+        大改档不打分。
+        <br />
+        分数只有精修档才有——那一档逐处挑错，分数由程序按错误列表算出来，你自己能核；
+        大改是整篇逐句重写，没有"哪一处扣了几分"这回事，所以不给分数、也不给总评。
+      </p>
       <div className="result-meta-block">
         <span className="chip">大改</span>
-        <span className="chip">逐句改写 {refine.sentences.length} 句</span>
       </div>
     </div>
   )
@@ -45,18 +44,18 @@ export function ScorePane({ shown }: { shown: ShownCorrection | null }): JSX.Ele
   return (
     <section className="pane pane-score">
       <header className="pane-head">
-        <h2>总体评分</h2>
+        <h2>{refine ? '大改档' : '总体评分'}</h2>
         {refine && (
           <div className="head-meta">
-            <span className="chip chip-warn" title="大改档不逐处批改，因此分数由 AI 按整篇印象给出">
-              AI 总评
+            <span className="chip" title="大改不逐处批改，因此没有分数也没有总评">
+              不打分
             </span>
           </div>
         )}
       </header>
       <div className="pane-body">
         {refine ? (
-          <RefineScore refine={refine} />
+          <RefineNoScore />
         ) : shown ? (
           <ScoreSummary
             correction={shown.correction}

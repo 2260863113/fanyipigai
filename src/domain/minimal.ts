@@ -38,6 +38,30 @@ const MAX_GAP = 2
  */
 const MAX_CHANGES = 2
 
+/**
+ * 一个改动块的两端，各有一段"新旧两侧逐字相同"的文字时，**达到几个单位**就把这段剪掉、不标色。
+ *
+ * 用户的口径是"相同部分**大于**两个字或者单词"——大于两个字/词，就是达到三个。
+ * 单位仍然是这套算法的最小单位：英文一个**词**、中文一个**字**（见 `wholeUnitsIn`）。
+ *
+ * 与 MAX_GAP 的分工：那个管"挨得很近的两块要不要合成一块"，这个管"已经成块的改动里还夹着多少
+ * 完全没变、不该跟着标色的文字"。
+ */
+const MIN_SAME_UNITS = 3
+
+/** 一个汉字 = 一个单位（取法与对照视图 `tokenize`、与 `sections.ts` 的 `countUnits` 同一口径）。 */
+const isCjkChar = (char: string | undefined): boolean =>
+  char !== undefined && /[\u3400-\u9fff\uf900-\ufaff]/.test(char)
+
+/**
+ * 英文侧的最小单位：一串拉丁字母/数字就是一个**词**。
+ *
+ * 汉字必须排除在外：中文没有空格，若跟英文一样连着算，一整句中文就成了"一个词"，
+ * "按词对齐"于是把整句卷进同一个块——中文句子整句标色正是从这里来的。
+ */
+const isLatinUnit = (char: string | undefined): boolean =>
+  char !== undefined && !isCjkChar(char) && /[\p{L}\p{N}]/u.test(char)
+
 interface Block {
   oldStart: number
   oldEnd: number
@@ -278,9 +302,128 @@ function minimizeCore(oldText: string, newText: string, maxChanges: number): Min
     return { oldStart, oldEnd, newStart, newEnd }
   }
 
-  const aligned = merged
-    .map(alignToWord)
-    .filter((block) => oldText.slice(block.oldStart, block.oldEnd) !== newText.slice(block.newStart, block.newEnd))
+  /**
+   * 切点能不能落在这里：落在**词中间**就是"半个词"，必须拒绝。
+   * 汉字之间、汉字与字母之间都算边界——一个字就是一个单位，怎么切都不算拆字。
+   */
+  const atUnitEdge = (text: string, index: number): boolean => {
+    if (index <= 0 || index >= text.length) return true
+    return !(isLatinUnit(text[index - 1]) && isLatinUnit(text[index]))
+  }
+
+  /**
+   * 数这一段（新旧两侧逐字相同）里有几个**完整单位**：一个汉字算一个、一个完整的词算一个；
+   * 标点与空格不算（与 `sections.ts` 的 `countUnits` 一个口径：那里也只数词与汉字）。
+   *
+   * "完整"是硬要求，不是保险：`eanwhile` 是从 meanwhile 中间截出来的一节，一个单位都数不出来，
+   * 于是 `At meanwhile → Meanwhile` 永远凑不够阈值，绝不会被剪成 `At m → M`。
+   * 这一节左端/右端紧贴着字母时，那一头的词只是半个词，因此要 `attachedLeft` / `attachedRight`。
+   */
+  const wholeUnitsIn = (run: string, attachedLeft: boolean, attachedRight: boolean): number => {
+    let units = 0
+    let index = 0
+    while (index < run.length) {
+      const char = run[index]
+      if (isCjkChar(char)) {
+        units += 1
+        index += 1
+        continue
+      }
+      // 标点、空格、引号：各占一个位置，但不是"字"也不是"词"，不计
+      if (!isLatinUnit(char)) {
+        index += 1
+        continue
+      }
+      const wordStart = index
+      while (index < run.length && isLatinUnit(run[index])) index += 1
+      if ((wordStart > 0 || !attachedLeft) && (index < run.length || !attachedRight)) units += 1
+    }
+    return units
+  }
+
+  /**
+   * 把块首、块尾那一段"两边逐字相同"的文字从改动块里剪掉（剪不动就原样返回）。
+   *
+   * ## 为什么要在这里再剪一刀
+   *
+   * 用户的要求（原话）："对于中间内容相同的且相同部分大于两个字或者单词的雷同部分，也不标色"。
+   * 上面两层只保证"块的两端落在词边界上"，**管不了块里面还夹着一大段完全相同的文字**：
+   *   - 开头的"先剥共同前后缀"只对**整串**的首尾生效，而且那两截本来就要求是完整的词；
+   *   - `alignToWord` 会为了对齐词边界，把块两侧相同的字**重新包进块里**（`At meanwhile` 就是这么来的）；
+   *     中文没有空格，一整句在它眼里是"一个词"，于是**只改了一个词也能把整句包成一个块**——
+   *     实测 `他们讨论了中国农业发展的问题 → 他们介绍了中国农业发展的问题` 会整句标色，
+   *     而按用户的口径该标的只有"讨论 → 介绍"那两个字。
+   *
+   * 剪掉是安全的：剪掉的正是两侧逐字相同的那一段，把它留在原地、剩下的部分替换回去，
+   * 结果字符串与目标文字一个字都不差（下面的重建校验照样会验一遍）。
+   * 但**一个单位都不许剪开**：切点必须落在单位边界上——英文落在词与词之间、中文落在字与字之间，
+   * 否则就成了用户明令禁止的"把一个单词按字母拆开改"。
+   *
+   * 放在"互不重叠 + 能重建"那两道判据**之前**：块被剪短之后，本来互相压着的两块就分开了，
+   * 那两道判据于是从"过不去、只能整段替换"变成"过得了、按几处精确改动画"。
+   * 实测（随机对拍八千组）：`农业葡萄环境问题他们 → opening 农业葡萄环境自然` 改前是两块都从第 0 位起、
+   * 重建不回去，只能整段标；剪完是"插入 opening "+"问题他们 → 自然"，只标该标的——这类"整段替换
+   * 收窄成精确改动"有三百多例，反过来（把已切好的块弄没了、块数变少）一次都没有：
+   * 块只会被剪短，剪不出空块（整块都相同的那种在上面就被筛掉了）。
+   */
+  const trimSameEnds = (block: Block): Block => {
+    const oldLength = block.oldEnd - block.oldStart
+    const newLength = block.newEnd - block.newStart
+
+    // 块首、块尾各自"两边逐字相同"的长度（两截不重叠，与上面剥前后缀同一套写法）
+    let head = 0
+    while (
+      head < oldLength &&
+      head < newLength &&
+      oldText[block.oldStart + head] === newText[block.newStart + head]
+    ) {
+      head += 1
+    }
+    let tail = 0
+    while (
+      tail < oldLength - head &&
+      tail < newLength - head &&
+      oldText[block.oldEnd - 1 - tail] === newText[block.newEnd - 1 - tail]
+    ) {
+      tail += 1
+    }
+
+    /**
+     * 能不能把 `length` 个字符从块里剪掉。
+     *
+     * `runOld` / `runNew` 是这一截在两侧的起点，`cutOld` / `cutNew` 是剪完之后**块的新边界**
+     * ——块首那一截的切点在它后面，块尾那一截的切点在它前面。
+     * 切点是这里唯一的硬约束：**两侧都要落在单位边界上**。只查一侧就会把一个词拆开——
+     * `shows → …` 那种改法，相同的那一截在原文里切在词尾、在改后文字里却切在词中间。
+     * 数单位时还要看这一截外面的邻居：紧贴着字母的那一头的词只是半个词，不算。
+     */
+    const cuttable = (runOld: number, runNew: number, length: number, cutOld: number, cutNew: number): boolean => {
+      if (length <= 0) return false
+      if (!atUnitEdge(oldText, cutOld) || !atUnitEdge(newText, cutNew)) return false
+      const attachedLeft = isLatinUnit(oldText[runOld - 1]) || isLatinUnit(newText[runNew - 1])
+      const attachedRight = isLatinUnit(oldText[runOld + length]) || isLatinUnit(newText[runNew + length])
+      return wholeUnitsIn(oldText.slice(runOld, runOld + length), attachedLeft, attachedRight) >= MIN_SAME_UNITS
+    }
+
+    let { oldStart, oldEnd, newStart, newEnd } = block
+    // 块首的一截：剪掉之后块从它后面开始
+    if (cuttable(oldStart, newStart, head, oldStart + head, newStart + head)) {
+      oldStart += head
+      newStart += head
+    }
+    // 块尾的一截：剪掉之后块在它前面结束
+    if (cuttable(oldEnd - tail, newEnd - tail, tail, oldEnd - tail, newEnd - tail)) {
+      oldEnd -= tail
+      newEnd -= tail
+    }
+    return { oldStart, oldEnd, newStart, newEnd }
+  }
+
+  /** 两边取值完全相同 = 这一块没有实际改动，画不出东西（渲染层拿到 from === to 的块也无从下笔）。 */
+  const differs = (block: Block): boolean =>
+    oldText.slice(block.oldStart, block.oldEnd) !== newText.slice(block.newStart, block.newEnd)
+
+  const aligned = merged.map(alignToWord).filter(differs).map(trimSameEnds).filter(differs)
 
   /** 各块必须互不重叠、且顺序一致，否则"多个最小不同项"根本讲不通。 */
   const disjoint = aligned.every((block, index) => {
@@ -314,7 +457,17 @@ function minimizeCore(oldText: string, newText: string, maxChanges: number): Min
     return [{ startOffset: 0, endOffset: oldText.length, from: oldText, to: newText }]
   }
 
-  // 改动项太多 → 整段替换（见 MAX_CHANGES 的说明；对照视图会把这个上限调大）
+  /*
+   * 改动项太多 → 整段替换（见 MAX_CHANGES 的说明；对照视图会把这个上限调大）
+   *
+   * ⚠️ 走到整段替换时（上面"重建不回去"那条也一样），**中间那段完全相同的文字会连着一起标**，
+   * 不再受 `trimSameEnds` 保护。这是"整段替换"这个取舍自己的边界，不是漏剪：
+   *   - 那种句子里相同的文字夹在**两处**改动之间，裁剪只剪块的两端，本来就剪不到它；
+   *   - 要让它也只标真正变的词，唯一的办法是把上限调大（实测
+   *     `the report shows bbb ccc dddd eee → since the start bbb ccc dddd dee` 不设上限就是四块、
+   *     中间那三个词一个都不标），可那是**对照视图**的口径——两行并排、切得越细越好；
+   *     批注是画在译文上的，这里宁可整段重写也不要一堆互相牵制的碎片，取舍不变。
+   */
   if (aligned.length > maxChanges) {
     return [{ startOffset: 0, endOffset: oldText.length, from: oldText, to: newText }]
   }

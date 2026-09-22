@@ -215,7 +215,8 @@ async function judgeOneSection(
   onRetry?: (info: { attempt: number; problems: string[] }) => void,
 ): Promise<SectionOutcome | JudgeFailure> {
   const messages: ChatMessage[] = [
-    { role: 'system', content: buildSystemPrompt() },
+    // 系统提示要按方向拼：英译中与中译英的"分几遍自查"不一样（用户第 14 条）
+    { role: 'system', content: buildSystemPrompt(request.direction) },
     { role: 'user', content: buildUserPrompt(request, sectionNote) },
   ]
 
@@ -472,7 +473,8 @@ export async function refineAnswer(
       continue
     }
 
-    const parsed = parseRefine(result.content, request.answer)
+    // 传 source：这一句的"对应原句"要拿它去**原文**里定位（见 refine.ts 的 parseRefine）
+    const parsed = parseRefine(result.content, request.answer, request.source)
     if (parsed.ok) return { ok: true, refine: parsed.refine, attempts: attempt, raw: lastRaw }
 
     allProblems.push(...parsed.problems)

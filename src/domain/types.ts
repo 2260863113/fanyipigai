@@ -34,6 +34,7 @@ export type ErrorCategory =
   | 'grammar' // 语法（硬性：时态、语态、主谓一致、词形、句子结构）
   | 'function-word' // 冠词、介词、单复数（硬性：形态细节）
   | 'punctuation' // 标点（硬性）
+  | 'verbosity' // 啰嗦（表达问题：绕圈子、重复、堆砌——第 14 条新增）
   | 'word-order' // 语序错（表达问题）
   | 'collocation' // 搭配不当（表达问题）
   | 'word-choice' // 用词不当（表达问题）
@@ -87,6 +88,20 @@ export const ERROR_CATEGORY_SPECS: readonly ErrorCategorySpec[] = [
   },
   { key: 'function-word', label: '冠词/介词/单复数', hard: true, hint: '冠词、介词、单复数等形态细节' },
   { key: 'punctuation', label: '标点', hard: true, hint: '标点使用不当' },
+  /**
+   * 「啰嗦」（第 14 条新增，用户点名的一类）。
+   *
+   * 为什么单列一类、而不是并进"用词不当"：用户要的是**能单独看见"我写得太啰嗦"**这件事
+   * （他把它排在"术语错误"之后、"更好的表达"之前单独检查一遍）。并进用词不当的话，
+   * 弱项统计里就只剩一堆"用词不讲究"，看不出真正的问题。
+   * 它是**表达问题（橙）**：啰嗦读得懂、意思也不错，只是不够利落。
+   */
+  {
+    key: 'verbosity',
+    label: '啰嗦',
+    hard: false,
+    hint: '绕圈子、重复、堆砌可有可无的成分，删掉更利落（同一件事说了两遍、一串修饰语只说一个意思）',
+  },
   { key: 'word-order', label: '语序错', hard: false, hint: '词序、修饰语位置、从句位置需要调整' },
   { key: 'collocation', label: '搭配不当', hard: false, hint: '词与词的搭配不成立，如 insist her dream' },
   { key: 'word-choice', label: '用词不当', hard: false, hint: '词义选错、词形用错（如把名词 success 当动词用）' },
@@ -274,12 +289,20 @@ export interface Correction {
 export interface Score {
   /** 0–100 */
   total: number
-  /** 红色（硬性错误）数量 */
+  /** 红色（硬性错误）数量——**含漏译**（漏译也会标色，图例少算它就不一致了） */
   hardCount: number
-  /** 橙色（表达问题）数量 */
+  /** 橙色（表达问题）数量——同样含漏译 */
   softCount: number
   /** 绿色（表达优秀）数量 */
   highlightCount: number
+  /**
+   * 一共漏了多少个单位（中译英数词、英译中数汉字）。
+   * 漏译是**按字数扣分**的（用户第 13 条），因此这两个数要单独报出来，
+   * 分数栏里会写一行"漏译扣 X 分（漏 N 个单位）"。
+   */
+  omissionUnits: number
+  /** 漏译一共扣了多少分（= 单位数 × 每单位扣分） */
+  omissionPenalty: number
 }
 
 /** 题目的四种形态。顶部导航栏就是按这个分类切换的。 */

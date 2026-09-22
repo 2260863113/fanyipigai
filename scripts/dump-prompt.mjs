@@ -45,7 +45,12 @@ await build({
 const mod = await import(pathToFileURL(outfile).href)
 rmSync(cacheDir, { recursive: true, force: true })
 
-const system = mod.buildSystemPrompt()
+/*
+ * ⚠️ 系统提示**要按方向拼**（用户第 14 条之后英译中与中译英的"分几遍自查"不一样），
+ * 因此两个方向各导一份——只看一份会让人以为两边共用同一套批改顺序。
+ */
+const system = mod.buildSystemPrompt('en-to-zh')
+const systemZhToEn = mod.buildSystemPrompt('zh-to-en')
 
 // 用一份真实的上下文拼出用户消息，让导出结果与线上实际发送的一致
 const exampleRequest = {
@@ -73,8 +78,10 @@ const generationSystem = mod.buildGenerationSystemPrompt()
 const generationUser = mod.buildGenerationUserPrompt(exampleGeneration)
 
 const output = [
-  banner('系统提示（system）—— 每次批改都会原样发送'),
+  banner('系统提示（system）—— 英译中·精修：每次批改都会原样发送（五遍自查）'),
   system,
+  banner('系统提示（system）—— 中译英·精修（四遍自查）'),
+  systemZhToEn,
   banner('用户消息（user）—— 单段题（句子 / 段落 / 术语）'),
   userFirst,
   banner('用户消息（user）—— 文章题的第 2 段（共 4 段）'),

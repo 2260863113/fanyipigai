@@ -134,6 +134,56 @@ const stubSource = `
     const original = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
+      /*
+       * 大改档（/api/refine）：第 4 条之后它有一套**自己的版式**（左栏上下、右栏整栏），
+       * 因此这里也补一份与真实接口同形的响应，供"大改档的真实浏览器验收"用。
+       * 形状与 domain/refine.ts 解析出来的完全一致（sourceText / sourceAnchor / sourceMatched 都要有）。
+       */
+      if (url.includes('/api/refine')) {
+        let refineBody = {};
+        try { refineBody = JSON.parse((init && init.body) || '{}'); } catch (error) { refineBody = {}; }
+        const rSections = refineBody.answerSections || [];
+        const rAnswer = rSections.map((s) => s.text).join('\\n\\n');
+        const rSource = refineBody.source || '';
+        const rFirst = (rSource.split(/(?<=[.。!！?？])\\s*/)[0] || '').trim();
+        const rRewritten = rAnswer.length > 0 ? rAnswer[0].toUpperCase() + rAnswer.slice(1) : rAnswer;
+        const rMatched = rFirst.length > 0 && rSource.includes(rFirst);
+        const rStart = rSections[0] ? rSections[0].start : 0;
+        window.__judgeCalls.push({
+          start: rStart,
+          text: rAnswer,
+          direction: refineBody.direction || '',
+          source: rSource,
+          body: refineBody,
+          at: Date.now(),
+          endpoint: 'refine',
+        });
+        const payload = {
+          ok: true,
+          attempts: 1,
+          raw: JSON.stringify({ sentences: [] }),
+          refine: {
+            sentences: [
+              {
+                id: 'r1',
+                sourceText: rFirst,
+                sourceAnchor: rMatched ? { start: 0, end: rFirst.length, snippet: rFirst } : null,
+                sourceMatched: rMatched,
+                oldText: rAnswer,
+                anchor: { start: rStart, end: rStart + rAnswer.length, snippet: rAnswer },
+                rewritten: rRewritten,
+                explanation: '句首字母要大写；其余保持不变。',
+                praise: '',
+                changed: rAnswer !== rRewritten,
+              },
+            ],
+          },
+        };
+        return new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       if (!url.includes('/api/judge')) return original(input, init);
       /*
        * 两次"拖慢"，用途不同：
@@ -1728,6 +1778,137 @@ try {
     JSON.stringify(bestAfterGrading),
   )
 
+  /*
+   * ── 大改档的版式（第 4 条）──
+   *
+   * 用户对第 4 条的答复："相当于分成左右两个部分，左边部分再分成上下两个部分，
+   * 左上角为原文，左下角为总评，右边整个为批改界面。"
+   * 落地方式是只加一个类 `.split-refine`（样式表里用 `display: contents` 把那两排摊开），
+   * 因此这里量的是**真实矩形**：右栏是不是整栏高、左栏是不是上下两块、右下角那一栏有没有了。
+   */
+  console.log('\n== 大改档的版式（第 4 条）==')
+  const refineLayout = await cdp.evaluate(
+    `(async () => {
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       const setValue = (el, value) => {
+         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+         setter.call(el, value);
+         el.dispatchEvent(new Event('input', { bubbles: true }));
+       };
+       const answerForPage = ${answerForPage.toString()};
+       /* 站到一页可写的页上：历史视图先「回到作答」，只读的页按「返回编辑」，都不行就翻页 */
+       for (let page = 0; page < 8 && !document.querySelector('.answer-input'); page++) {
+         const backToWriting = [...document.querySelectorAll('.pane-answer .btn')].find(
+           (b) => (b.textContent || '').trim() === '回到作答',
+         );
+         if (backToWriting) { backToWriting.click(); await sleep(400); continue; }
+         const unlock = [...document.querySelectorAll('.pane-answer .btn')].find(
+           (b) => (b.textContent || '').trim() === '返回编辑',
+         );
+         if (unlock) { unlock.click(); await sleep(400); continue; }
+         const step = document.querySelector('.section-nav [data-nav="next"]');
+         if (!step || step.disabled) break;
+         step.click();
+         await sleep(350);
+       }
+       const area = document.querySelector('.answer-input');
+       if (!area) return { error: '找不到可写的作答框' };
+       const source = (document.querySelector('.pane-source .source-text')?.textContent || '').trim();
+       /* 先切档位到大改，再填一段"过得了门"的新作答 */
+       const levelBtn = [...document.querySelectorAll('.level-btn')].find((b) => (b.textContent || '').trim() === '大改');
+       if (!levelBtn) return { error: '找不到「大改」档位按钮' };
+       levelBtn.click();
+       await sleep(300);
+       setValue(area, answerForPage(source, 7) + '\\n（大改版式验收用的作答）');
+       await sleep(250);
+       const callsBefore = window.__judgeCalls.length;
+       document.querySelector('.pane-answer .btn-primary').click();
+       let got = null;
+       for (let i = 0; i < 80; i++) {
+         if (document.querySelector('.pane-answer .compare-list')) { got = window.__judgeCalls.length - callsBefore; break; }
+         const err = document.querySelector('.error-block');
+         if (err) return { error: '页面报错：' + (err.textContent || '').slice(0, 200) };
+         await sleep(200);
+       }
+       if (got === null) {
+         const toast = (document.querySelector('.toast')?.textContent || '').trim();
+         return { error: '大改提交之后没有出现对照列表' + (toast ? '；吐司：' + toast : '') };
+       }
+       await sleep(600);
+       const rect = (sel) => {
+         const node = document.querySelector(sel);
+         if (!node) return null;
+         const box = node.getBoundingClientRect();
+         return { top: Math.round(box.top), bottom: Math.round(box.bottom), left: Math.round(box.left), right: Math.round(box.right), w: Math.round(box.width), h: Math.round(box.height) };
+       };
+       const split = rect('.split');
+       const sourcePane = rect('.pane-source');
+       const scorePane = rect('.pane-score');
+       const answerPane = rect('.pane-answer');
+       const notesPane = (() => {
+         const node = document.querySelector('.pane-notes');
+         if (!node) return null;
+         const style = getComputedStyle(node);
+         return { display: style.display, w: Math.round(node.getBoundingClientRect().width), h: Math.round(node.getBoundingClientRect().height) };
+       })();
+       return {
+         calls: got,
+         hasRefineClass: !!document.querySelector('.split-refine'),
+         splitSpans: { source: !!document.querySelector('.pane-source'), answer: !!document.querySelector('.pane-answer') },
+         geometry: { split, sourcePane, scorePane, answerPane, notesPane },
+         labels: {
+           source: (document.querySelector('.pane-answer .compare-label-source')?.textContent || '').trim(),
+           original: (document.querySelector('.compare-original .compare-label')?.textContent || '').trim(),
+           corrected: (document.querySelector('.compare-corrected .compare-label')?.textContent || '').trim(),
+         },
+         sourceLines: document.querySelectorAll('.pane-answer .compare-source').length,
+         noteLines: document.querySelectorAll('.pane-answer .compare-note').length,
+         scorePaneText: (document.querySelector('.pane-score')?.textContent || '').trim(),
+         scoreChips: [...document.querySelectorAll('.pane-score .chip')].map((c) => (c.textContent || '').trim()),
+         historyScoreCells: [...document.querySelectorAll('.pane-answer .domain-item')].map((n) => (n.textContent || '').trim()).slice(0, 3),
+       };
+     })()`,
+  )
+  console.log('大改版式 =', JSON.stringify(refineLayout))
+  check(!refineLayout?.error, '大改档能提交并拿到对照', refineLayout?.error)
+  if (!refineLayout?.error) {
+    check(refineLayout.hasRefineClass === true, '大改档用的是它自己那套版式（.split-refine）')
+    const g = refineLayout.geometry ?? {}
+    check(
+      g.answerPane && g.split && Math.abs(g.answerPane.top - g.split.top) <= 3 && Math.abs(g.answerPane.bottom - g.split.bottom) <= 3,
+      `右栏是**整栏**（对照从上到下占满：${g.answerPane?.top}→${g.answerPane?.bottom}，整块 ${g.split?.top}→${g.split?.bottom}）`,
+    )
+    check(
+      g.sourcePane && g.scorePane && g.sourcePane.bottom <= g.scorePane.top + 1,
+      `左栏分成上下两块（原文 ${g.sourcePane?.top}→${g.sourcePane?.bottom}，总评 ${g.scorePane?.top}→${g.scorePane?.bottom}）`,
+    )
+    check(
+      g.answerPane && g.scorePane && g.scorePane.right <= g.answerPane.left,
+      '左下角那块**在左栏里**（总评的右边缘不越过对照栏的左边缘）',
+    )
+    check(
+      g.notesPane === null || g.notesPane.display === 'none' || g.notesPane.h === 0,
+      `右下角「批注详情」那一栏**整块不画了**（${JSON.stringify(g.notesPane)}）`,
+    )
+    check(
+      refineLayout.labels.source === '原文' &&
+        refineLayout.labels.original === '我的译文' &&
+        refineLayout.labels.corrected === '修改译文',
+      `三行的标签是「原文 / 我的译文 / 修改译文」（实际 ${JSON.stringify(refineLayout.labels)}）`,
+    )
+    check(
+      refineLayout.sourceLines >= 1 && refineLayout.noteLines >= 1,
+      `每组是"一句原文 + 一句我的译文 + 一句修改译文 + 一段说明"（原文行 ${refineLayout.sourceLines}、说明 ${refineLayout.noteLines}）`,
+    )
+    check(
+      (refineLayout.scorePaneText ?? '').includes('大改档不打分') && !/\d/.test(refineLayout.scorePaneText ?? ''),
+      `左下角只写「大改档不打分」，一个数字都没有（实际 ${JSON.stringify((refineLayout.scorePaneText ?? '').slice(0, 40))}）`,
+    )
+    check(
+      (refineLayout.historyScoreCells ?? []).every((text) => !/\d+\s*分/.test(text)),
+      `「批改记录」下拉里那几次也不再显示分数（${JSON.stringify(refineLayout.historyScoreCells)}）`,
+    )
+  }
   // 收藏页：每一条要给出"这一处是从哪一段原文里来的"（用户要求：当前一段，不是整篇）
   await cdp.evaluate(
     `[...document.querySelectorAll('.mode-tab')].find((b) => b.textContent.trim() === '收藏').click()`,

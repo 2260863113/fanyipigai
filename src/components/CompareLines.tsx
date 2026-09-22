@@ -1,16 +1,24 @@
 /**
- * 「一句原译 / 一句改后」这两行的渲染。
+ * 对照视图的渲染：**一行一句**，上中下排开。
  *
  * 为什么单独一个组件：**两份数据、同一个渲染形状**——
  *   - 精修档由 `buildCompareLines`（每处错误所在的那一句）算出来；
  *   - 大改档由 `buildRefineLines`（AI 重写过的那一句）算出来。
  * 两边的排版、颜色、点击行为必须一模一样，否则"对照视图"在两种档位下会长得不一样。
  *
- * 两行的分工（来自实际使用要求）：
- *   - **原文那一行**：被改过的那一段加**荧光底色 + 同色文字**——荧光只出现在原译文上；
- *   - **修改后的那一行**：只给文字上色，不加底色（那是"改成了什么"，不是被改内容）。
- * 点两行里任意一段都能在右下角看到那一处的说明；颜色沿用同一套
+ * ⚠️ **大改档多一行"原文"**（第 4 条，用户原话："按照一句原文，一句用户译文，一句修改译文这样排版"）：
+ * `line.source` 有值就多排一行在最上面。精修档的每一行没有这个字段，因此它的排版一个字都没变
+ * ——用户特意交代过"批改视图不受影响"。
+ *
+ * 各行的分工（来自实际使用要求）：
+ *   - **我的译文那一行**：被改过的那一段加**荧光底色 + 同色文字**——荧光只出现在学生写的那一行；
+ *   - **修改后的那一行**：只给文字上色，不加底色（那是"改成了什么"，不是被改内容）；
+ *   - **原文那一行**：不加任何颜色（它是题目给的文字，不是谁的错）。
+ * 点译文/改后两行里任意一段都能在右下角看到那一处的说明；颜色沿用同一套
  * （红＝硬性错误、橙＝表达问题、绿＝表达优秀）。大改档一律橙色——它不分类。
+ *
+ * 行首标签**可以换**（`labels`）：大改档用「原文 / 我的译文 / 修改译文」，
+ * 精修档沿用「原译 / 改后」。判据只有一处，两个档位不会各说各话。
  */
 
 import type { JSX } from 'react'
@@ -19,14 +27,28 @@ import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 import type { Selection } from './annotation-summary'
 import { withCircledBreaks } from './explain-lines'
 
+/** 行首那三个小标签。 */
+export interface CompareLabels {
+  original: string
+  corrected: string
+  /** 只有大改档会用到（那一行只在有 source 时才排出来） */
+  source?: string
+}
+
+/** 精修档的标签（原来写死的那两个词，一个字都没动）。 */
+const DEFAULT_LABELS: CompareLabels = { original: '原译', corrected: '改后' }
+
 export function CompareLines({
   lines,
   selection,
   onSelect,
+  labels = DEFAULT_LABELS,
 }: {
   lines: readonly CompareLine[]
   selection: Selection | null
   onSelect: (selection: Selection | null) => void
+  /** 行首标签；大改档传「原文 / 我的译文 / 修改译文」 */
+  labels?: CompareLabels
 }): JSX.Element {
   if (lines.length === 0) return <p className="hint">提交批改后，这里会按句子给出「改前 / 改后」对照。</p>
 
@@ -66,8 +88,23 @@ export function CompareLines({
             行首给一个小标签，一眼分得清这一行是"你写的"还是"改成什么"。
             两行都允许在内部自动折行（长句子不会被截断、也不会横向溢出）。
           */}
+          {/*
+            第一行：**这一句对应的原文**（只有大改档有）。它不加颜色——那是题目给的文字，
+            不是谁的错；对不上时旁边挂个小标记说明"这一行没能与原文对上"。
+          */}
+          {line.source !== undefined && (
+            <p className="compare-source">
+              <span className="compare-label compare-label-source">{labels.source ?? '原文'}</span>
+              {line.source}
+              {line.sourceMatched === false && (
+                <span className="compare-source-warn" title="这一句没能与屏幕上的原文对上（模型可能改写了几个字），只能当参考">
+                  与原文对不上
+                </span>
+              )}
+            </p>
+          )}
           <p className="compare-original">
-            <span className="compare-label">原译</span>
+            <span className="compare-label">{labels.original}</span>
             {line.originalSpans.map((part, partIndex) =>
               part.color ? (
                 <span
@@ -84,7 +121,7 @@ export function CompareLines({
             )}
           </p>
           <p className="compare-corrected">
-            <span className="compare-label compare-label-after">改后</span>
+            <span className="compare-label compare-label-after">{labels.corrected}</span>
             {line.corrected.map((part, partIndex) =>
               part.color ? (
                 <span

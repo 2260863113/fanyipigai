@@ -10,7 +10,7 @@ import { AnnotationText, type Selection } from './AnnotationText'
 import { AnswerViewSwitch } from './AnswerViewSwitch'
 import { CompareView } from './CompareView'
 import { RefineView } from './RefineView'
-import { RefineScore } from './ScorePane'
+import { RefineNoScore } from './ScorePane'
 import { SourceText } from './SourcePane'
 import { buildLayout } from '../domain/layout'
 import { ScoreSummary } from './ScoreSummary'
@@ -187,11 +187,13 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                       <span className="record-top">
                         <span className="record-attempt">
                           {KIND_LABEL[record.mode]} · 第 {record.attempt} 次 · 第 {record.sectionIndex + 1} 页
-                          {/* 大改档的分数是 AI 总评，与精修档的程序算分不是一回事，列表上就要标出来源 */}
-                          {record.refine && <span className="record-refine">大改 · AI 评分</span>}
+                          {/* 大改档不打分（ADR 0020），列表上照实说，不写一个假分数 */}
+                          {record.refine && <span className="record-refine">大改</span>}
                         </span>
                         <span className="record-score">
-                          {(record.refine ? record.refine.score : scoreCorrection(record.correction, record.answer, record.direction).total)} 分
+                          {record.refine
+                            ? '不打分'
+                            : `${scoreCorrection(record.correction, record.answer, record.direction).total} 分`}
                         </span>
                       </span>
                       <span className="record-meta">
@@ -374,7 +376,8 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
               </header>
               <div className="pane-body">
                 {openRecord.refine ? (
-                  <RefineScore refine={openRecord.refine} />
+                  /* 大改档回看：同样不打分、不给总评（用户拍板，见 ScorePane 的说明） */
+                  <RefineNoScore />
                 ) : (
                   <ScoreSummary
                     correction={openRecord.correction}

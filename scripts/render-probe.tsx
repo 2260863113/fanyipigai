@@ -104,7 +104,7 @@ export interface RenderProbe {
     /** 点开之后，弹窗里的完整文本 */
     rawModalText: string
   }
-  /** 大改档：整篇逐句重写 + 逐句解释 + AI 总评，而且只给对照（见 domain/refine.ts） */
+  /** 大改档：整篇逐句重写 + 每句对应的原文 + 逐句解释，而且只给对照（见 domain/refine.ts） */
   refine?: {
     /** 按「返回编辑」把批过的那一页放开（作答还在） */
     reUnlock: boolean
@@ -118,7 +118,14 @@ export interface RenderProbe {
     /** 只给对照：对照列表在、勾画不在 */
     hasCompareList: boolean
     hasAnnotatedLines: boolean
+    /** 一组里几行（第 4 条之后一组是"原文 / 我的译文 / 修改译文 / 说明"） */
     lineCount: number
+    /** 第 4 条：每组最上面那行"原文"的数量与行首标签 */
+    sourceLineCount: number
+    sourceLabel: string
+    originalLabel: string
+    correctedLabel: string
+    sourceText: string
     noteText: string
     /** 解释里带圈号的行数与圈号本身（用户要求：大改的解释按分号断行 + 圈号） */
     noteLineCount: number
@@ -128,7 +135,7 @@ export interface RenderProbe {
     /** 视图开关保留但禁用，并注明为什么 */
     viewButtonsDisabled: boolean
     lockedNote: string
-    /** 分数是 AI 总评，而且写着"不与精修档可比" */
+    /** 大改**不打分**（用户拍板）：那一栏只写一句说明，且一个数字都没有 */
     scorePaneText: string
     scoreChip: string[]
     /** 右下角说清"不逐处批改" */
@@ -401,26 +408,48 @@ function makeJudgeFetch(options: { judgeDelayMs?: number } = {}): {
        *
        * 重写只改一个字符（句首大写），这样 `minimizeChange` 能算出最小不同项、
        * 对照视图上只染那一个字——结构断言才验证得了"只染真正变了的字"这件事。
-       * 分数与评语是固定的：断言要能对得上具体的数字与句子。
+       *
+       * ⚠️ 第 4 条之后这里有两处变了：
+       *   - **不再有 score / comment**（大改档不打分，用户拍板；给了也会被丢掉）；
+       *   - 每一句要带 **sourceText**（这一句对应的原文，界面靠它多排一行"原文"）。
+       * 这些字段是**手搭的**（没走 parseRefine），因此必须与解析出来的形状一模一样，
+       * 否则界面渲染时会在缺字段的地方炸掉——实测踩过（`sourceOf` 读 undefined 的 length）。
        */
       calls += 1
       lastBody = String(init?.body ?? '')
       const refineBody = JSON.parse(lastBody || '{}') as {
         answerSections?: Array<{ start: number; text: string }>
+        source?: string
       }
       const refineSections = refineBody.answerSections ?? []
       const submittedText = refineSections.map((section) => section.text).join('\n\n').trim()
       const refined = submittedText.length > 0 ? submittedText[0]!.toUpperCase() + submittedText.slice(1) : submittedText
       const refineAnchorStart = refineSections[0]?.start ?? 0
+      /* 原文那一句：取本页原文的第一句（真的从原文里切，因此定位得到、`sourceMatched` 为真） */
+      const refineSource = (refineBody.source ?? '').split(/(?<=[.。!！?？])\s*/)[0]?.trim() ?? ''
+      const refineSentence = {
+        id: 'r1',
+        sourceText: refineSource,
+        sourceAnchor:
+          refineSource.length > 0 && (refineBody.source ?? '').includes(refineSource)
+            ? { start: 0, end: refineSource.length, snippet: refineSource }
+            : null,
+        sourceMatched: refineSource.length > 0 && (refineBody.source ?? '').includes(refineSource),
+        oldText: submittedText,
+        anchor: { start: refineAnchorStart, end: refineAnchorStart + submittedText.length, snippet: submittedText },
+        rewritten: refined,
+        explanation: '句首字母要大写；其余保持不变。',
+        praise: '',
+        changed: submittedText !== refined,
+      }
       const refinePayload = {
         ok: true,
         attempts: 1,
         raw: JSON.stringify(
           {
-            score: 86,
-            comment: '整体到位；有个别语法小问题；表达可以更地道。',
             sentences: [
               {
+                sourceText: refineSource,
                 original: submittedText,
                 rewritten: refined,
                 explanation: '句首字母要大写；其余保持不变。',
@@ -430,20 +459,7 @@ function makeJudgeFetch(options: { judgeDelayMs?: number } = {}): {
           null,
           2,
         ),
-        refine: {
-          score: 86,
-          comment: '整体到位；有个别语法小问题；表达可以更地道。',
-          sentences: [
-            {
-              id: 'r1',
-              oldText: submittedText,
-              anchor: { start: refineAnchorStart, end: refineAnchorStart + submittedText.length, snippet: submittedText },
-              rewritten: refined,
-              explanation: '句首字母要大写；其余保持不变。',
-              changed: submittedText !== refined,
-            },
-          ],
-        },
+        refine: { sentences: [refineSentence] },
       }
       return new Response(JSON.stringify(refinePayload), {
         status: 200,
@@ -1930,8 +1946,13 @@ export async function renderApp(
       /** 只给对照：对照列表在、勾画不在 */
       hasCompareList: container.querySelector('.pane-answer .compare-list') !== null,
       hasAnnotatedLines: container.querySelector('.pane-answer .annotated-lines') !== null,
-      /** 一句原译、一句改后、下面跟一句解释 */
+      /** 第 4 条：一组里"原文 / 我的译文 / 修改译文"三行 + 说明 */
       lineCount: container.querySelectorAll('.pane-answer .compare-line').length,
+      sourceLineCount: container.querySelectorAll('.pane-answer .compare-source').length,
+      sourceLabel: textOf('.pane-answer .compare-label-source'),
+      originalLabel: textOf('.pane-answer .compare-original .compare-label'),
+      correctedLabel: textOf('.pane-answer .compare-corrected .compare-label'),
+      sourceText: textOf('.pane-answer .compare-source'),
       noteText: container.querySelector('.pane-answer .compare-note')?.textContent?.trim() ?? '',
       /*
        * 大改的解释也要**按分号断行、每行带圈号**（用户要求："大改模式下，解释部分也要
@@ -1947,7 +1968,7 @@ export async function renderApp(
       /** 视图开关保留但禁用，并注明为什么 */
       viewButtonsDisabled: switchButtons.length > 0 && switchButtons.every((button) => button.disabled),
       lockedNote: textOf('.pane-answer .view-switch'),
-      /** 分数是 AI 总评，而且写着"不与精修档可比" */
+      /** 大改**不打分**（用户拍板）：那一栏只写一句说明 */
       scorePaneText: textOf('.pane-score'),
       scoreChip: [...container.querySelectorAll('.pane-score .chip')].map((node) => node.textContent?.trim() ?? ''),
       /** 右下角说清"不逐处批改" */
