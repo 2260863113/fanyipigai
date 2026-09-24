@@ -331,15 +331,19 @@ button {
   border-top: none;
 }
 
-/* 译法未人工核对时标出来——不假装它是权威答案 */
-.term-unverified {
-  margin-left: 6px;
-  font-size: 11px;
-  color: var(--warn-ink-soft);
-  border: 1px solid var(--warn-line-soft);
-  border-radius: 3px;
-  padding: 0 4px;
-  white-space: nowrap;
+/*
+ * `.term-unverified`（"译法待核对"那枚小标签）**随 `verified` 一起删掉了**（第 13 轮）：
+ * 新的术语库整批来自官方译名材料（两份 docx），不再有"尚未人工核对"这个状态，
+ * 因此那枚标签没了触发条件，留着就是死代码。
+ */
+
+/*
+ * 末页不满五条时补出来的空行（第 13 轮）：原文栏空着、作答栏是一个禁用的空框，
+ * 但**行数与分割线照旧**——两栏的横线在任何一页都对得上（用户拍板的"末页照旧五等分"）。
+ * 特意画得比正常行淡一点，好看出"这一页本来就没有这一条"，而不是以为界面出了错。
+ */
+.term-row-blank {
+  opacity: 0.45;
 }
 
 /*
@@ -695,6 +699,125 @@ button {
   font-weight: 600;
   color: var(--accent);
   white-space: nowrap;
+}
+
+/* ── 术语范围：两张卡片 + 一张中英对照平表（第 13 轮） ──────────
+   用户指定的流程："点击该按钮，弹出窗口，用户可以选择范围……
+   点击相应卡片后，进入新卡片，可以一次性看到题目内容，用户可以……点击确定和返回。"
+
+   版式与「选文章」那套卡片刻意保持一致（同一套观感、同一个"点一张卡片就往下走"的手法），
+   只是它的第二屏是一张**表**而不是卡片列表：进了第二屏就已经是一个范围的题目本身了。 */
+
+.scope-cards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scope-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: var(--paper-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  cursor: pointer;
+}
+
+.scope-card:hover {
+  border-color: var(--accent);
+}
+
+.scope-card-active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.scope-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.scope-card-meta {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+/* 「正在练」：与文章卡片上的「已完成」同一套做法，只是这里说的是"此刻在这一格上" */
+.scope-card-now {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--paper);
+  border: 1px solid var(--accent);
+  vertical-align: 1px;
+}
+
+/*
+ * 对照表：83 / 60 行，因此**自己滚**（弹窗整体不滚，标题与底部两颗按钮始终看得见），
+ * 并给一个高度上限——不然那张大卡片会长到屏幕外面去，"确定 / 返回"就够不着了。
+ *
+ * 顺带把弹窗放宽：这一屏里要并排放"中文名 + 官方英文名"两列，
+ * 而 `.gen-modal` 的 560px 是给 AI 出题那种表单用的——英文机关名在里面会被挤成一条竖线。
+ * 用 `:has()` 按内容挑，就不必给共用的 `Modal` 加一个只为这一处服务的参数。
+ */
+.gen-modal:has(.scope-table-wrap) {
+  width: min(880px, 100%);
+}
+
+.scope-table-wrap {
+  max-height: min(56vh, 460px);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.scope-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.scope-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--paper-soft);
+  border-bottom: 1px solid var(--line-strong);
+  padding: 8px 10px;
+}
+
+.scope-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.scope-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* 中文那一列窄一些、英文那一列宽一些（英文名普遍更长） */
+.scope-table td:first-child,
+.scope-table th:first-child {
+  width: 38%;
 }
 
 /* ── 四栏 2×2：左上原文 / 右上译文 / 左下计分 / 右下批注 ──── */
@@ -1067,6 +1190,32 @@ button {
   line-height: 1.9;
   margin: 0;
   white-space: pre-wrap;
+}
+
+/*
+ * 自己贴的那道题：**原文就是一个输入框**（第 13 轮用户要求：
+ * "一进去不弹出窗口要求输入，而是将原文也变成输入栏"）。
+ *
+ * 因此它长得像 .source-text（同一套衬线体、字号、行距），只是可以写：
+ * 不画边框、不画焦点圈——它占的是"原文"那个位置，看起来仍该是原文，
+ * 而不是一个表单控件（用户对术语输入框提过同一条要求："去掉输入框的边框"）。
+ */
+.source-input {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.9;
+}
+
+.source-input::placeholder {
+  color: var(--ink-faint);
 }
 
 /*

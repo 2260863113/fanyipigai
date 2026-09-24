@@ -1,12 +1,14 @@
 /**
- * 顶栏：站名 + 题型导航 + 「暗夜 / 设置」+ 当前这一篇的元信息。
+ * 顶栏：站名 + 题型导航 + 「暗夜 / 设置」。
  *
- * 元信息那一组只在练习类页面显示（记录页与收藏页没有"当前这一篇"可言），
- * 因此由调用方通过 `meta` 传进来或传 null。第 9 条之后方向/文体/话题三枚小标签
- * 不再放进来，那一组最多只剩「内置示例批改」这一句提醒。
+ * ⚠️ 这里**没有 `meta` 参数了**（第 13 轮）。它原先是"当前这一题的元信息"，最后只剩
+ * 「内置示例批改」那一枚警告芯片——用户要求"去掉右上角内置示例批改标志"，于是整枚删掉，
+ * 这个入口也就没有存在的意义了（示例批改的提醒搬进了结果栏，见 AnswerPane）。
+ * 删掉之后顶栏最右边的就是「暗夜 · 设置」：`.topbar-right` 本来就是 `margin-left: auto`，
+ * 因此"把暗夜模式和设置按钮挪到右边"这条要求不需要改任何布局，删掉那枚芯片就到位了。
  */
 
-import type { JSX, ReactNode } from 'react'
+import type { JSX } from 'react'
 import { VISIBLE_MODE_TABS, type Mode } from '../domain/types'
 
 /** 顶栏导航的取值：四类题型 + 三个独立页面（它们不是题型）。 */
@@ -18,7 +20,6 @@ export function TopBar({
   onOpenSettings,
   onToggleTheme,
   theme,
-  meta,
 }: {
   tab: NavTab
   onSelectTab: (tab: NavTab) => void
@@ -27,8 +28,6 @@ export function TopBar({
   onToggleTheme: () => void
   /** **当前实际生效**的主题（可能是跟随系统算出来的），按钮文案由它决定 */
   theme: 'light' | 'dark'
-  /** 当前题目的元信息小标签；记录页与收藏页传 null */
-  meta: ReactNode
 }): JSX.Element {
   return (
     <header className="topbar">
@@ -81,8 +80,6 @@ export function TopBar({
           设置
         </button>
       </div>
-
-      {meta ? <div className="topbar-right">{meta}</div> : null}
     </header>
   )
 }

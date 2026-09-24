@@ -214,7 +214,7 @@ export interface RenderProbe {
    */
   unlockRoundTrip?: { unlockedShown: boolean; gradingBack: boolean; stateAfterBack: string }
   editedRoundTrip?: { hasInput: boolean; hasResult: boolean }
-  /** 「自定义」那一栏：自己贴一篇原文来练 */
+  /** 「自定义」那一栏：自己贴一篇原文来练（原文本身就是一个输入框，见下面那段） */
   custom?: {
     /** 导航栏里的标签 */
     tabs: string[]
@@ -226,11 +226,14 @@ export interface RenderProbe {
     /** 有没有「换一换」与「AI 出题」（自己贴的题不该有） */
     hasAiButton: boolean
     hasRotateButton: boolean
-    hasRepasteButton: boolean
-    /** 贴题弹窗打开后，框里预填的内容 */
+    /** 原文栏里是不是一个**可写的原文输入框**（第 13 轮：不再弹窗问） */
+    hasSourceInput: boolean
+    /** 有没有贴题弹窗打开（第 13 轮之后**不该有**） */
+    hasPasteModal: boolean
+    /** 原文输入框里预填的内容（= 上次写的那一篇） */
     prefill: string
-    /** 贴进新的一篇之后，「原文」栏显示的文字 */
-    afterPaste: string
+    /** 往输入框里写完新的一篇之后，「原文」栏显示的文字 */
+    afterType: string
     /** 浏览器里存下来的那一篇（读回来的原文） */
     storedSource: string
     /** 按题号留的档里有几条（练习记录翻旧题要用） */
@@ -986,18 +989,20 @@ export async function renderApp(
     const shownSource = textOf('.pane-source')
     const hasReference = container.querySelector('.pane-source .reference') !== null
 
-    // 贴新的一篇：点「重新贴一篇」，把划来的原文填进去，再点「开始练习」
-    await clickText('.pane-source .btn', '重新贴一篇')
-    const area = container.querySelector<HTMLTextAreaElement>('.gen-textarea')
-    const prefill = area?.value ?? ''
-    if (area) {
+    /*
+     * 第 13 轮起**没有贴题弹窗**了：原文栏自己就是一个输入框（`.source-input`），
+     * 进来直接往里写——因此这里不再点「重新贴一篇」、也不再点「开始练习」，
+     * 而是把字直接打进那个框里（模拟用户真的粘一段进去）。
+     */
+    const sourceInput = container.querySelector<HTMLTextAreaElement>('.pane-source .source-input')
+    const prefill = sourceInput?.value ?? ''
+    if (sourceInput) {
       await act(async () => {
         const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')?.set
-        setter?.call(area, options.checkCustom)
-        area.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+        setter?.call(sourceInput, options.checkCustom)
+        sourceInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
       })
     }
-    await clickText('.gen-modal .btn-primary', '开始练习')
 
     // 存进浏览器了没有：直接问 localStorage（刷新后还在，靠的就是它）
     const storedRaw = dom.window.localStorage.getItem('translation-practice.custom') ?? ''
@@ -1022,9 +1027,10 @@ export async function renderApp(
       hasReference,
       hasAiButton: hasButton('AI 出题'),
       hasRotateButton: hasButton('换一换'),
-      hasRepasteButton: hasButton('重新贴一篇'),
+      hasSourceInput: sourceInput !== null,
+      hasPasteModal: container.querySelector('.gen-modal') !== null,
       prefill,
-      afterPaste: textOf('.pane-source'),
+      afterType: textOf('.pane-source'),
       storedSource,
       historyCount,
     }
@@ -1046,8 +1052,20 @@ export async function renderApp(
    * 把每一页的**原文**收集起来（用来判断该页该填中文还是英文），再据此造作答。
    * 这一步只翻页、不写不打字，因此不会触发任何提交。
    */
+  /**
+   * 屏幕上"原文"那一块的文字。
+   *
+   * ⚠️ 两处都要读：自己贴的题（第 13 轮起）原文栏是一个**输入框**（`.source-input`），
+   * 其它题型是只读的 `.source-text`。只读前者会让自定义题的作答按**空原文**去造，
+   * 方向随之判反（中文原文被当成英文原文），造出来的"译文"过不了提交门，
+   * 现象是"点了提交却一次请求都没发出去"（实测踩到）。
+   */
   const fallbackSource = (): string =>
-    (container.querySelector('.pane-source .source-text')?.textContent ?? '').trim()
+    (
+      container.querySelector('.pane-source .source-text')?.textContent ??
+      container.querySelector<HTMLTextAreaElement>('.pane-source .source-input')?.value ??
+      ''
+    ).trim()
 
   /**
    * 把"现在这一篇"的每一页原文读下来，并据此造出每一页的合格作答。
@@ -1087,6 +1105,13 @@ export async function renderApp(
       `[probe] 内置题=${builtIn ? builtIn.exercise.id : '(无，用屏幕原文当作答)'} 页数=${sectionsToFill.length} ` +
         `首页=${JSON.stringify(sectionsToFill[0]?.slice(0, 40))} 输入框=${!!container.querySelector('.answer-input')}`,
     )
+    if (custom) {
+      console.log(
+        `[probe] 自定义：checkCustom=${options.checkCustom?.length ?? 0} 输入框=${custom.hasSourceInput} 预填=${custom.prefill.length} 键入后原文栏=${JSON.stringify(
+          custom.afterType.slice(0, 40),
+        )} 存档=${custom.storedSource.length} 导航=${!!container.querySelector('.section-nav')}`,
+      )
+    }
   }
 
   /*

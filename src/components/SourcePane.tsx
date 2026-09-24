@@ -27,11 +27,15 @@
  */
 
 import type { JSX } from 'react'
-import { KIND_LABEL, type Exercise, type MarkColor, type Mode } from '../domain/types'
+import { DIRECTION_LABEL, KIND_LABEL, type Direction, type Exercise, type MarkColor, type Mode } from '../domain/types'
 import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 import type { Section } from '../domain/sections'
 import type { Term } from '../domain/terms'
-import { DomainSelect, DirectionSelect, type ArticleSelection } from './DomainSelect'
+import { questionSideOf } from '../domain/term-exercise'
+import type { TermScope } from '../domain/term-scopes'
+import { DomainSelect, DirectionSelect, DirectionSwitch, type ArticleSelection } from './DomainSelect'
+import { TermScopeSelect } from './TermScopeSelect'
+import { termRowsOf } from './TermRows'
 
 /**
  * 原文正文。带一处可选的高亮：**选中某处批改时，它在原文里对应的那一小段也标成同色**
@@ -82,7 +86,6 @@ export function SourcePane({
   currentPairs,
   range,
   sourceMark,
-  onRepaste,
   onRotate,
   rotateTitle,
   onOpenGenerator,
@@ -90,6 +93,8 @@ export function SourcePane({
   onPickArticle,
   onNextSentence,
   terms = [],
+  termRange = null,
+  editableSource = null,
 }: {
   exercise: Exercise
   mode: Mode
@@ -125,7 +130,6 @@ export function SourcePane({
    * 坐标属于这一页的原文，与译文上的批注互不相干。
    */
   sourceMark?: { start: number; end: number; color: MarkColor } | null
-  onRepaste: () => void
   onRotate: () => void
   /** 「换一换」的悬停说明；文章栏换的是"下一篇"，说法与换原文不同 */
   rotateTitle?: string
@@ -136,12 +140,32 @@ export function SourcePane({
   /** 有这一项就显示「换一句」（句子栏用），与「选择文章」同一个位置 */
   onNextSentence?: () => void
   /**
-   * 术语题的条目（一组五条）。
+   * 术语题的条目（**这一页**那几条，末页可能不足五条）。
    *
    * 有它就把原文栏画成"五等份、每份一条"（用户要求的术语题版式），
    * 而不是一块整段文本——术语题本来就没有"一整段原文"。
    */
   terms?: readonly Term[]
+  /**
+   * 术语栏的两个控件（范围 + 方向），放在**紧挨「原文」右边**——与文章栏的
+   * 「领域 × 方向」同一个位置（用户第 13 条："模仿文章模式"）。
+   *
+   * ⚠️ 它和上面的 `range` 是两套不同的东西：`range` 管的是**话题领域**（社会/经济/…），
+   * 这一套管的是**术语范围**（国内/国际机关名称）。一张表只画一套。
+   */
+  termRange?: {
+    scope: TermScope
+    direction: Direction
+    onPickScope: (scope: TermScope) => void
+    onPickDirection: (direction: Direction) => void
+  } | null
+  /**
+   * 自己贴的那道题：**原文本身就是一个输入框**（第 13 轮用户要求：
+   * "一进去不弹出窗口要求输入，而是将原文也变成输入栏，用户自行粘贴原文"）。
+   *
+   * 传 null 就是只读的原文（其它题型一律如此）。
+   */
+  editableSource?: { value: string; onChange: (text: string) => void } | null
 }): JSX.Element {
   /**
    * 这一页的参考译文：把逐段配好的译文拼成一块（与 sections.ts 的 referenceOfPage 同一口径，
@@ -164,6 +188,17 @@ export function SourcePane({
           */}
           {range && <DomainSelect selection={range.selection} onChange={range.onChange} />}
           {range?.withDirection && <DirectionSelect selection={range.selection} onChange={range.onChange} />}
+          {/*
+            术语栏那两个控件：**范围**（弹窗两屏，见 TermScopeSelect）+ **方向**（中译英／英译中）。
+            位置与文章栏的「领域 × 方向」完全一致（紧挨「原文」）。术语的两个方向永远可点——
+            每条术语两侧都有（中文名 + 官方英文名），不像文章栏那样要按"这一格有没有材料"禁用。
+          */}
+          {termRange && (
+            <>
+              <TermScopeSelect scope={termRange.scope} onPick={termRange.onPickScope} />
+              <DirectionSwitch direction={termRange.direction} onChange={termRange.onPickDirection} />
+            </>
+          )}
           {/*
             「选择文章」与「换一句」跟在范围控件后面（它们以前排在最前，那是"头一组按钮"
             的说法定下的顺序；现在头一组的位置让给了领域与方向）。
@@ -189,39 +224,46 @@ export function SourcePane({
             </button>
           )}
           {isCustom ? (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={onRepaste}
-              title="换一篇自己贴的原文；贴新的会覆盖上一篇（练习记录仍留着）"
-            >
-              重新贴一篇
-            </button>
+            /*
+             * 第 13 轮起**没有「重新贴一篇」了**：原文栏本身就是一个输入框（见下面的
+             * `editableSource`），想换一篇直接改上面的字就行，再留一颗按钮等于同一件事两个入口。
+             * 提示词里那句"贴新的会覆盖上一篇（练习记录仍留着）"因此也一并去掉。
+             */
+            null
           ) : (
-            <>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={onRotate}
-                disabled={sourceOptionsCount < 2}
-                title={
-                  rotateTitle ??
-                  (sourceOptionsCount < 2
-                    ? '这道题暂时只有一篇原文；点右边的「AI 出题」可以现出一篇'
-                    : '换一篇同话题、同文体的原文继续练')
-                }
-              >
-                换一换
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={onOpenGenerator}
-                title="按领域让 AI 现出一篇同规格的题；生成后会留存，可用「换一换」翻回来"
-              >
-                AI 出题
-              </button>
-            </>
+            /*
+             * ⚠️ **术语栏两颗按钮都不画**（第 13 轮用户拍板：「换一换」与「AI 出题」一起撤掉）。
+             *
+             * 早先这里只把「AI 出题」挡住了，「换一换」照旧画出来、只是禁用——
+             * 术语题只有一个来源（这一个范围），因此它永远是灰的：一颗永远点不动、
+             * 又解释不出所以然的按钮，比不画更让人困惑（`verify-term-mode.mjs` 抓到过这一条）。
+             */
+            mode !== 'term' && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={onRotate}
+                  disabled={sourceOptionsCount < 2}
+                  title={
+                    rotateTitle ??
+                    (sourceOptionsCount < 2
+                      ? '这道题暂时只有一篇原文；点右边的「AI 出题」可以现出一篇'
+                      : '换一篇同话题、同文体的原文继续练')
+                  }
+                >
+                  换一换
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={onOpenGenerator}
+                  title="按领域让 AI 现出一篇同规格的题；生成后会留存，可用「换一换」翻回来"
+                >
+                  AI 出题
+                </button>
+              </>
+            )
           )}
           {/*
             第 9 条与第 7 条一起砍掉了三枚芯片里的两枚：
@@ -231,12 +273,16 @@ export function SourcePane({
             自己贴的题留「自动判定」：它说明的是"程序把你的原文判成了哪种题型"，
             与题目本身有关，不是进度。
           */}
-          {isCustom && (
+          {/*
+            还没写原文时**不说**方向与题型：那一刻程序判出来的只是"空串"的默认值
+            （英译中 + 句子题），照实显示反而像界面在胡说。
+          */}
+          {isCustom && (editableSource ? editableSource.value.trim().length > 0 : true) && (
             <span
               className="chip"
-              title="题型是按原文自己判的：多个自然段按文章题、两句以上按段落题、很短又没标点按术语题，其余按句子题"
+              title="方向与题型都是按你写的原文现判的：有汉字就是中译英；多个自然段按文章题、两句以上按段落题、很短又没标点按术语题，其余按句子题"
             >
-              自动判定 · {KIND_LABEL[exercise.mode]}
+              自动判定 · {DIRECTION_LABEL[exercise.direction]} · {KIND_LABEL[exercise.mode]}
             </span>
           )}
         </div>
@@ -250,22 +296,46 @@ export function SourcePane({
           而是列成五等份，每份一条；右边的作答栏也用同一套等分与分割线，
           两栏的横线因此**对得上**，一眼能看出哪个输入框对应哪条术语。
         */}
-        {mode === 'term' ? (
+        {/*
+          ⚠️ 判据是 `mode === 'term'` **且真的有术语条目**，不能只看 `mode`。
+          自己贴的那道题在**还没写原文**时，程序按文字判出来的题型正好是"术语题"
+          （`modeOf('')`：很短、没标点），于是原文栏会被画成"五等份的术语行"——
+          一个空框阵列，而用户此刻要的是一个能写字的输入框（实测踩到）。
+          加一句 `terms.length > 0` 就分得清：真术语题的每一页一定有条目，
+          而自己贴的题根本不传 `terms`（见 App 里那行 `isTermExercise ? {terms} : null`）。
+        */}
+        {mode === 'term' && terms.length > 0 ? (
+          /*
+           * 五行**恒定**：真实的术语在前，末页缺的几行留空（用户拍板："末页照旧五等分，
+           * 缺的那两行留空、不可填也不计分"）。行数由 `termRowsOf` 统一给，
+           * 与右边作答栏数的是同一个数——两栏的横线才对得上。
+           *
+           * 条目显示的是**题干那一侧**：中译英给中文名，英译中给官方英文名
+           * （术语栏两个方向都能练，见 term-exercise.ts 的 `questionSideOf`）。
+           */
           <ol className="term-source-list">
-            {terms.map((term, index) => (
-              <li key={`${term.zh}-${index}`} className="term-source-row">
+            {termRowsOf(terms).map((term, index) => (
+              <li key={term ? `${term.zh}-${index}` : `blank-${index}`} className="term-source-row">
                 <span className="term-source-index">{index + 1}</span>
                 <span className="term-source-text">
-                  {term.zh}
-                  {!term.verified && (
-                    <span className="term-unverified" title="这一条的译法尚未人工核对，请以官方文件为准">
-                      译法待核对
-                    </span>
-                  )}
+                  {term === null ? '' : questionSideOf(term, exercise.direction)}
                 </span>
               </li>
             ))}
           </ol>
+        ) : editableSource ? (
+          /*
+           * 自己贴的题：**原文就是一个输入框**（第 13 轮用户要求：不再弹窗问，
+           * 进来就能往里写）。没有 placeholder 以外的东西——方向与题型上面那枚芯片会现报。
+           */
+          <textarea
+            className="source-input"
+            value={editableSource.value}
+            onChange={(event) => editableSource.onChange(event.target.value)}
+            placeholder="把要翻译的原文整段贴在这里（中英都行；有空行就会按文章题分段处理）"
+            spellCheck={false}
+            aria-label="原文（自己输入的题目）"
+          />
         ) : (
           <SourceText
             text={multiSection ? (currentSection?.text ?? currentSource) : currentSource}

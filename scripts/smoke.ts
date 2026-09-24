@@ -725,9 +725,9 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     const { answeredTermCount, correctionFromVerdicts, judgeTerms, termAnswerText, termMarkId } = await import(
       '../src/domain/term-exercise'
     )
-    const { TERMS_BY_DOMAIN } = await import('../src/domain/terms')
+    const { termsOfScope } = await import('../src/domain/terms')
     const { sentencePair } = await import('../src/domain/favorites')
-    const terms = TERMS_BY_DOMAIN.society.slice(0, 5)
+    const terms = termsOfScope('cn-org').slice(0, 5)
     check(terms.length === 5, `术语库能取到一组 5 条（实际 ${terms.length}）`)
     const first = terms[0]
     const fourth = terms[3]
@@ -735,7 +735,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     // 取不到就没什么可验的：直接抛出去，让上面那个 catch 报出来（不静悄悄地跳过）
     if (!first || !fourth || !fifth) throw new Error(`术语库里只取到 ${terms.length} 条，验不了这一组`)
     const answers = [first.en, 'definitely wrong here', '', fourth.en, `${fifth.en} xyz`]
-    const verdicts = judgeTerms(terms, answers)
+    const verdicts = judgeTerms(terms, answers, 'zh-to-en')
     check(
       verdicts.map((verdict) => verdict.correct).join(',') === 'true,false,false,true,false',
       `判分口径：照标准写的对、胡写与漏写的错（实际 ${verdicts.map((v) => (v.correct ? '✓' : '✗')).join('')}）`,
@@ -812,6 +812,155 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     )
   } catch (error) {
     check(false, '术语判分的映射可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 第 13 轮：术语库整批换成两份机关名称材料，判分口径放宽了四处，题号换代，
+   * 一个范围按每页五条分页。这一组盯的就是那几件事——它们全是**口径**，
+   * 一旦漂掉，用户看到的是"我答对了却被判错"或者"五条译文挤进一个框"。
+   */
+  console.log('\n[术语库换代] 两个范围、每页五条、官方别名与英美拼写都算对')
+  try {
+    const {
+      TERMS_PER_PAGE,
+      acceptedAnswers,
+      isTermCorrect,
+      normalizeAnswer,
+      standardAnswer,
+      termPageCount,
+      termsOfPage,
+      termsOfScope,
+      primaryEnglish,
+    } = await import('../src/domain/terms')
+    const {
+      isLegacyTermExerciseId,
+      parseTermExerciseId,
+      splitTermAnswers,
+      termAnswerText,
+      termExerciseId,
+      termSourceText,
+    } = await import('../src/domain/term-exercise')
+    const { TERM_SCOPES } = await import('../src/domain/term-scopes')
+    const { pageCountOf, pageSourceOf } = await import('../src/domain/exercise-source')
+
+    check(TERM_SCOPES.length === 2, `术语范围就两张表（实际 ${TERM_SCOPES.length}）`)
+    check(
+      TERM_SCOPES.map((scope) => scope.label).join(',') === '国内机关名称,国际机关名称',
+      `两张表的名字与顺序（实际 ${TERM_SCOPES.map((scope) => scope.label).join(',')}）`,
+    )
+
+    const cn = termsOfScope('cn-org')
+    const intl = termsOfScope('intl-org')
+    check(cn.length === 83, `国内机关名称 83 条（实际 ${cn.length}）`)
+    check(intl.length === 60, `国际机关名称 60 条（实际 ${intl.length}）`)
+    check(termPageCount('cn-org') === 17, `国内 17 页（实际 ${termPageCount('cn-org')}）`)
+    check(termPageCount('intl-org') === 12, `国际 12 页（实际 ${termPageCount('intl-org')}）`)
+    check(
+      termsOfPage('cn-org', 16).length === 3 && termsOfPage('intl-org', 11).length === 5,
+      `末页真实的条数：国内剩 3 条、国际正好 5 条（实际 ${termsOfPage('cn-org', 16).length} / ${termsOfPage('intl-org', 11).length}）`,
+    )
+    check(termsOfPage('intl-org', 12).length === 0, '越界的页取不到术语（不补齐、不报错）')
+
+    // 判分口径放宽的四件事：官方缩写、英美拼写、重音、开头的 The
+    const npc = cn.find((term) => term.zh === '全国人民代表大会')
+    if (!npc) throw new Error('国内那一份里找不到「全国人民代表大会」')
+    check(npc.en.includes('(NPC)'), `括号已统一成半角（实际 ${npc.en}）`)
+    check(isTermCorrect(npc, 'NPC', 'zh-to-en'), '只写官方缩写算对')
+    check(
+      isTermCorrect(npc, 'National People\u2019s Congress', 'zh-to-en'),
+      '写全称（不带括号）也算对',
+    )
+    check(isTermCorrect(npc, npc.en, 'zh-to-en'), '连括号一起照抄也算对')
+    check(!isTermCorrect(npc, 'National Congress', 'zh-to-en'), '少一个词仍然算错（不是无脑放宽）')
+
+    const oecd = intl.find((term) => term.zh === '经济合作与发展组织')
+    if (!oecd) throw new Error('国际那一份里找不到「经济合作与发展组织」')
+    check(
+      isTermCorrect(oecd, 'Organization for Economic Cooperation and Development', 'zh-to-en'),
+      '英美拼写与连字符都不计较',
+    )
+    /*
+     * `Programme / Program` 这一对单独盯一条：写变体的判据一度是 `includes`，
+     * 而 `Program` 是 `Programme` 的**子串**，于是两个方向都不成立、这一对**永远不触发**——
+     * 写美式的人被判错，而代码与文档里都写着"英美拼写算对"（`check-terms.mjs` 也是这么发现的）。
+     * 修法是把判据换成按字母边界判整词（见 build-terms.mjs 的 `hasWord`）。
+     */
+    const wfp = intl.find((term) => term.zh === '世界粮食计划署')
+    if (!wfp) throw new Error('国际那一份里找不到「世界粮食计划署」')
+    check(
+      isTermCorrect(wfp, 'World Food Program (WFP)', 'zh-to-en') &&
+        isTermCorrect(wfp, 'World Food Program', 'zh-to-en'),
+      'Programme 与 Program 互相算对（子串陷阱：判据写成 includes 时这一对永不生效）',
+    )
+    const fifa = intl.find((term) => term.zh === '国际足球联合会')
+    if (!fifa) throw new Error('国际那一份里找不到「国际足球联合会」')
+    check(
+      isTermCorrect(fifa, 'Federation Internationale de Football Association', 'zh-to-en'),
+      '重音符号不计较（Fédération 打不出来也算对）',
+    )
+    const spc = cn.find((term) => term.zh === '中华人民共和国最高人民法院')
+    if (!spc) throw new Error('国内那一份里找不到「最高人民法院」')
+    check(
+      isTermCorrect(spc, 'Supreme People\u2019s Court of the People\u2019s Republic of China', 'zh-to-en'),
+      '开头的 The 写不写都算对',
+    )
+    check(
+      normalizeAnswer('  THE  United Nations (UN) ') === 'united nations(un)',
+      `归一化：大小写 / 空白 / 开头的 The / 括号两边的空格一起归（实际 ${normalizeAnswer('  THE  United Nations (UN) ')})`,
+    )
+
+    // 一英多中：同一条官方英文对应两个中文，写哪个都算对，标准答案两个都列
+    const municipal = cn.find((term) => term.zh === '直辖市人民政府')
+    if (!municipal) throw new Error('国内那一份里找不到「直辖市人民政府」')
+    check(
+      municipal.zhAlt.includes('设区的市人民政府'),
+      `一英多中登记上了（实际 ${JSON.stringify(municipal.zhAlt)}）`,
+    )
+    check(isTermCorrect(municipal, '设区的市人民政府', 'en-to-zh'), '英译中写另一个中文也算对')
+    check(
+      standardAnswer(municipal, 'en-to-zh') === '直辖市人民政府／设区的市人民政府',
+      `英译中的标准答案把两个中文都列出来（实际 ${standardAnswer(municipal, 'en-to-zh')}）`,
+    )
+    check(
+      acceptedAnswers(municipal, 'zh-to-en').length >= 1 &&
+        acceptedAnswers(municipal, 'zh-to-en')[0] === "Municipal People's Government",
+      '中译英的标准答案仍是那一条官方英文',
+    )
+    check(primaryEnglish(npc) === "National People's Congress", `主译法去掉了尾部括号（实际 ${primaryEnglish(npc)}）`)
+
+    // 题号换代：旧代次认得出、新代次解析得出，且新代次不会被"旧代次"判据命中
+    const id = termExerciseId('cn-org', 'en-to-zh')
+    check(id === 'term-v3-cn-org-en-to-zh', `题号形如 term-v3-<范围>-<方向>（实际 ${id}）`)
+    check(
+      parseTermExerciseId(id)?.scope === 'cn-org' && parseTermExerciseId(id)?.direction === 'en-to-zh',
+      '题号能解析回范围与方向',
+    )
+    check(!isLegacyTermExerciseId(id), '新代次题号不会被"该清理的旧题号"判据命中（这就是"以后永不再删"的保证）')
+    check(isLegacyTermExerciseId('term-v2-society-1'), '旧代次题号认得出（term-v2-…）')
+    check(parseTermExerciseId('term-v2-society-1') === null, '旧代次题号解析不出内容')
+    check(parseTermExerciseId('term-v3-society-zh-to-en') === null, '不存在的范围解析失败')
+
+    // 分页：题干在源文里就是"每页五行、页间空一行"，页数与每页条数与术语表对得上
+    check(pageCountOf(id) === 17, `整道题 17 页（实际 ${pageCountOf(id)}）`)
+    const page16 = pageSourceOf(id, 16)
+    check(page16.split('\n').length === 3, `末页的题干就是 3 行（实际 ${page16.split('\n').length}）`)
+    const source = termSourceText('cn-org', 'zh-to-en')
+    check(source.split('\n\n').length === 17, `题干按页切成 17 段（实际 ${source.split('\n\n').length}）`)
+    check(
+      source.split('\n\n')[1]?.split('\n').length === TERMS_PER_PAGE,
+      `中间那一页正好 5 行（实际 ${source.split('\n\n')[1]?.split('\n').length}）`,
+    )
+
+    // 五条答案"拆得回去"——这正是"五条全塞进第一个框"那个 bug 的修法
+    const rows = ['A', 'B', 'C', '', '']
+    check(splitTermAnswers(termAnswerText(rows), 5).join('|') === 'A|B|C||', '整段文字按行拆回五个框')
+    check(
+      splitTermAnswers('a\nb\nc\nd\ne\n多的行', 5).join('|') === 'a|b|c|d|e 多的行',
+      '行数多出来时并进最后一行（不悄悄丢掉用户写过的字）',
+    )
+    check(splitTermAnswers('a', 3).join('|') === 'a||', '行数不够时补空格子')
+  } catch (error) {
+    check(false, '术语库换代后的数据与口径可以验证', error instanceof Error ? error.message : String(error))
   }
 
   /*
@@ -2045,17 +2194,18 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       )
       check(!custom.hasReference, '自己贴的题没有参考译文那一栏（批改并不需要它）')
       check(!custom.hasAiButton && !custom.hasRotateButton, '自己贴的题不给「AI 出题」「换一换」（贴哪篇就练哪篇）')
-      check(custom.hasRepasteButton, '自己贴的题给的是「重新贴一篇」')
-      check(custom.prefill.includes('She held out her hand'), '贴题弹窗里预填着当前这一篇，方便改一改再练')
+      check(custom.hasSourceInput, '原文栏本身就是一个输入框（第 13 轮：不再弹窗问）')
+      check(!custom.hasPasteModal, '进自定义栏**不弹**任何要求输入的窗口')
+      check(custom.prefill.includes('She held out her hand'), '输入框里预填着上次写的那一篇，直接改就行')
       check(
-        custom.afterPaste.includes('碳达峰与碳中和'),
-        '贴一篇新的之后，「原文」栏换成新贴的那一篇',
-        custom.afterPaste.slice(0, 60),
+        custom.afterType.includes('碳达峰与碳中和'),
+        '往输入框里写完新的一篇，「原文」栏就是新那一篇',
+        custom.afterType.slice(0, 60),
       )
       check(
-        custom.afterPaste.includes('自动判定'),
-        '左上角如实标出"这是按哪种题型批改的"（自己贴的题没有官方建议用时）',
-        custom.afterPaste.slice(0, 80),
+        custom.afterType.includes('自动判定'),
+        '左上角如实标出方向与题型（自己贴的题没有官方建议用时）',
+        custom.afterType.slice(0, 80),
       )
       /*
        * 第 9 条把顶栏那三枚小标签（方向 / 文体 / 话题）删掉了，因此这条断言反过来量：

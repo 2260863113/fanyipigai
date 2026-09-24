@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import type { Correction, Direction, Mode, PolishLevel } from '../domain/types'
+import type { Correction, Direction, JudgeSource, Mode, PolishLevel } from '../domain/types'
 import { DIRECTION_LABEL, KIND_LABEL } from '../domain/types'
 import { pageReferenceOf, pageSourceOf } from '../domain/exercise-source'
 import type { RefineResult } from '../domain/refine'
@@ -36,13 +36,13 @@ export interface RecordView {
   direction: Direction
   topic: string
   attempt: number
-  /** 这一页在这一篇原文里的页号（从 0 开始）。术语题没有分页，恒为 0 */
+  /** 这一页在这一篇原文里的页号（从 0 开始）。术语题也是逐页的（一页五条） */
   sectionIndex: number
   level: PolishLevel
   answer: string
   correction: Correction
   validated: ValidatedCorrection
-  source: 'live' | 'fixture'
+  source: JudgeSource
   /** AI 原样返回的完整文本（与练习页共用同一个弹窗） */
   raw: string
   createdAt: Date
@@ -201,6 +201,7 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
                         {record.level === 'polish' ? '精修' : '大改'} · 错误{' '}
                         {record.validated.errors.length} 处
                         {record.source === 'fixture' && ' · 示例'}
+                        {record.source === 'local' && ' · 本地判分'}
                       </span>
                       <span className="record-time">
                         {record.createdAt.toLocaleString('zh-CN', {

@@ -308,6 +308,17 @@ export interface Score {
 /** 题目的四种形态。顶部导航栏就是按这个分类切换的。 */
 export type Mode = 'article' | 'paragraph' | 'sentence' | 'term'
 
+/**
+ * 一次批改的**判分来源**。三档，界面与记录页都照它说话：
+ *   - `live`：AI 现场批改——唯一会花钱、会等的那一种；
+ *   - `fixture`：内置示例的批改结果（离线演示用，**不是真的批改**）；
+ *   - `local`：程序本地判分——术语题按官方译名对照，不经模型、不用等（见 term-exercise.ts）。
+ *
+ * ⚠️ 术语判分早先借用的是 `fixture`，于是顶栏那枚「内置示例批改」警告
+ * 在每次术语批改之后都会冒出来（用户要求删掉那枚警告）。第 13 轮起它有自己的来源。
+ */
+export type JudgeSource = 'live' | 'fixture' | 'local'
+
 /** 一道题目。 */
 export interface Exercise {
   id: string

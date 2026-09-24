@@ -40,7 +40,7 @@
 
 import type { GeneratedExercise } from '../domain/generate'
 import type { RefineResult } from '../domain/refine'
-import type { Correction, PolishLevel } from '../domain/types'
+import type { Correction, JudgeSource, PolishLevel } from '../domain/types'
 import type { ValidatedCorrection } from '../domain/validate'
 
 /** 一次批改的完整结果（含 AI 原样返回的文本，供「查看完整返回内容」用）。 */
@@ -48,7 +48,7 @@ export interface JudgeDraft {
   correction: Correction
   validated: ValidatedCorrection
   level: PolishLevel
-  source: 'live' | 'fixture'
+  source: JudgeSource
   sectionCount: number
   /** AI 原样返回的完整文本 */
   raw: string
@@ -86,7 +86,13 @@ export interface PageResult {
 
 /** 一道题各自的会话状态。 */
 export interface ExerciseSession {
-  /** 逐页作答：页号 → 该页文字（术语题的五行也走这里，第几行就是第几"页"） */
+  /**
+   * 逐页作答：页号 → 该页文字。
+   *
+   * ⚠️ 术语题**也走这里**，而且只有这一个坑：它界面上是五个输入框，但那五条会被
+   * `termAnswerText` 拼成"一页一段文字"存在这一页上（回到编辑态时再按行拆回去）。
+   * 早先它按"行号"直接占用这里的下标，与页号撞车——五条译文于是一起挤进第一个框。
+   */
   drafts: Record<number, string>
   /** 当前在第几页 */
   sectionIndex: number
@@ -133,15 +139,8 @@ export type SessionAction =
   | { type: 'sourceRotated'; exerciseId: string; variantIndex: number }
   /** 用一篇刚生成出来的题：存进池子、切过去，并清掉旧的作答与结果 */
   | { type: 'generatedApplied'; exerciseId: string; generated: GeneratedExercise; variantIndex: number }
-  /** 作答被修改：只写进草稿，**不动**已提交的结果（见 answerAtChanged 的说明） */
+  /** 作答被修改：只写进草稿，**不动**已提交的结果（见下面 answerChanged 的说明） */
   | { type: 'answerChanged'; exerciseId: string; text: string }
-  /**
-   * 写到指定的"行"（术语题的五条各写各的）。
-   *
-   * 与 answerChanged 的差别只有一个：写入哪个坑由调用方指定，而不是当前页号。
-   * 术语题一次显示五行、五行同时可编辑，没有"当前在第几页"这回事。
-   */
-  | { type: 'answerAtChanged'; exerciseId: string; row: number; text: string }
   | { type: 'sectionChanged'; exerciseId: string; sectionIndex: number }
   /** 这一页批改完成：结果按页存下来，界面随之显示这一页的结果 */
   | {
@@ -319,12 +318,6 @@ export function sessionReducer(state: ExerciseSessions, action: SessionAction): 
         pages,
       })
     }
-
-    case 'answerAtChanged':
-      return withSession(state, action.exerciseId, {
-        ...session,
-        drafts: { ...session.drafts, [action.row]: action.text },
-      })
 
     case 'sectionChanged': {
       /*

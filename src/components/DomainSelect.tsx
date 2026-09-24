@@ -108,7 +108,52 @@ export function DomainSelect({
 }
 
 /**
- * 方向两段开关（中译英 / 英译中）。
+ * 方向两段开关（中译英 / 英译中）——**通用控件**，文章栏与术语栏共用。
+ *
+ * 抽出来的理由：术语栏也要同一对按钮（用户第 13 条要求"模仿文章模式，
+ * 允许中译英和英译中的分段按钮"），而"一件事两份实现"正是本项目反复踩的坑
+ * （两处的文案、禁用条件、DOM 结构只要有一处不同，用户就会以为是两回事）。
+ *
+ * 两处唯一的差别是**能不能点**：
+ *   - 文章栏：某个领域在某个方向下没有材料时那一侧**禁用**（点进去看到空白更让人困惑），
+ *     由 `disabledOf` 给出原因文案；
+ *   - 术语栏：每条术语两侧都有（中文名 + 官方英文名），因此两个方向**永远可点**，
+ *     不传 `disabledOf` 即可。
+ */
+export function DirectionSwitch({
+  direction,
+  onChange,
+  disabledOf,
+}: {
+  direction: Direction
+  onChange: (next: Direction) => void
+  /** 这个方向可不可点；返回一个字符串就是禁用的原因（悬停说明），返回 null 表示可点 */
+  disabledOf?: (candidate: Direction) => string | null
+}): JSX.Element {
+  const directions: Direction[] = ['zh-to-en', 'en-to-zh']
+  return (
+    <div className="dir-switch" role="group" aria-label="翻译方向">
+      {directions.map((item) => {
+        const reason = disabledOf ? disabledOf(item) : null
+        return (
+          <button
+            key={item}
+            type="button"
+            className={item === direction ? 'dir-btn dir-btn-active' : 'dir-btn'}
+            onClick={() => onChange(item)}
+            disabled={reason !== null}
+            title={reason ?? undefined}
+          >
+            {DIRECTION_LABEL[item]}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * 文章栏用的那一份：按「领域 × 方向」这一格有没有材料来决定禁不禁用。
  *
  * 某一段**可禁用**：某个领域在某个方向下还没有文章时，那一侧点不动，
  * 点进去看到空白比"按钮是灰的"更让人困惑。
@@ -120,24 +165,11 @@ export function DirectionSelect({
   selection: ArticleSelection
   onChange: (next: ArticleSelection) => void
 }): JSX.Element {
-  const directions: Direction[] = ['zh-to-en', 'en-to-zh']
   return (
-    <div className="dir-switch" role="group" aria-label="翻译方向">
-      {directions.map((direction) => {
-        const available = hasArticles(selection.domain, direction)
-        return (
-          <button
-            key={direction}
-            type="button"
-            className={direction === selection.direction ? 'dir-btn dir-btn-active' : 'dir-btn'}
-            onClick={() => onChange({ ...selection, direction })}
-            disabled={!available}
-            title={available ? undefined : '这个领域暂时没有该方向的文章'}
-          >
-            {DIRECTION_LABEL[direction]}
-          </button>
-        )
-      })}
-    </div>
+    <DirectionSwitch
+      direction={selection.direction}
+      onChange={(direction) => onChange({ ...selection, direction })}
+      disabledOf={(candidate) => (hasArticles(selection.domain, candidate) ? null : '这个领域暂时没有该方向的文章')}
+    />
   )
 }

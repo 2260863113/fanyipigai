@@ -59,6 +59,14 @@ export interface ShownCorrection {
    */
   direction: import('../domain/types').Direction
   /**
+   * 这一份批改的**判分来源**（`live` AI 现场批改 / `fixture` 内置示例 / `local` 程序本地判分）。
+   *
+   * 第 13 轮加它，是为了把「内置示例批改」那句提醒**从顶栏搬到结果栏**：
+   * 顶栏那一枚已按用户要求整枚删掉（术语判分当时借用了 `fixture`，于是每次术语批改都冒出来），
+   * 现在只有**真的是示例**时才在这里说一句。
+   */
+  source: import('../domain/types').JudgeSource
+  /**
    * 大改档专有：整篇逐句重写 + 逐句解释 + AI 给的总体分数。
    * **有它就走大改那条渲染路径**（只给对照、不画勾画、分数显示 AI 总评）。
    */
@@ -227,6 +235,20 @@ export function AnswerPane({
               onView={onViewAttempt}
               onDelete={onDeleteRecord}
             />
+          )}
+          {/*
+            内置示例批改的提醒**搬到结果栏里**了（第 13 轮，用户拍板）。
+
+            早先它在顶栏右上角是一枚常驻的警告芯片，而术语题的本地判分当时借用了
+            `fixture` 这个来源，于是**每次术语批改之后它都会冒出来**——用户的要求
+            （"去掉右上角内置示例批改标志"）说的就是这一枚。现在顶栏那一枚整个删掉了，
+            提醒只在这里出现，而且只在**真的拿内置示例当批改结果**时出现
+            （术语判分有了自己的来源 `local`，不再借用示例身份，见 types.ts 的 JudgeSource）。
+          */}
+          {shown?.source === 'fixture' && (
+            <span className="chip chip-warn" title="这是内置示例的批改结果，不是 AI 现场批改的">
+              示例批改
+            </span>
           )}
           {showAnswerControls && (
             <>

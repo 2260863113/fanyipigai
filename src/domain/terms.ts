@@ -1,153 +1,169 @@
 /**
- * 术语库：赛项考查的固定表述与关键术语，以及它们**唯一认可的标准译法**。
+ * 术语库：两个**术语范围**下的机关名称，以及每一条**一并算对的写法**。
+ *
+ * ## 数据从哪来
+ *
+ * 用户给的两份材料（仓库根目录的 `国内机构.docx` / `国际机构.docx`），
+ * 由 `scripts/build-terms.mjs` 现算成 `terms-data/*.ts`——**不要手写那两个文件**。
+ * 143 条：国内机关名称 83 条（17 页）、国际机关名称 60 条（12 页）。
+ * 在这个文件里只有类型、范围查询与判分口径；数据一律在生成文件里。
  *
  * ## 为什么答案写死在这里，而不是让 AI 判
  *
  * 这是本项目的一条既有原则（见 scoring.ts）：**分数由程序算，不由 AI 打**。
- * 术语题尤其如此——固定表述的译法是官方规定的，有唯一正确答案，
- * 让模型去"判断用户译得对不对"会带来两个问题：
- *   1. 同一份答案两次可能得到不同结果（模型有波动）；
- *   2. 用户无法自己核对分数是怎么来的。
- * 写死在这里之后，术语题的批改是**完全本地、可复现、可解释**的。
+ * 固定表述有官方译名，让模型去"判断用户译得对不对"会带来两个问题：
+ * 同一份答案两次可能不同、用户无法自己核对分数怎么来的。
+ * 因此术语题的批改是**完全本地、可复现、可解释**的。
  *
- * ## 判分口径（严格对照）
+ * ## 判分口径：从"严格对照"放宽到"官方别名算对"（第 13 轮，用户拍板）
  *
- * 由用户选定：**严格本地对照**。归一化只做这些，不做"同义替换也算对"：
- *   - 大小写、首尾空白归一；
- *   - 弯引号/直引号、全角/半角标点归一；
- *   - 连续空白折叠成一个空格；
- *   - 连字符统一（`-` / `–` / `—` 都按 `-` 比）。
- * 因此「whole-process people's democracy」与「whole-process democracy」**只认前者**——
- * 用户明确选了严格口径，宁可判得硬，也不要给出模棱两可的分数。
+ * 归一化仍旧只做"同一个答案的不同写法"层面的归一，**不做同义替换**；
+ * 但"同一个答案的不同写法"这次扩大了四处——因为这批材料的英文本身就带这些差异：
+ *   1. **官方缩写**：`National People's Congress (NPC)` 的 `NPC` 与全称**一样算对**
+ *      （材料里 65 条带缩写，不认缩写等于强迫用户连缩写一起背）；
+ *   2. **英美拼写**：`Organisation` / `Organization`、`Labour` / `Labor`、
+ *      `Programme` / `Program`、`Centre` / `Center`、`Co-operation` / `Cooperation`。
+ *      ⚠️ 这一条**照词给出**（见 `build-terms.mjs` 的 `SPELLING_PAIRS`），**不写通则**：
+ *      写成 `-our → -or` 那种通则会把 `four` 也"接受"成 `for`，假放宽比不放宽更坏；
+ *   3. **重音符号**：`Fédération Internationale de Football Association` 的重音不计较
+ *      （键盘上打不出来）；
+ *   4. **开头的 The**：`The Supreme People's Court of the People's Republic of China` 写不写 The 都算对。
  *
- * ⚠️ 每条的 `source` 记的是这条译法的依据。除标注 `unverified` 的之外，
- * 都取自官方通行译法（《习近平谈治国理政》各卷、《理解当代中国》、
- * 党的二十大报告英译本、中华思想文化术语传播工程等）。
- * **未核对的条目在界面上会标出来**，不假装它是权威答案。
+ * 另外**一英多中**（`直辖市人民政府` 与 `设区的市人民政府` 的官方英文都是
+ * `Municipal People's Government`）在英译中方向下**写哪个都算对**，
+ * 屏幕上的标准答案把两个都列出来（用「／」隔开）。
+ *
+ * ⚠️ 早先的口径是"严格到 `whole-process people's democracy` 与 `whole-process democracy`
+ * 只认前者"。那条**仍然成立**（那是同义替换，不放宽），放宽的只是上面这四处——见 ADR 0023。
  */
 
-import type { ArticleDomain } from './articles'
+import type { Direction } from './types'
+import { TERM_SCOPES, type TermScope } from './term-scopes'
+import { CN_ORG_TERMS } from './terms-data/cn-org'
+import { INTL_ORG_TERMS } from './terms-data/intl-org'
 
-/** 一条术语：原文 + 标准译法。 */
+/** 一条术语：中文名 + 官方英文名 + 两侧各自"一并算对"的其它写法。 */
 export interface Term {
-  /** 中文原文（术语题给定、用户要译的就是它） */
+  /** 中文名称（中译英方向下它是题目、英译中方向下它是答案之一） */
   zh: string
-  /** 标准译法；批改时严格对照它 */
+  /** 官方英文名称，**照材料原样**（括号已统一成半角）；中译英方向下它是标准译法 */
   en: string
   /**
-   * 译法的依据是否已经人工核对过。
-   * false 时界面上会标「译法待核对」——**不假装它是权威答案**。
+   * 英译方向一并算对的**其它英文写法**：官方缩写（`NPC`）与英美拼写变体。
+   * 空数组就是只有 `en` 一种写法算对。
    */
-  verified: boolean
+  enAlt: readonly string[]
+  /**
+   * 英译中方向一并算对的**其它中文名**（一英多中）。
+   * 例：`直辖市人民政府` 的 `zhAlt` 是 `['设区的市人民政府']`——两者的官方英文是同一条。
+   */
+  zhAlt: readonly string[]
 }
 
-/**
- * 现代术语，按领域分组。
- *
- * 分组口径与文章库的五个板块一致（社会、经济、文化、生态、科技），
- * 这样术语栏与句子栏能共用同一个领域下拉。
- * 一条术语只归一个领域（按它讲的是什么），避免同一条出现在多处。
- *
- * ⚠️ 领域表从八个收敛到五个时，**政治 10 条、教育 6 条、国际传播 10 条一并删掉了**
- * （用户的选择：宁可少一批词，也不要站里出现两套领域口径）。
- * 那 26 条在 git 历史里还能找回——全过程人民民主、一带一路倡议、人类命运共同体都在其中。
- * 要恢复的话，得先把对应领域加回 `ARTICLE_DOMAINS`。
- */
-export const TERMS_BY_DOMAIN: Record<ArticleDomain, readonly Term[]> = {
-  society: [
-    { zh: '多层次社会保障体系', en: 'the multi-tiered social security system', verified: true },
-    { zh: '健康中国战略', en: 'the Healthy China initiative', verified: true },
-    { zh: '精准扶贫', en: 'targeted poverty alleviation', verified: true },
-    { zh: '乡村振兴战略', en: 'the rural revitalization strategy', verified: true },
-    { zh: '以人民为中心的发展思想', en: 'the people-centered philosophy of development', verified: true },
-    { zh: '新时代中国社会主要矛盾', en: 'the principal contradiction facing Chinese society in the new era', verified: true },
-    { zh: '国之大者', en: 'the country\u2019s most fundamental interests', verified: true },
-    { zh: '"四个意识"', en: 'the four consciousnesses', verified: true },
-    { zh: '"四个自信"', en: 'the four-sphere confidence', verified: true },
-    { zh: '"两个一百年"奋斗目标', en: 'the two centenary goals', verified: true },
-  ],
-  economy: [
-    { zh: '高质量发展', en: 'high-quality development', verified: true },
-    { zh: '新发展阶段', en: 'a new stage of development', verified: true },
-    { zh: '新发展理念', en: 'the new development philosophy', verified: true },
-    { zh: '新发展格局', en: 'a new development dynamic', verified: true },
-    { zh: '供给侧结构性改革', en: 'supply-side structural reform', verified: true },
-    { zh: '国内国际双循环', en: 'domestic and international economic cycles', verified: true },
-    { zh: '社会主义基本经济制度', en: 'the basic socialist economic system', verified: true },
-    { zh: '共同富裕', en: 'common prosperity', verified: true },
-    { zh: '新型城镇化战略', en: 'the new urbanization strategy', verified: true },
-    { zh: '落实"六稳"、"六保"任务', en: 'ensure stability on six fronts and security in six areas', verified: true },
-  ],
-  culture: [
-    { zh: '社会主义核心价值观', en: 'the core socialist values', verified: true },
-    { zh: '中华优秀传统文化', en: 'fine traditional Chinese culture', verified: true },
-    { zh: '文化自信', en: 'cultural confidence', verified: true },
-    { zh: '伟大建党精神', en: 'the great founding spirit of the Party', verified: true },
-    { zh: '中国梦', en: 'the Chinese Dream', verified: true },
-    { zh: '人类文明新形态', en: 'a new model for human advancement', verified: true },
-    { zh: '国家文化软实力', en: 'national cultural soft power', verified: true },
-    { zh: '文化强国', en: 'a country with a strong socialist culture', verified: true },
-  ],
-  ecology: [
-    { zh: '绿水青山就是金山银山', en: 'lucid waters and lush mountains are invaluable assets', verified: true },
-    { zh: '生态文明制度体系', en: 'the system of institutions for ecological progress', verified: true },
-    { zh: '美丽中国建设', en: 'building a beautiful China', verified: true },
-    { zh: '碳达峰碳中和', en: 'peak carbon dioxide emissions and carbon neutrality', verified: true },
-    { zh: '共同但有区别的责任原则', en: 'the principle of common but differentiated responsibilities', verified: true },
-    { zh: '习近平生态文明思想', en: 'Xi Jinping Thought on Ecological Civilization', verified: true },
-    { zh: '人与自然和谐共生', en: 'harmonious coexistence of humanity and nature', verified: true },
-    { zh: '绿色发展', en: 'green development', verified: true },
-  ],
-  tech: [
-    { zh: '创新驱动发展战略', en: 'the innovation-driven development strategy', verified: true },
-    { zh: '创新型国家', en: 'an innovative country', verified: true },
-    { zh: '科教兴国战略', en: 'the strategy of invigorating the country through science and education', verified: true },
-    { zh: '人才强国战略', en: 'the strategy of building a talent-strong country', verified: true },
-    { zh: '新质生产力', en: 'new quality productive forces', verified: true },
-    { zh: '关键核心技术攻关', en: 'making breakthroughs in core technologies in key fields', verified: true },
-    { zh: '科技自立自强', en: 'self-reliance and self-strengthening in science and technology', verified: true },
-  ],
+/** 术语库按**范围**分组。范围表在 `term-scopes.ts`（与话题领域平行的另一张表）。 */
+export const TERMS_BY_SCOPE: Record<TermScope, readonly Term[]> = {
+  'cn-org': CN_ORG_TERMS,
+  'intl-org': INTL_ORG_TERMS,
 }
 
-/**
- * 古文名句。**不属于术语题**——它是整句翻译，归句子栏（由用户选定）。
- * 这些句子多出自典籍与领导人引用，译法以官方英译为准。
- */
-export const CLASSICAL_SENTENCES: readonly Term[] = [
-  { zh: '爱人利物之谓仁', en: 'Benevolence means caring for people and benefiting all things', verified: false },
-  { zh: '不困在于早虑，不穷在于早豫。', en: 'One avoids adversity by planning ahead and avoids exhaustion by preparing early', verified: false },
-  { zh: '不私，而天下自公。', en: 'When one is not self-serving, the whole world will be fair', verified: false },
-  { zh: '不畏浮云遮望眼', en: 'Fear not the floating clouds that obscure your vision', verified: false },
-  { zh: '不要人夸颜色好，只留清气满乾坤。', en: 'It does not need praise for its beauty, but leaves a pure fragrance filling the world', verified: false },
-  { zh: '草木植成，国之富也。', en: 'When vegetation thrives, the country prospers', verified: false },
-  { zh: '迟日江山丽，春风花草香。', en: 'In the slow spring days the landscape is lovely, and the spring breeze carries the fragrance of flowers and grass', verified: false },
-  { zh: '淡泊明志，宁静致远', en: 'Indifference to fame shows one\u2019s aspiration; tranquility enables one to reach far', verified: false },
-  { zh: '道法自然', en: 'The Dao follows nature', verified: false },
-]
+/** 术语题一页几条。用户要的是「五栏」，所以是 5。 */
+export const TERMS_PER_PAGE = 5
 
-/** 某个领域下的全部术语。 */
-export function termsOfDomain(domain: ArticleDomain): readonly Term[] {
-  return TERMS_BY_DOMAIN[domain]
+/** 某个范围下的全部术语（顺序即材料里的顺序）。 */
+export function termsOfScope(scope: TermScope): readonly Term[] {
+  return TERMS_BY_SCOPE[scope]
 }
 
-/** 全部现代术语（跨领域）。 */
+/** 全部术语（跨范围）。 */
 export function allTerms(): readonly Term[] {
-  return Object.values(TERMS_BY_DOMAIN).flat()
+  return TERM_SCOPES.flatMap((scope) => TERMS_BY_SCOPE[scope.id])
+}
+
+/** 某个范围一共几页（每页 5 条，末页可能不满）。 */
+export function termPageCount(scope: TermScope): number {
+  return Math.max(1, Math.ceil(TERMS_BY_SCOPE[scope].length / TERMS_PER_PAGE))
 }
 
 /**
- * 归一化，用于**严格对照**判分。
+ * 某个范围第 `page` 页的那几条（0 基）。
+ *
+ * ⚠️ **末页可能不满 5 条**（用户拍板："末页照旧五等分，缺的那两行留空、不可填也不计分"）。
+ * 因此这里**不补齐**——补齐会让同一个范围里出现重复的题目，也会把那一行算进判分。
+ * 界面负责把不足的行画成空框（见 `TermRows`）。
+ */
+export function termsOfPage(scope: TermScope, page: number): readonly Term[] {
+  const pool = TERMS_BY_SCOPE[scope]
+  const start = page * TERMS_PER_PAGE
+  if (start < 0 || start >= pool.length) return []
+  return pool.slice(start, start + TERMS_PER_PAGE)
+}
+
+/** 某一条术语属于第几页（记录、收藏要按页对回去）。 */
+export function pageOfTerm(scope: TermScope, term: Term): number {
+  const index = TERMS_BY_SCOPE[scope].indexOf(term)
+  return index < 0 ? 0 : Math.floor(index / TERMS_PER_PAGE)
+}
+
+/**
+ * 英文主译法：**去掉尾部括号**的那一版。
+ *
+ * `Central Committee of the Communist Party of China(CPC Central Committee)`
+ * 的主译法是 `Central Committee of the Communist Party of China`——
+ * 括号里是官方缩写，写不写那句话都算对（见文件头的判分口径）。
+ */
+export function primaryEnglish(term: Term): string {
+  return term.en.replace(/\s*\([^()]*\)\s*$/, '').trim()
+}
+
+/**
+ * 这一条在**这个方向**下全部算对的写法，**第 0 个即屏幕上显示的标准答案**。
+ *
+ * 中译英：照材料原样（`National People's Congress (NPC)`）最前，然后是去掉缩写的主译法、
+ * 缩写本身、英美拼写变体。显示时用第 0 个，判分时整串都比。
+ * 英译中：中文名最前，然后是一英多中的其它中文名（一条以上时界面上用「／」连起来）。
+ */
+export function acceptedAnswers(term: Term, direction: Direction): readonly string[] {
+  const raw =
+    direction === 'zh-to-en' ? [term.en, primaryEnglish(term), ...term.enAlt] : [term.zh, ...term.zhAlt]
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const answer of raw) {
+    const text = answer.trim()
+    if (text.length === 0) continue
+    const key = normalizeAnswer(text)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(text)
+  }
+  return out
+}
+
+/** 屏幕上显示的标准答案（中译英是官方英文原名；英译中是全部算对的中文名，用「／」隔开）。 */
+export function standardAnswer(term: Term, direction: Direction): string {
+  const accepted = acceptedAnswers(term, direction)
+  if (direction === 'zh-to-en') return accepted[0] ?? term.en
+  return accepted.join('／')
+}
+
+/**
+ * 归一化，用于**本地对照**判分。
  *
  * 只做"同一个答案的不同写法"层面的归一，绝不做同义替换：
- *   - 大小写、首尾空白；
- *   - 连续空白折叠；
- *   - 弯引号/直引号、全角标点 → 直引号/半角标点；
- *   - 各类连字符统一成 `-`。
- * 非 ASCII 全角字符（如全角逗号）也一并归一，因为中文输入法下很容易打出来。
+ *   - 大小写、首尾空白；连续空白折叠成一个空格；
+ *   - **重音符号**去掉（`Fédération` → `federation`）；
+ *   - 弯引号/直引号、全角标点 → 直引号/半角标点（中文输入法下很容易打出来）；
+ *   - 各类连字符统一成 `-`；
+ *   - 括号两边的空白一律去掉（`United Nations (UN)` 与 `United Nations(UN)` 同一条）；
+ *   - **开头的 `the`** 去掉（`The Supreme People's Court` 写不写 The 都算对）。
+ *
+ * 因此「whole-process people's democracy」与「whole-process democracy」**仍然只认前者**——
+ * 那是同义替换，不在放宽之列（用户拍板的口径，见 ADR 0023）。
  */
 export function normalizeAnswer(text: string): string {
   return text
     .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // 重音符号：é → e
     .toLowerCase()
     .replace(/[\u2018\u2019\u02bc]/g, "'") // ‘ ’ ʼ → '
     .replace(/[\u201c\u201d]/g, '"') // “ ” → "
@@ -155,10 +171,19 @@ export function normalizeAnswer(text: string): string {
     .replace(/[\uff01-\uff5e]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0)) // 全角 → 半角
     .replace(/\u3000/g, ' ') // 全角空格
     .replace(/\s+/g, ' ')
+    .replace(/\s*\(/g, '(') // `United Nations (UN)` 与 `United Nations(UN)` 同一条
+    .replace(/\s*\)/g, ')')
+    .replace(/^the\s+/, '') // 开头的 The 不计较
     .trim()
 }
 
-/** 这一条术语的作答是否正确（严格对照）。 */
-export function isTermCorrect(term: Term, answer: string): boolean {
-  return normalizeAnswer(answer) === normalizeAnswer(term.en)
+/**
+ * 这一条术语的作答是否正确（本地对照，接受官方别名与英美拼写）。
+ *
+ * 空作答一律算错：正常化之后空串有可能与某条"只有 The 的答案"撞车，这里显式挡一道。
+ */
+export function isTermCorrect(term: Term, answer: string, direction: Direction): boolean {
+  const normalized = normalizeAnswer(answer)
+  if (normalized.length === 0) return false
+  return acceptedAnswers(term, direction).some((accepted) => normalizeAnswer(accepted) === normalized)
 }

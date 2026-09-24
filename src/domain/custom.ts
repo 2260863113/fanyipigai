@@ -11,6 +11,21 @@
  *
  * 原文另按题号留一份，是为了让**练习记录**翻回旧题时还能显示当时考的是什么
  * （记录里只存批改，不存原文）；只留最近 50 份，免得越攒越多。
+ *
+ * ## 第 13 轮：不再有"贴一篇"的弹窗，原文就是输入框
+ *
+ * 用户要求："自定义模式，一进去不弹出窗口要求输入，而是将原文也变成输入栏，
+ * 用户自行粘贴原文，自己输入译文。"于是这里配套改了三条：
+ *   - `openCustom()`：进自定义栏时拿一篇**现成的**（没贴过就铸一个空白题号），
+ *     调用方不再需要弹窗问用户；
+ *   - `saveCustomSource()`：**边写边存**，题号不变（每敲一个字换一个题号的话，
+ *     作答、批改结果、页状态会全部对不上）；
+ *   - `loadCustom()` 允许原文是空的——"还没开始写"是一个正常状态，不该被当成"没贴过"。
+ *
+ * ⚠️ 一条要留意的后果，以及它的对策（写在 App 的 `updateCustomSource` 里）：
+ * 记录里**不存原文**，靠题号回查，因此同一题号下改原文会让**旧记录跟着改口**。
+ * 对策是"已经练过这一篇（有记录）之后再改原文，就当成一篇新题、铸新题号"，
+ * 于是旧记录仍指向当时那一篇。
  */
 
 import { splitSections } from './sections'
@@ -102,27 +117,47 @@ function readJson(key: string): unknown {
 /** 读出当前那一篇自定义题；没贴过或存的东西坏了都返回 null。 */
 export function loadCustom(): CustomExercise | null {
   const parsed = readJson(STORAGE_KEY) as Partial<CustomExercise> | null
-  if (!parsed || typeof parsed.source !== 'string' || parsed.source.trim().length === 0) return null
+  // ⚠️ 原文为空**不算**坏数据：第 13 轮起原文是一个输入框，"还没开始写"是正常状态
+  if (!parsed || typeof parsed.source !== 'string') return null
   const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt : new Date().toISOString()
   const id = typeof parsed.id === 'string' && parsed.id ? parsed.id : `custom-${Date.parse(createdAt) || Date.now()}`
   return { id, source: parsed.source, createdAt }
 }
 
-/** 存下一篇新的（覆盖上一篇），并把它记进"按题号留档"里。 */
-export function saveCustom(source: string): CustomExercise {
+/**
+ * 铸一个**空白**自定义题（题号只铸一次）。
+ *
+ * 用在两处：进自定义栏时还没贴过任何东西；以及"已经练过这一篇、又被改了原文"
+ * 那种当成新题的情形（见文件头最后那段）。
+ */
+export function newCustom(): CustomExercise {
   const now = new Date()
-  const entry: CustomExercise = {
-    id: `custom-${now.getTime()}`,
-    source: source.trim(),
-    createdAt: now.toISOString(),
-  }
+  return { id: `custom-${now.getTime()}`, source: '', createdAt: now.toISOString() }
+}
+
+/** 进自定义栏时用它拿一篇现成的：读过的那一篇，没贴过就铸一个空白题号。 */
+export function openCustom(): CustomExercise {
+  return loadCustom() ?? newCustom()
+}
+
+/**
+ * 边写边存：把原文写进"当前这一篇"（**题号不动**），并按题号留一份档。
+ *
+ * 为什么题号不能动：作答、批改结果、页状态、练习记录全都按题号索引，
+ * 每敲一个字换一个题号等于把用户正在写的东西丢掉。
+ * 留档只留非空的原文——空串存档没有意义，还会挤掉真正要留的那几篇。
+ */
+export function saveCustomSource(custom: CustomExercise, source: string): CustomExercise {
+  const entry: CustomExercise = { ...custom, source }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(entry))
-    const history = (readJson(SOURCES_KEY) as Record<string, string> | null) ?? {}
-    history[entry.id] = entry.source
-    const ids = Object.keys(history)
-    for (const old of ids.slice(0, Math.max(0, ids.length - KEEP_SOURCES))) delete history[old]
-    localStorage.setItem(SOURCES_KEY, JSON.stringify(history))
+    if (source.trim().length > 0) {
+      const history = (readJson(SOURCES_KEY) as Record<string, string> | null) ?? {}
+      history[entry.id] = source
+      const ids = Object.keys(history)
+      for (const old of ids.slice(0, Math.max(0, ids.length - KEEP_SOURCES))) delete history[old]
+      localStorage.setItem(SOURCES_KEY, JSON.stringify(history))
+    }
   } catch {
     // 存不下就算了：这一次照样能练，只是刷新之后得重贴
   }

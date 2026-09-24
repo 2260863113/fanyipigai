@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState, type JSX } from 'react'
 import { MOCK_CASES, fixtureCorrectionFor } from '../domain/mock'
 import { scoreCorrection } from '../domain/scoring'
-import type { GradeHistoryEntry } from './GradeHistoryPicker'
+import { GradeHistoryPicker, type GradeHistoryEntry } from './GradeHistoryPicker'
 import {
   GENRE_LABEL,
   type Exercise,
@@ -14,14 +14,14 @@ import { validateCorrection } from '../domain/validate'
 import { buildLayout, type AnnotatedLayout } from '../domain/layout'
 import { toAiShape } from '../domain/parse'
 import { requestGeneration, requestJudgment, requestRefine, type JudgeSectionInput } from '../domain/client'
-import { paginateArticle, type ArticlePage } from '../domain/sections'
+import { PAGE_RULE, paginateArticle, type ArticlePage } from '../domain/sections'
 import { variantsFor } from '../domain/variants'
 import { GENERATION_TOPICS, type GeneratedExercise } from '../domain/generate'
 import type { JudgeFailureKind } from '../domain/ai'
 import { useSplitDrag } from './split-drag'
 import { resolveTheme, useSettings } from './settings'
 import { RecordsView, type RecordView } from './RecordsView'
-import { exerciseOf, loadCustom, saveCustom, type CustomExercise } from '../domain/custom'
+import { exerciseOf, loadCustom, newCustom, openCustom, saveCustomSource, type CustomExercise } from '../domain/custom'
 import {
   clearFavorites,
   loadFavorites,
@@ -34,7 +34,6 @@ import { favoriteFor } from './annotation-summary'
 import type { Selection } from './AnnotationText'
 import { INITIAL_SESSIONS, sessionOf, sessionReducer, type JudgeDraft } from './session'
 import { SettingsModal } from './SettingsModal'
-import { PasteModal } from './PasteModal'
 import { GenerateModal } from './GenerateModal'
 import { SourcePane } from './SourcePane'
 import { AnswerPane, PAGE_STATE_HINT, nextPageHint, type PageState } from './AnswerPane'
@@ -58,10 +57,20 @@ import {
   correctionFromVerdicts,
   exerciseOfTerms,
   judgeTerms,
+  parseTermExerciseId,
+  sanitizeTermRow,
+  splitTermAnswers,
   termAnswerText,
   termExerciseId,
-  termsForExerciseId,
+  termsForPageOfExercise,
 } from '../domain/term-exercise'
+import { TERM_SCOPES, type TermScope } from '../domain/term-scopes'
+import {
+  countLegacyTermFavorites,
+  countLegacyTermRecords,
+  dropLegacyTermFavorites,
+  dropLegacyTermRecords,
+} from './legacy-term-cleanup'
 import { loadSelection, saveSelection, type ArticleSelection } from './article-selection'
 import {
   clearGraded,
@@ -169,6 +178,26 @@ function resolveStoredExercise(id: string, origin: ExerciseOrigin, customId: str
   return null
 }
 
+/**
+ * 术语栏的落点：**没练完的那个范围优先**（用户拍板照文章栏的规矩：
+ * "整篇练完的文章不再被主动打开"——术语范围同理）。
+ *
+ * 两个范围都练完了，才回到 `preferred`（上次那一个）——那与文章栏"整格都练完就回第一篇"是同一个兜底。
+ * 术语只有两个范围，因此"换到另一个"这件事比文章栏更明显：国内 17 页练完之后，
+ * 下次打开术语栏会直接落在国际机关名称上。
+ */
+function unfinishedTermExercise(
+  progress: ProgressMap,
+  direction: Direction,
+  preferred?: string,
+): string {
+  const ids = TERM_SCOPES.map((scope) => termExerciseId(scope.id, direction))
+  const unfinished = ids.find((id) => !isCompleted(progress, id, pageCountOf(id)))
+  if (unfinished) return unfinished
+  if (preferred && ids.includes(preferred)) return preferred
+  return ids[0] ?? termExerciseId('cn-org', direction)
+}
+
 export function App(): JSX.Element {
   const firstCase = ALL_CASES[0]
   if (!firstCase) throw new Error('题库为空')
@@ -198,8 +227,22 @@ export function App(): JSX.Element {
     const view = loadLastView()
     if (view && view.tab !== 'records' && view.tab !== 'favorites') {
       const id = resolveStoredExercise(view.exerciseId, view.origin, loadCustom()?.id ?? null)
-      const isFinishedArticle = id !== null && exerciseSourceOf(id)?.mode === 'article' && isCompleted(startupProgress, id, pageCountOf(id))
-      if (id && !isFinishedArticle) return { tab: view.tab, exerciseId: id, sectionIndex: view.sectionIndex }
+      const stored = id ? exerciseSourceOf(id) : null
+      /*
+       * "整篇练完的不主动打开"这条规矩**对术语范围同样成立**（用户第 13 轮拍板：
+       * 术语栏也照文章栏那样记进度）。文章题落到同一格里下一篇，术语题落到另一个范围。
+       */
+      const finished = id !== null && (stored?.mode === 'article' || stored?.mode === 'term') &&
+        isCompleted(startupProgress, id, pageCountOf(id))
+      if (id && !finished) return { tab: view.tab, exerciseId: id, sectionIndex: view.sectionIndex }
+      const parsedTerm = id ? parseTermExerciseId(id) : null
+      if (id && parsedTerm) {
+        return {
+          tab: 'term' as Tab,
+          exerciseId: unfinishedTermExercise(startupProgress, parsedTerm.direction, id),
+          sectionIndex: null,
+        }
+      }
     }
     const remembered = loadSelection()
     const inSlot = articlesOf(remembered.domain, remembered.direction)
@@ -322,14 +365,45 @@ export function App(): JSX.Element {
    */
   const [judgeDone, setJudgeDone] = useState<JudgeDoneNotice | null>(null)
 
-  /** 自己贴的那一篇（存在浏览器里，只留最新一篇）；贴题弹窗的开关与草稿 */
+  /**
+   * 自己贴的那一篇（存在浏览器里，只留最新一篇）。
+   *
+   * ⚠️ 第 13 轮起**没有贴题弹窗了**（用户要求："一进去不弹出窗口要求输入，
+   * 而是将原文也变成输入栏"）：`custom.source` 就是原文栏那个输入框里的字，
+   * 边写边存（见 updateCustomSource）。因此这里也没有 pasteOpen/pasteText 那几个 state。
+   */
   const [custom, setCustom] = useState<CustomExercise | null>(() => loadCustom())
-  const [pasteOpen, setPasteOpen] = useState(false)
-  const [pasteText, setPasteText] = useState('')
-  const [pasteError, setPasteError] = useState<string | null>(null)
 
   /** 收藏（存在浏览器里；做题时点卡片下方的「收藏」，在顶栏的「收藏」里看） */
   const [favorites, setFavorites] = useState<Favorite[]>(() => loadFavorites())
+
+  /**
+   * **换代之前那些术语记录与收藏的一次性清理**（第 13 轮，用户拍板）。
+   *
+   * 术语题号从 `term-v2-<领域>-<第几组>` 换成 `term-v3-<范围>-<方向>`，而记录与收藏都
+   * **不存题干**（靠题号回查），于是旧术语记录变成一批点开没内容的条目。用户的答复是
+   * "删掉我之前留下的术语记录，未来我留下的术语记录不会被自动删掉"。
+   *
+   * 判据是**旧代次前缀**（`isLegacyTermExerciseId`），因此新代次的记录在结构上不可能
+   * 被它命中——"以后永不再删"是判据保证的，不靠"只跑一次"这种约定。
+   * 下面那个 ref 只是别让 StrictMode 的双调用把同一件事做两遍（清两遍也是幂等的）。
+   */
+  const legacyCleaned = useRef(false)
+  useEffect(() => {
+    if (legacyCleaned.current) return
+    legacyCleaned.current = true
+    const droppedRecords = countLegacyTermRecords(records)
+    const droppedFavorites = countLegacyTermFavorites(favorites)
+    if (droppedRecords === 0 && droppedFavorites === 0) return
+    if (droppedRecords > 0) setRecords((previous) => saveRecords(dropLegacyTermRecords(previous)))
+    if (droppedFavorites > 0) setFavorites((previous) => dropLegacyTermFavorites(previous))
+    showToast(
+      `已清理换代之前留下的术语${droppedRecords > 0 ? `记录 ${droppedRecords} 条` : ''}${
+        droppedRecords > 0 && droppedFavorites > 0 ? '、' : ''
+      }${droppedFavorites > 0 ? `收藏 ${droppedFavorites} 条` : ''}（新版术语的记录不会再被自动删除）`,
+    )
+    // 依赖故意留空：只在挂载时清一遍。清完之后它一条都挑不出来，因此不会漏掉什么。
+  }, [])
 
   /**
    * 文章库的「领域 × 方向」选择（存在浏览器里，每次打开回到上次那一格）。
@@ -364,11 +438,17 @@ export function App(): JSX.Element {
     saveSelection(next)
   }
   /**
-   * 当前是不是**术语库**里的一组术语。
-   * 术语题不走文章库那套问答：它一次给五条术语，批改完全本地（见 term-exercise.ts）。
+   * 当前这道题是不是**术语范围**里的一道。
+   *
+   * ⚠️ 判据是**题号**（`term-v3-<范围>-<方向>`），不是"取到了几条术语"——
+   * 术语题现在一个范围有很多页，落在越界的页上一条都取不到，
+   * 用"条数 > 0"会把术语题误判成内置题（界面突然换一套，且报错）。
    */
-  const activeTerms = useMemo(() => termsForExerciseId(exerciseId), [exerciseId])
-  const isTermExercise = activeTerms.length > 0
+  const termParsed = useMemo(() => parseTermExerciseId(exerciseId), [exerciseId])
+  const isTermExercise = termParsed !== null
+  /** 术语栏这两个控件的当前取值，直接从题号里读出来（不另存一份 state，免得两份打架） */
+  const termScope: TermScope = termParsed?.scope ?? 'cn-org'
+  const termDirection: Direction = termParsed?.direction ?? 'zh-to-en'
   /**
    * 当前是不是**句子库**里的一道句子题（从该领域文章里切出来的单句）。
    */
@@ -379,7 +459,7 @@ export function App(): JSX.Element {
       : activeArticle
         ? exerciseOfArticle(activeArticle)
         : isTermExercise
-          ? exerciseOfTerms(exerciseId, activeTerms)
+          ? exerciseOfTerms(exerciseId)
           : activeSentence
             ? exerciseOfSentence(exerciseId, activeSentence)
             : activeCase.exercise
@@ -440,6 +520,16 @@ export function App(): JSX.Element {
   )
   const session = sessionOf(sessions, exercise.id, resumeIndex)
   const { drafts, sectionIndex, pages, unlocked } = session
+
+  /**
+   * 当前这一页的五条术语（**末页可能不满五条**——用户拍板缺的行留空、不可填也不计分）。
+   *
+   * 它必须等 `sectionIndex` 出来之后才算：这一页是哪五条由页号决定。
+   */
+  const activeTerms = useMemo(
+    () => (isTermExercise ? termsForPageOfExercise(exerciseId, sectionIndex) : []),
+    [isTermExercise, exerciseId, sectionIndex],
+  )
 
   /*
    * 记下"现在停在哪"（栏 + 题 + 来源 + 页），下次打开落回这里。
@@ -587,8 +677,19 @@ export function App(): JSX.Element {
    * 原文栏正文末尾那个可折叠的「参考译文」直接拿它拼出来。
    */
   const sourceSections: ArticlePage[] = useMemo(
-    () => paginateArticle(currentSource, currentReference, exercise.direction),
-    [currentSource, currentReference, exercise.direction],
+    /*
+     * 术语题传 0：它的页自己已经切好了（每页五条、页间空一行），
+     * 而默认规则会把"不足 50 单位"的段并到下一页去——五个机关名的中文往往不到 50 字，
+     * 一并就把两页搅成一页（详见 exercise-source.ts 的 pagesOf）。
+     */
+    () =>
+      paginateArticle(
+        currentSource,
+        currentReference,
+        exercise.direction,
+        mode === 'term' ? 0 : PAGE_RULE.mergeBelow,
+      ),
+    [currentSource, currentReference, exercise.direction, mode],
   )
   const multiSection = sourceSections.length > 1
   const currentSection = sourceSections[sectionIndex] ?? sourceSections[0]
@@ -765,8 +866,20 @@ export function App(): JSX.Element {
    * **不清空任何东西**：每道题的作答、批改结果、分段位置都各自留着，
    * 切回来还是离开时的样子。清空的只有"提示与错误"这类一次性的界面状态。
    */
-  function selectExercise(id: string): void {
+  /**
+   * 切到某一道题；`atSection` 有值时**同时**落到那一页。
+   *
+   * 为什么要有第二个参数：术语栏的「确定」按用户拍板"一律落到第 1 页"，
+   * 而落点是"会话里已经有的页号优先"（见上面的 resumeIndex）——光 setExerciseId 是弹不回的。
+   * 这一条 `sectionChanged` 是**按新题号**下发的（reducer 按 `action.exerciseId` 找会话），
+   * 因此新题的会话一建起来就停在那一页；若先 selectExercise 再 setSection(0)，
+   * 那一下会打在**旧题**头上（setState 还没生效），等于白点。
+   */
+  function selectExercise(id: string, atSection?: number): void {
     setExerciseId(id)
+    if (atSection !== undefined) {
+      dispatchSession({ type: 'sectionChanged', exerciseId: id, sectionIndex: Math.max(0, atSection) })
+    }
     clearTransientUi()
   }
 
@@ -918,19 +1031,30 @@ export function App(): JSX.Element {
     if (nextTab === 'records') return
     if (nextTab === 'favorites') return
     if (nextTab === 'custom') {
-      // 贴过就回到那一篇；没贴过就把贴题弹窗打开
-      if (customExercise) selectExercise(customExercise.id)
-      else openPaste()
+      /*
+       * 第 13 轮起**不再弹窗问原文**（用户要求："一进去不弹出窗口要求输入，
+       * 而是将原文也变成输入栏"）：直接拿到那一篇（没写过就铸一个空白题号），
+       * 用户在原文栏里边写边看，方向与题型由程序现判。
+       */
+      const mine = custom ?? openCustom()
+      if (!custom) setCustom(mine)
+      if (mine.id !== exerciseId) selectExercise(mine.id)
       return
     }
     /*
-     * 术语栏与句子栏都由数据表供题（术语库 / 文章库切句），
-     * 领域跟着文章栏选的那个走——术语、句子与文章是同一套主题域，没必要让人选两次。
-     * 但**离开时是哪一组/哪一句，回来还是它**（见上面"切走再切回来"那段）。
+     * 术语栏与句子栏都由数据表供题（术语范围 / 文章库切句）。
+     * **离开时是哪一道，回来还是它**；记着的题号解析不出来（换代了）就落回默认那一道。
      */
     const remembered = lastInTabRef.current[nextTab]
     if (nextTab === 'term') {
-      const id = remembered?.origin === 'term' ? remembered.id : termExerciseId(articleSelection.domain, 1)
+      const rememberedTerm = remembered?.origin === 'term' && parseTermExerciseId(remembered.id)
+      /*
+       * 没有记着"上次看的是哪个范围"时，落**没练完**的那个（与启动落点同一条规矩）。
+       * 人自己点这一栏时不管进度——那是明确的动作，硬把他送到另一个范围才是怪事。
+       */
+      const id = rememberedTerm
+        ? remembered.id
+        : unfinishedTermExercise(progress, termDirection, exerciseId.startsWith('term-v3-') ? exerciseId : undefined)
       if (id !== exerciseId) selectExercise(id)
       return
     }
@@ -952,25 +1076,47 @@ export function App(): JSX.Element {
     if (next) selectExercise(next.exercise.id)
   }
 
-  /** 打开贴题弹窗：把当前那一篇的原文放进去，方便改一改再练。 */
-  function openPaste(): void {
-    setPasteText(custom?.source ?? '')
-    setPasteError(null)
-    setPasteOpen(true)
-  }
-
-  /** 贴进去了：存下来（只留这一篇）并立刻切过去。 */
-  function applyPaste(): void {
-    const text = pasteText.trim()
-    if (text.length < 2) {
-      setPasteError('请先把原文贴进来（至少几个字）')
+  /**
+   * 自定义栏的原文被改了（第 13 轮：原文就是一个输入框，不再有"贴一篇"的弹窗）。
+   *
+   * ## 为什么练过之后再改原文要**换一个题号**
+   *
+   * 练习记录与收藏都**不存题干**，只存题号——原文要靠题号回查（`customSources()`）。
+   * 因此同一题号下把原文改掉，那些旧记录会**跟着换口**：它们显示的会是新原文，
+   * 而当时考的明明是另一篇。对策就是这条：这一篇只要**已经练过**（有记录），
+   * 改原文就当成一篇新题、铸一个新题号，旧记录仍指向当时那一篇。
+   * 之后的每一次敲键都落在新题号上（它还没有记录），所以不会一个字换一个题号。
+   *
+   * 还没练过的一篇则一律就地改：正在写的草稿、页号、页状态都跟着题号走，
+   * 换题号等于把它们丢掉。
+   */
+  function updateCustomSource(text: string): void {
+    if (!custom) return
+    const practiced = records.some((item) => item.exerciseId === custom.id)
+    if (practiced) {
+      const fresh = saveCustomSource(newCustom(), text)
+      setCustom(fresh)
+      selectExercise(fresh.id)
       return
     }
-    const saved = saveCustom(text)
-    setCustom(saved)
-    setTab('custom')
-    selectExercise(saved.id)
-    setPasteOpen(false)
+    setCustom(saveCustomSource(custom, text))
+    setError(null)
+    setNotice(null)
+  }
+
+  /**
+   * 术语栏的两个控件：切「范围」与切「方向」都只是**换一道题**
+   * （题号 = `term-v3-<范围>-<方向>`），作答、记录、进度各按题号分开存。
+   * 点「确定」时按用户拍板**一律落到第 1 页**。
+   */
+  function pickTermScope(scope: TermScope): void {
+    const id = termExerciseId(scope, termDirection)
+    if (id !== exerciseId) selectExercise(id, 0)
+  }
+
+  function pickTermDirection(direction: Direction): void {
+    const id = termExerciseId(termScope, direction)
+    if (id !== exerciseId) selectExercise(id)
   }
 
   function updateAnswer(value: string): void {
@@ -1014,12 +1160,17 @@ export function App(): JSX.Element {
   }
 
   /**
-   * 写到指定的"行"。术语题用它——一题五条术语，每条各写各的，
-   * 复用 drafts 的 `段号 → 文字` 结构（第几行就是第几段），因此
-   * 切栏目、切题目都不会丢，与其它题型的作答同一套保障。
+   * 写术语题的**第几行**。
+   *
+   * 存储是"一页一段文字"（一行一条），因此这里把这一页的五条重新拼起来整段写回去——
+   * 而不是往 `drafts[行号]` 里塞。⚠️ 早先正是塞进 `drafts[行号]`：`drafts` 是按**页号**
+   * 索引的，两者撞在一起，于是落盘的那段文字被当成"第 1 行"读回来，
+   * 五条译文全挤进第一个框（用户报的就是这个）。现在只有一个坑（第几页），行是现拆的。
    */
-  function updateAnswerAt(row: number, value: string): void {
-    dispatchSession({ type: 'answerAtChanged', exerciseId: exercise.id, row, text: value })
+  function updateTermRow(row: number, value: string): void {
+    const next = [...termAnswers]
+    next[row] = sanitizeTermRow(value)
+    updateAnswer(termAnswerText(next))
   }
 
   /**
@@ -1522,31 +1673,46 @@ export function App(): JSX.Element {
   /**
    * 术语题的逐条判分结果。
    *
-   * 由本地算出来，不进 result：术语判分是**纯函数**（对照标准译法），
+   * 由本地算出来，不进 result：术语判分是**纯函数**（对照官方译名），
    * 没有"AI 返回了什么"可存，也不需要重试与失败分类。因此这里按
-   * 「有没有已提交的结果」当作"这一组是否已判过"，逐条现算即可——
-   * 既省一份状态，也不会出现"存下来的判分与标准译法不一致"。
+   * 「这一页有没有已提交的结果」当作"这一页是否已判过"，逐条现算即可——
+   * 既省一份状态，也不会出现"存下来的判分与官方译名不一致"。
    */
   /*
-   * 五条答案与"整段作答文字"。
+   * 这一页的五条答案与"整段作答文字"。
    *
    * 术语题在界面上是五个独立的框，但**下游一律按一段文字办事**——
-   * 练习记录存 answer、收藏要"这一处所在的整句"、对照视图要切句。
+   * 练习记录存 answer、收藏要"这一处所在的那一行"、对照视图要逐行对照。
    * 因此这里算一次、两处共用（判分与提交都用它），免得两处的拼法悄悄不一致。
+   *
+   * ⚠️ 两个方向都要经这里：**读**是把这一页的草稿按行拆开（`splitTermAnswers`），
+   * **写**是拼回一整段（`updateTermRow`）。存储里只有"第几页"一个坑。
    */
   const termAnswers = useMemo(
-    () => activeTerms.map((_, index) => drafts[index] ?? ''),
-    [activeTerms, drafts],
+    () => splitTermAnswers(drafts[sectionIndex] ?? '', activeTerms.length),
+    [drafts, sectionIndex, activeTerms.length],
   )
   const termAnswer = useMemo(() => termAnswerText(termAnswers), [termAnswers])
-  /** 写满五条才让提交（按钮禁用 + 悬停说明，替代原先那句"已写 0 / 5 条"的提示） */
+  /**
+   * 这一页的术语**都写上**才让提交。
+   * 末页不满五条时只要求真实存在的那几条（缺的行既不可填也不计分）。
+   */
   const allTermsAnswered = activeTerms.length > 0 && answeredTermCount(termAnswers) === activeTerms.length
 
   const termVerdicts = useMemo(() => {
     if (!isTermExercise) return null
     if (!pageResult) return null
-    return judgeTerms(activeTerms, termAnswers)
-  }, [isTermExercise, pageResult, activeTerms, termAnswers])
+    return judgeTerms(activeTerms, termAnswers, termDirection)
+  }, [isTermExercise, pageResult, activeTerms, termAnswers, termDirection])
+  /**
+   * 术语栏"屏幕上是这一页的判分结果吗"。
+   *
+   * 判据与文章模式**同一条**：直接用 `shown`（它已经把"正在编辑"那一档排除掉了，
+   * 见上面 shown 的三条分支）。不能用 `termVerdicts !== null`——按过「返回编辑」但一个字
+   * 还没改时，结果**还在** `pages` 里（那是有意的：改回去看、一个字没动就翻页，
+   * 回来仍是批改界面），只看 verdicts 会把这一页重新画成结果、把输入框锁住。
+   */
+  const termShowingResult = isTermExercise && shown !== null
 
   /**
    * 术语题提交：**本地判分，不调 AI**。
@@ -1559,10 +1725,10 @@ export function App(): JSX.Element {
   function submitTerms(): void {
     if (!isTermExercise) return
     const answers = termAnswers
-    const verdicts = judgeTerms(activeTerms, answers)
+    const verdicts = judgeTerms(activeTerms, answers, termDirection)
     const { correction, validated } = correctionFromVerdicts(verdicts)
     const wrong = verdicts.filter((verdict) => !verdict.correct).length
-    // 术语题没有分页，它的"一页"就是这五条，合起来当作被批的那段文字（与练习记录、收藏一致）
+    // 术语题的一页就是这五条，合起来当作被批的那段文字（与练习记录、收藏、对照视图一致）
     const pageAnswer = termAnswer
     commit(
       { exerciseId: exercise.id, sectionIndex, topic: exercise.topic, direction: exercise.direction },
@@ -1570,14 +1736,21 @@ export function App(): JSX.Element {
         correction,
         validated,
         level,
-        // 判分来源标成 fixture：它不是 AI 现场批改的，界面不该说"这是 AI 批的"
-        source: 'fixture',
+        /*
+         * 判分来源标成 `local`（第 13 轮改的，用户拍板）。
+         *
+         * 早先这里写的是 `fixture`——那是"内置示例批改"的来源，于是顶栏那枚
+         * 「内置示例批改」警告在**每次术语批改之后**都冒出来。用户要求删掉那枚警告，
+         * 而术语判分本来也不是"示例"：它是程序按官方译名真判的。
+         * 给它一个自己的来源之后，警告那枚芯片就只属于真正的离线示例。
+         */
+        source: 'local',
         sectionCount: 1,
         raw: JSON.stringify(
           verdicts.map((verdict) => ({
             zh: verdict.term.zh,
             yours: verdict.answer,
-            standard: verdict.term.en,
+            standard: verdict.standard,
             correct: verdict.correct,
           })),
           null,
@@ -1589,8 +1762,8 @@ export function App(): JSX.Element {
     )
     setNotice(
       wrong === 0
-        ? `全部 ${verdicts.length} 条都译对了。`
-        : `这一组 ${verdicts.length} 条，错 ${wrong} 条——标准译法见右下角逐条说明。`,
+        ? `这一页 ${verdicts.length} 条都译对了。`
+        : `这一页 ${verdicts.length} 条，错 ${wrong} 条——官方译名见右下角逐条说明。`,
     )
   }
 
@@ -1634,24 +1807,24 @@ export function App(): JSX.Element {
 
   return (
     <div className="app" data-exercise-id={exercise.id}>
+      {/*
+        ⚠️ 顶栏右上角那枚「内置示例批改」**已按用户要求整枚删掉**（第 13 轮）。
+        它早先有三个来源会点亮它，其中一个是错的：
+          1. 真的按了「查看内置示例批改」——这是警告，该说；
+          2. 术语题的本地判分**借用了 `fixture` 这个来源**，于是每次术语批改都冒出来——不该说；
+          3. 离线演示——同 1。
+        用户看到的就是第 2 种（术语栏每判一次都跳一下）。现在的分工是：
+        术语判分有自己的来源 `local`（见 types.ts 的 JudgeSource），顶栏不再挂任何提醒，
+        示例批改那句提醒搬进**结果栏**（见 AnswerPane 的那枚「示例批改」芯片）。
+        删掉之后右上角最右边的就是「暗夜 · 设置」——`.topbar-right` 本来就是 `margin-left: auto`，
+        因此不需要动布局。
+      */}
       <TopBar
         tab={tab}
         onSelectTab={selectTab}
         onOpenSettings={() => setSettingsOpen(true)}
         onToggleTheme={() => updateSettings({ theme: theme === 'dark' ? 'light' : 'dark' })}
         theme={theme}
-        meta={
-          tab === 'records' || tab === 'favorites' ? null : (
-            /*
-             * 第 9 条：方向 / 文体 / 话题这三枚小标签**都删掉**了
-             * （用户点名"去掉导航栏上『中译英』『新闻编辑』『社会』这些标签字样"）。
-             * 方向在原文标题栏里有开关、文体与话题对做题没有指导意义，留着只是噪声。
-             * 「内置示例批改」留着：它是**警告**——示例批改不是真的批改，
-             * 不标出来容易让人以为自己的译文得到了评价。
-             */
-            <>{shown?.source === 'fixture' && <span className="chip chip-warn">内置示例批改</span>}</>
-          )
-        }
       />
 
       {tab === 'favorites' ? (
@@ -1773,9 +1946,21 @@ export function App(): JSX.Element {
                     },
                   }
                 : null)}
-              onRepaste={openPaste}
               onRotate={rotateSource}
               onOpenGenerator={openGenerator}
+              {...(isTermExercise
+                ? {
+                    termRange: {
+                      scope: termScope,
+                      direction: termDirection,
+                      onPickScope: pickTermScope,
+                      onPickDirection: pickTermDirection,
+                    },
+                  }
+                : null)}
+              {...(isCustom && custom
+                ? { editableSource: { value: custom.source, onChange: updateCustomSource } }
+                : null)}
             />
 
             <div
@@ -1788,82 +1973,122 @@ export function App(): JSX.Element {
             />
 
             {/*
-              术语题走**另一条渲染路径**：它一次给五条术语、逐条作答、由程序本地对照判分
-              （见 term-exercise.ts）。它没有"整段作答文本"，因此不画整段勾画，
-              判完也不切成"一页一页"——五条就是一道题。
-              与其它题型刻意分开渲染，而不是往 AnswerPane 里塞一堆 if——
-              那会让两个本来不同的交互在一个组件里互相牵制。
+              术语题走**另一条渲染路径**：一页五条术语、逐条作答、由程序本地对照判分
+              （见 term-exercise.ts）。它的批注语言与文章模式**同一套**（荧光底色、划线、
+              「→ 官方译名」、点一条看右下角），但作答是五个框而不是一个整段文本框，
+              因此刻意分开渲染，而不是往 AnswerPane 里塞一堆 if。
 
-              标题栏里的按钮位置与文章模式**对齐**（用户要求）：提交批改在最右，
-              判完之后换成「重新作答」，左边是视图切换。
+              ⚠️ 第 13 轮起它与文章模式**处处对齐**（用户要求"像文章模式一样一页一页翻"）：
+              同一颗按钮两个名字（批改后写「返回编辑」）、批过的页只读、翻页不提交、
+              左侧页脚同一个翻页控件。因此这里显示"输入框还是结果"也由**页状态**决定
+              （`pageState`），不再由"这一页有没有结果"决定。
             */}
             {isTermExercise ? (
               <section className="pane pane-answer">
                 <header className="pane-head">
                   <h2>我的译文</h2>
                   <div className="head-meta">
-                    <span className="chip">术语翻译 · {activeTerms.length} 条</span>
-                    <span className="chip" title="术语有唯一正确译法，因此由程序对照标准译法判分，不交给 AI">
+                    {gradeHistory.length > 0 && (
+                      <GradeHistoryPicker
+                        history={gradeHistory}
+                        viewingId={viewingGrade?.id ?? null}
+                        onView={(id) => {
+                          const record = gradeHistory.find((entry) => entry.id === id)
+                          setViewingGrade(exercise.id, sectionIndex, record?.id ?? null)
+                          setSelection(null)
+                          setNotice(null)
+                        }}
+                        onDelete={(id) => {
+                          const record = records.find((item) => item.id === id)
+                          if (record) deleteRecord(record)
+                        }}
+                      />
+                    )}
+                    {/*
+                      这一页有几条由**这一页**算，不是整个范围：
+                      末页只有三条时如实写"3 条"，用户才不会以为界面上丢了两个框。
+                    */}
+                    <span className="chip">术语翻译 · 第 {sectionIndex + 1} 页 · {activeTerms.length} 条</span>
+                    <span className="chip" title="术语题按官方译名由程序本地对照判分，不交给 AI、不用等、不花钱">
                       本地判分
                     </span>
-                    {termVerdicts === null ? (
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={submitTerms}
-                        disabled={!allTermsAnswered}
-                        title={allTermsAnswered ? undefined : '请先把五条都写上'}
-                      >
-                        提交批改
-                      </button>
-                    ) : (
+                    {termShowingResult ? (
                       <>
                         {/* 判完之后也能切视图（用户要求：术语提交后，像文章模式一样对比、批注） */}
                         {shown && <AnswerViewSwitch view={settings.answerView} onChange={updateSettings} />}
                         <button
                           type="button"
-                          className="btn"
+                          className="btn btn-primary"
                           onClick={() => {
-                            // 重新作答：作废这一组的结果，作答本身**留着**让人改。
-                            // 用 `pageResultDropped` 而不是「逐页批改」那个 `pageUnlocked`：
-                            // 术语栏"显示输入框还是显示判分"就是由"这一页有没有结果"决定的，
-                            // 结果若照旧留着，按了等于没按（`pageUnlocked` 现在**不**丢结果，
-                            // 那是给逐页批改用的语义，见 session.ts）。
-                            dispatchSession({ type: 'pageResultDropped', exerciseId: exercise.id, sectionIndex })
-                            setProgress((previous) => clearGraded(previous, exercise.id, sectionIndex))
-                            setNotice(null)
+                            /*
+                             * 「返回编辑」：与文章模式**同一颗按钮、同一个动作**。
+                             *
+                             * 只放开这一页（`pageUnlocked`），**不丢结果、不撤进度**——
+                             * 结果什么时候作废由"用户真的改了一个字"决定（见 session.ts 的
+                             * answerChanged 与 releasedUnlock）：改回去看、一个字没动就翻页，
+                             * 回来看到的仍是那份批改。
+                             *
+                             * ⚠️ 早先这里是「重新作答」，走的是 `pageResultDropped` +
+                             * `clearGraded`——那会**真的把结果丢掉、把进度撤掉**，
+                             * 与用户第 13 条的原话（"用户应该点击返回编辑的按钮"）不是一回事，
+                             * 也与文章模式两套语义。现在两处合成一套。
+                             */
+                            setViewingGrade(exercise.id, sectionIndex, null)
+                            dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
+                            setOpenRecord(null)
                             setSelection(null)
+                            setNotice(null)
                           }}
                         >
-                          重新作答
+                          返回编辑
                         </button>
                       </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={submitTerms}
+                        disabled={!allTermsAnswered || judgingThisPage}
+                        title={
+                          allTermsAnswered
+                            ? undefined
+                            : `请先把这一页的 ${activeTerms.length} 条都写上`
+                        }
+                      >
+                        提交批改
+                      </button>
                     )}
                   </div>
                 </header>
                 <div className="pane-body">
                   {notice && <p className="hint notice">{notice}</p>}
-                  {termVerdicts === null ? (
+                  {termShowingResult && termVerdicts !== null ? (
+                    settings.answerView === 'compare' && shown ? (
+                      /* 对照视图：一行"你写的"、一行官方译名，与文章模式同一套排版 */
+                      <CompareView
+                        validated={shown.validated}
+                        answer={shown.answer}
+                        selection={selection}
+                        onSelect={toggleSelection}
+                      />
+                    ) : (
+                      /* 批改视图：一行一条，译错的划掉并给出官方译名 */
+                      <TermResults
+                        verdicts={termVerdicts}
+                        selectedId={selection?.id ?? null}
+                        onSelect={toggleSelection}
+                      />
+                    )
+                  ) : (
                     <TermRows
                       terms={activeTerms}
                       answers={termAnswers}
-                      disabled={false}
-                      onChange={(row, value) => updateAnswerAt(row, value)}
-                    />
-                  ) : settings.answerView === 'compare' && shown ? (
-                    /* 对照视图：一行"你写的"、一行"标准译法"，与文章模式同一套排版 */
-                    <CompareView
-                      validated={shown.validated}
-                      answer={shown.answer}
-                      selection={selection}
-                      onSelect={toggleSelection}
-                    />
-                  ) : (
-                    /* 批改视图：五条各一行，译错的划掉并给出标准译法 */
-                    <TermResults
-                      verdicts={termVerdicts}
-                      selectedId={selection?.id ?? null}
-                      onSelect={toggleSelection}
+                      /*
+                        批过的页只读（与文章模式同一条规矩）：要改先按「返回编辑」——
+                        批注是按提交当时那几条算出来的位置，改一个字就全对不上了。
+                      */
+                      disabled={!editing}
+                      onChange={(row, value) => updateTermRow(row, value)}
                     />
                   )}
                 </div>
@@ -2059,25 +2284,15 @@ export function App(): JSX.Element {
       )}
 
       {/*
-        贴题：把自己找来的原文贴进来就能练，不用等我们出题。
-        只贴原文——方向按有没有汉字自动判断，题型按段落数/句数自动判断，参考译文留空。
+        贴题弹窗**整块删掉了**（第 13 轮，用户要求）：
+        原文栏自己就是一个输入框，进自定义栏直接往里写——方向按有没有汉字自动判断、
+        题型按段落数/句数自动判断、参考译文留空，这些都没变，变的是"不用先弹窗问一次"。
       */}
-      {pasteOpen && (
-        <PasteModal
-          text={pasteText}
-          error={pasteError}
-          onChange={(text) => {
-            setPasteText(text)
-            setPasteError(null)
-          }}
-          onCancel={() => setPasteOpen(false)}
-          onApply={applyPaste}
-        />
-      )}
 
       {/*
         AI 出题：选领域（也可自己输入）+ 文体 + 方向，现出一篇同规格的题。
         生成结果按题目留存，之后「换一换」还能翻回来接着练。
+        ⚠️ 术语栏没有这颗按钮（术语题只来自两个范围，见 SourcePane 里的说明）。
       */}
       {genOpen && (
         <GenerateModal

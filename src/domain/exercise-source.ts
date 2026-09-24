@@ -24,8 +24,8 @@ import { MOCK_CASES, EXERCISE_SOURCES } from './mock'
 import { articleById } from './articles'
 import { customSources, directionOf, modeOf } from './custom'
 import { sentenceForExerciseId } from './sentence-exercise'
-import { termsForExerciseId } from './term-exercise'
-import { paginateArticle, referenceOfPage, type ArticlePage } from './sections'
+import { parseTermExerciseId, termSourceText } from './term-exercise'
+import { PAGE_RULE, paginateArticle, referenceOfPage, type ArticlePage } from './sections'
 
 export interface ExerciseSource {
   /** 整篇原文（文章题是全文，其它题型就是那一段） */
@@ -62,9 +62,15 @@ export function exerciseSourceOf(exerciseId: string): ExerciseSource | null {
     return { text: sentence.text, reference: '', direction, mode: 'sentence' }
   }
 
-  const terms = termsForExerciseId(exerciseId)
-  if (terms.length > 0) {
-    return { text: terms.map((term) => term.zh).join('\n'), reference: '', direction: 'zh-to-en', mode: 'term' }
+  /*
+   * 术语题：题干是**这一页**那几条（中译英给中文名、英译中给官方英文名），
+   * 页与页之间空一行——所以它和文章题共用同一套分页（见下面的 pagesOf）。
+   * 换代之前的题号（`term-v2-…`）在这里解析不出来，于是返回 null——
+   * 如实说"认不出这道题"，而不是编一个出来（用户对旧术语记录选的是"一次性清掉"）。
+   */
+  const term = parseTermExerciseId(exerciseId)
+  if (term) {
+    return { text: termSourceText(term.scope, term.direction), reference: '', direction: term.direction, mode: 'term' }
   }
 
   // 内置题库里只有原文、没有 exercise 对象时（旧数据）也兜一层
@@ -74,20 +80,26 @@ export function exerciseSourceOf(exerciseId: string): ExerciseSource | null {
   return null
 }
 
-/** 把一道题的原文切成页（只有文章题会多于 1 页）。 */
+/** 把一道题的原文切成页（文章题与术语题会多于 1 页）。 */
 function pagesOf(source: ExerciseSource): ArticlePage[] {
-  return paginateArticle(source.text, source.reference, source.direction)
+  /*
+   * 术语题传 0：它的页**自己已经切好了**（每页五条、页间空一行，见 `termSourceText`），
+   * 而分页规则默认会把"不足 50 单位"的段并到下一页去——五个机关名的中文字面往往不到 50 字，
+   * 一并就会把两页搅成一页。传 0 之后一段就是一页，切出来的正好是它切好的那些。
+   */
+  const mergeBelow = source.mode === 'term' ? 0 : PAGE_RULE.mergeBelow
+  return paginateArticle(source.text, source.reference, source.direction, mergeBelow)
 }
 
 /**
  * 某条记录该显示的**那一段**原文（''表示认不出这道题）。
  *
- * `sectionIndex` 是记录里存的页号；只有文章题会用到它，其它题型恒为 0。
+ * `sectionIndex` 是记录里存的页号；文章题与术语题会用到它，其它题型恒为 0。
  */
 export function pageSourceOf(exerciseId: string, sectionIndex: number): string {
   const source = exerciseSourceOf(exerciseId)
   if (!source) return ''
-  if (source.mode !== 'article') return source.text
+  if (source.mode !== 'article' && source.mode !== 'term') return source.text
   return pagesOf(source)[sectionIndex]?.text ?? ''
 }
 
@@ -104,10 +116,10 @@ export function pageReferenceOf(exerciseId: string, sectionIndex: number): strin
   return page ? referenceOfPage(page) : ''
 }
 
-/** 文章题一共几页（界面报进度、选文章卡片显示"共几页"都用它）。 */
+/** 这道题一共几页（界面报进度、选文章/选范围卡片显示"共几页"都用它）。 */
 export function pageCountOf(exerciseId: string): number {
   const source = exerciseSourceOf(exerciseId)
   if (!source) return 0
-  if (source.mode !== 'article') return 1
+  if (source.mode !== 'article' && source.mode !== 'term') return 1
   return Math.max(1, pagesOf(source).length)
 }

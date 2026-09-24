@@ -135,8 +135,20 @@ export function referenceOfPage(page: ArticlePage): string {
  *
  * 返回的页与 `splitSections` 同构（start/end/text 覆盖原文的连续区间），
  * 因此下游（提交时的 sourceSections、批注序号换算、翻页）一行都不用改。
+ *
+ * ## `mergeBelow` 这个参数是给术语题留的
+ *
+ * 文章题的一页 = 一个自然段，短段才并起来；**术语题的一页 = 固定五条**，
+ * 它自己已经在源文里用空行把页切好了（见 term-exercise.ts 的 `termSourceText`），
+ * 因此它传 `0`——于是"没有任何一段够短"、一段就是一页，切出来的页恰好是它切好的那些。
+ * 不传就走文章题的老口径（不足 50 单位才并页）。
  */
-export function paginateArticle(source: string, reference: string, direction: Direction): ArticlePage[] {
+export function paginateArticle(
+  source: string,
+  reference: string,
+  direction: Direction,
+  mergeBelow: number = PAGE_RULE.mergeBelow,
+): ArticlePage[] {
   const paragraphs = splitSections(source)
   if (paragraphs.length === 0) return []
   const translations = splitSections(reference)
@@ -157,7 +169,7 @@ export function paginateArticle(source: string, reference: string, direction: Di
      * 一页里的第一段本身就是长段时（total 一开始就够），第二段立刻另起一页，
      * 这正是"一段一段出"要的结果。
      */
-    if (total >= PAGE_RULE.mergeBelow) {
+    if (total >= mergeBelow) {
       groups.push({ from, to: index })
       from = index
       total = units[index] ?? 0
@@ -171,7 +183,7 @@ export function paginateArticle(source: string, reference: string, direction: Di
   if (groups.length > 1) {
     const last = groups[groups.length - 1]
     const previous = groups[groups.length - 2]
-    if (last && previous && sumOfRange(units, last.from, last.to) < PAGE_RULE.mergeBelow) {
+    if (last && previous && sumOfRange(units, last.from, last.to) < mergeBelow) {
       previous.to = last.to
       groups.pop()
     }
