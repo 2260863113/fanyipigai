@@ -84,6 +84,10 @@ export const MAX_PASSWORD_LEN = 128
 export const MAX_POST_LEN = 200
 export const MAX_REPLY_LEN = 100
 
+/** 公告的长度上限（与 `src/server/limits.ts` 一致） */
+export const MAX_ANNOUNCEMENT_TITLE = 60
+export const MAX_ANNOUNCEMENT_CONTENT = 2000
+
 /** 接口失败。`status` 为 0 表示根本没连上（网络层）。 */
 export class ApiFailure extends Error {
   constructor(
@@ -167,11 +171,37 @@ export const boardApi = {
     request<{ ok: true }>(`/api/board/reply/${id}`, { method: 'DELETE', token }),
 }
 
+export interface Announcement {
+  id: number
+  title: string
+  content: string
+  pinned: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/** 公告：谁都能读（登录与否都行），只有管理员能写。 */
+export const announcementApi = {
+  list: () => request<{ announcements: Announcement[] }>('/api/announcements'),
+}
+
+export interface AnnouncementInput {
+  title: string
+  content: string
+  pinned: boolean
+}
+
 export const adminApi = {
   users: (token: string) => request<{ users: AdminUser[] }>('/api/admin/users', { token }),
   logs: (token: string, before = 0) => request<{ logs: AccessLogEntry[] }>(`/api/admin/logs?before=${before}`, { token }),
   stats: (token: string, range: 'day' | 'week' | 'month') =>
     request<AccessStats>(`/api/admin/logs?view=stats&range=${range}`, { token }),
+  createAnnouncement: (token: string, input: AnnouncementInput) =>
+    request<{ announcement: Announcement }>('/api/admin/announcements', { method: 'POST', token, body: input }),
+  updateAnnouncement: (token: string, id: number, input: AnnouncementInput) =>
+    request<{ announcement: Announcement }>(`/api/admin/announcements/${id}`, { method: 'PUT', token, body: input }),
+  deleteAnnouncement: (token: string, id: number) =>
+    request<{ ok: true }>(`/api/admin/announcements/${id}`, { method: 'DELETE', token }),
 }
 
 /** 访问上报：不 await、失败也不打扰用户（它只是统计）。 */

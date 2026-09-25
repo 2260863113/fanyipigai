@@ -73,7 +73,7 @@ export function TopBar({
           type="button"
           className={panel === 'board' ? 'mode-tab mode-tab-active' : 'mode-tab'}
           onClick={() => onSelectPanel('board')}
-          title="留言板：练下来的心得、题目问题都可以写在这里（登录后才能发言）"
+          title="留言板"
         >
           留言板
         </button>
@@ -82,7 +82,7 @@ export function TopBar({
             type="button"
             className={panel === 'admin' ? 'mode-tab mode-tab-active' : 'mode-tab'}
             onClick={() => onSelectPanel('admin')}
-            title="用户管理与访问日志（只有管理员看得到）"
+            title="用户管理、日志与公告"
           >
             管理
           </button>
@@ -100,7 +100,7 @@ export function TopBar({
             type="button"
             className={`btn btn-ghost account-button${panel === 'profile' ? ' account-button-active' : ''}`}
             onClick={() => onSelectPanel('profile')}
-            title="个人中心：头像、用户名、密码、退出登录"
+            title="个人中心"
           >
             <span className="account-avatar">
               {user.avatar ? <img src={user.avatar.dataUrl} alt="" /> : initialOf(user.username)}

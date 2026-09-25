@@ -1073,8 +1073,10 @@ functions/         Cloudflare Pages Functions（线上那一半的真路由；�
   api/auth/{salt,register,login,logout,me,profile}.ts   注册登录与会话
   api/board/{index,[id],reply/index,reply/[id]}.ts      留言板（只能删自己的）
   api/admin/{users,logs}.ts                             用户管理 + 访问日志（仅管理员）
+  api/announcements.ts                                  公告列表（公开可读）
+  api/admin/announcements{,/[id]}.ts                    发布/修改/删除公告（仅管理员）
   api/visit.ts                                          访问上报（不含 IP）
-schema.sql         账号/会话/留言板/访问日志四张表（D1）
+schema.sql         账号/会话/留言板/访问日志/公告五张表（D1）
 wrangler.toml      Pages 项目名、构建输出目录与 **D1 绑定**
 vite-plugin-judge-api.ts  本地开发用的 /api/*（只剩宿主那一层：密钥、日志、存档；逻辑在 src/server/api.ts）
 启动.bat / start.ps1      Windows 一键启动

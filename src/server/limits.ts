@@ -21,6 +21,10 @@ export const MAX_AVATAR_DATAURL_LEN = 40 * 1024
 /** 用户名长度上限（与 `src/server/validate.ts` 的 cleanUsername、前端 cleanUsername 一致） */
 export const MAX_USERNAME_LEN = 24
 
+/** 公告标题/正文长度上限（与 `AdminView.tsx` 的 maxLength 一致） */
+export const MAX_ANNOUNCEMENT_TITLE = 60
+export const MAX_ANNOUNCEMENT_CONTENT = 2000
+
 /** 密码长度下限（与前端 `validPassword` 一致；上限只管住荒谬输入） */
 export const MIN_PASSWORD_LEN = 6
 export const MAX_PASSWORD_LEN = 128

@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS access_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_access_logs_created ON access_logs(created_at DESC);
 
+-- 公告：只有管理员能发（标题 ≤60 字、正文 ≤2000 字，纯文本），pinned=1 表示置顶。
+-- 留言板页面把它排在帖子上面，按"置顶优先 + 时间倒序"显示（排序在 /api/announcements 里）。
+CREATE TABLE IF NOT EXISTS announcements (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT    NOT NULL,
+  content    TEXT    NOT NULL,
+  pinned     INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 -- ⚠️ 建完之后**没有**管理员：`is_admin` 没有自助入口（注册接口一律写 0）。
 -- 指定第一个管理员：
 --   npx wrangler d1 execute fanyipigai-db --remote \

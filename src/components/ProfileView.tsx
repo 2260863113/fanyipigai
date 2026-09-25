@@ -39,9 +39,6 @@ export function ProfileView({
     return (
       <section className="panel-page">
         <h2 className="panel-title">个人中心</h2>
-        <p className="panel-lead">
-          还没有登录。登录之后可以提交批改、在留言板发言，也能在这里换头像和密码。
-        </p>
         <button type="button" className="btn btn-primary" onClick={onRequireLogin}>
           登录 / 注册
         </button>
@@ -110,8 +107,7 @@ export function ProfileView({
             {user.isAdmin ? <span className="badge-admin">管理员</span> : null}
           </p>
           <p className="panel-lead">
-            注册于 {new Date(user.createdAt).toLocaleDateString('zh-CN')} ·
-            本机存着 {recordCount} 条练习记录（记录只在这台浏览器里，不跟着账号走）
+            注册于 {new Date(user.createdAt).toLocaleDateString('zh-CN')} · 本机 {recordCount} 条练习记录
           </p>
           <div className="profile-actions">
             <label className="btn btn-ghost profile-upload">
@@ -140,7 +136,6 @@ export function ProfileView({
             onChange={(event) => setUsername(event.target.value)}
             required
           />
-          <p className="panel-lead">改名之后，以前在留言板里发的帖子会跟着显示新名字。</p>
         </fieldset>
 
         <fieldset className="profile-section">

@@ -225,6 +225,48 @@ try {
         (statsRes.body.points ?? []).every((p) => typeof p.count === 'number' && typeof p.label === 'string'),
         '每个点都有 label 与 count',
       )
+
+      /* 公告：谁都能读，只有管理员能写 */
+      const publicBefore = await call('/api/announcements')
+      check(publicBefore.status === 200 && Array.isArray(publicBefore.body.announcements), '没登录也能读公告列表')
+
+      const anonWrite = await call('/api/admin/announcements', {
+        method: 'POST',
+        body: { title: '游客发的', content: '不该成功' },
+      })
+      check(anonWrite.status === 403, '没登录发公告 → 403')
+
+      const created = await call('/api/admin/announcements', {
+        method: 'POST',
+        token: adminToken,
+        body: { title: `验收公告 ${suffix}`, content: '这条是验收脚本发的。', pinned: true },
+      })
+      check(created.status === 201 && typeof created.body.announcement?.id === 'number', '管理员发公告 → 201')
+      const announceId = created.body.announcement.id
+
+      const emptyTitle = await call('/api/admin/announcements', {
+        method: 'POST',
+        token: adminToken,
+        body: { title: '   ', content: '标题全是空白' },
+      })
+      check(emptyTitle.status === 400, '标题只有空白 → 400')
+
+      const listed = await call('/api/announcements')
+      const mine = (listed.body.announcements ?? []).find((item) => item.id === announceId)
+      check(Boolean(mine), '公告出现在公开列表里')
+      check(listed.body.announcements?.[0]?.id === announceId, '置顶的公告排在最前面（公开列表按置顶优先 + 时间倒序）')
+
+      const updated = await call(`/api/admin/announcements/${announceId}`, {
+        method: 'PUT',
+        token: adminToken,
+        body: { title: `验收公告 ${suffix}`, content: '改过的内容。', pinned: false },
+      })
+      check(updated.status === 200 && updated.body.announcement?.content === '改过的内容。', '改公告 → 200 且内容换了')
+
+      const removed = await call(`/api/admin/announcements/${announceId}`, { method: 'DELETE', token: adminToken })
+      check(removed.status === 200, '删公告 → 200')
+      const gone = await call('/api/announcements')
+      check(!(gone.body.announcements ?? []).some((item) => item.id === announceId), '删掉的公告不再出现在公开列表里')
     }
   } else {
     skipped += 1

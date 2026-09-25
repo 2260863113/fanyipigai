@@ -9,13 +9,22 @@
  */
 
 import { useCallback, useEffect, useState, type FormEvent, type JSX } from 'react'
-import { MAX_POST_LEN, MAX_REPLY_LEN, boardApi, type BoardPost, type BoardReply } from './auth/api'
+import {
+  MAX_POST_LEN,
+  MAX_REPLY_LEN,
+  announcementApi,
+  boardApi,
+  type Announcement,
+  type BoardPost,
+  type BoardReply,
+} from './auth/api'
 import { initialOf, relativeTime } from './auth/format'
 import { useAuth } from './auth/store'
 
 export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): JSX.Element {
   const auth = useAuth()
   const [posts, setPosts] = useState<BoardPost[]>([])
+  const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [draft, setDraft] = useState('')
   const [replyDrafts, setReplyDrafts] = useState<Record<number, string>>({})
   const [expanded, setExpanded] = useState<Record<number, BoardReply[]>>({})
@@ -26,8 +35,9 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
   const reload = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      const res = await boardApi.list()
-      setPosts(res.posts)
+      const [boardRes, announceRes] = await Promise.all([boardApi.list(), announcementApi.list()])
+      setPosts(boardRes.posts)
+      setAnnouncements(announceRes.announcements)
       setExpanded({})
       setError(null)
     } catch (caught) {
@@ -100,17 +110,28 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
   return (
     <section className="panel-page">
       <h2 className="panel-title">留言板</h2>
-      <p className="panel-lead">
-        练下来的心得、题目问题、对站点的建议都可以写在这里。任何人都能看；
-        {auth.session ? '发帖与回复已经可用。' : '登录之后才能发帖与回复。'}
-      </p>
+
+      {announcements.length > 0 ? (
+        <ul className="announce-list">
+          {announcements.map((item) => (
+            <li key={item.id} className="announce-item">
+              <div className="announce-head">
+                <span className="announce-title">{item.title}</span>
+                {item.pinned ? <span className="badge-admin">置顶</span> : null}
+                <span className="board-time">{relativeTime(item.createdAt)}</span>
+              </div>
+              <p className="announce-content">{item.content}</p>
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       <form className="board-compose" onSubmit={submitPost}>
         <textarea
           value={draft}
           maxLength={MAX_POST_LEN}
           rows={3}
-          placeholder={auth.session ? '写点什么…' : '登录之后就能在这里发帖'}
+          placeholder="写点什么…"
           onChange={(event) => setDraft(event.target.value)}
         />
         <div className="board-compose-foot">
@@ -130,8 +151,8 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
       </form>
 
       {error ? <p className="auth-error">{error}</p> : null}
-      {loading ? <p className="panel-lead">正在读留言…</p> : null}
-      {!loading && posts.length === 0 ? <p className="panel-lead">还没有人留言，你可以是第一个。</p> : null}
+      {loading ? <p className="panel-lead">正在读…</p> : null}
+      {!loading && posts.length === 0 ? <p className="panel-lead">还没有人留言。</p> : null}
 
       <ul className="board-list">
         {posts.map((post) => {
@@ -188,7 +209,7 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
                   type="text"
                   value={replyDrafts[post.id] ?? ''}
                   maxLength={MAX_REPLY_LEN}
-                  placeholder={auth.session ? '回复…' : '登录之后才能回复'}
+                  placeholder="回复…"
                   onChange={(event) => setReplyDrafts((previous) => ({ ...previous, [post.id]: event.target.value }))}
                 />
                 {auth.session ? (

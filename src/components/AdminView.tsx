@@ -1,25 +1,33 @@
 /**
- * 管理页：用户管理 + 日志记录。只有 `isAdmin` 的账号进得来（服务端也会再拦一次）。
+ * 管理页：用户管理 + 日志记录 + 发布公告。只有 `isAdmin` 的账号进得来（服务端也会再拦一次）。
  *
- * 复用自「地图记忆」的 `ui/adminPanel.ts`：**用户列表只读**（与来源项目一致，
- * 没有封禁/删号——一个练习站用不上，加了反而是风险面），访问日志能看明细，
- * 也能看按天/按小时分桶的流量。
+ * 复用自「地图记忆」的 `ui/adminPanel.ts`（三块都有：用户列表只读、访问日志与流量分桶、
+ * 公告的增删改）。界面按 React 重写。
  *
  * ⚠️ 界面上的 `isAdmin` 判断只是"不给看"：真正的权限在 `requireAdmin` 那一层（见 guard.ts）。
  * 前端藏起来的东西，改一行 JS 就能打开；这里从来不是安全边界。
  */
 
-import { useCallback, useEffect, useState, type JSX } from 'react'
-import { adminApi, type AccessLogEntry, type AccessStats, type AdminUser } from './auth/api'
+import { useCallback, useEffect, useState, type FormEvent, type JSX } from 'react'
+import {
+  MAX_ANNOUNCEMENT_CONTENT,
+  MAX_ANNOUNCEMENT_TITLE,
+  adminApi,
+  announcementApi,
+  type AccessLogEntry,
+  type AccessStats,
+  type AdminUser,
+  type Announcement,
+} from './auth/api'
 import { formatTime, initialOf, shortenUserAgent } from './auth/format'
 import { useAuth } from './auth/store'
 
-type AdminTab = 'users' | 'logs'
+type AdminTab = 'users' | 'logs' | 'announcements'
 
 const RANGE_LABEL: Record<AccessStats['range'], string> = {
-  day: '近一天（按小时）',
-  week: '近七天（按天）',
-  month: '近一个月（按天）',
+  day: '近一天',
+  week: '近七天',
+  month: '近一个月',
 }
 
 export function AdminView(): JSX.Element {
@@ -30,116 +38,141 @@ export function AdminView(): JSX.Element {
   const [logs, setLogs] = useState<AccessLogEntry[]>([])
   const [stats, setStats] = useState<AccessStats | null>(null)
   const [range, setRange] = useState<AccessStats['range']>('week')
+  const [announcements, setAnnouncements] = useState<Announcement[]>([])
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [title, setTitle] = useState('')
+  const [content, setContent] = useState('')
+  const [pinned, setPinned] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  const loadUsers = useCallback(async (): Promise<void> => {
+  const run = useCallback(async (work: () => Promise<void>): Promise<void> => {
     setLoading(true)
     try {
-      setUsers((await adminApi.users(token)).users)
+      await work()
       setError(null)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
       setLoading(false)
     }
-  }, [token])
+  }, [])
 
+  const loadUsers = useCallback(
+    () => run(async () => setUsers((await adminApi.users(token)).users)),
+    [run, token],
+  )
   const loadLogs = useCallback(
-    async (nextRange: AccessStats['range']): Promise<void> => {
-      setLoading(true)
-      try {
+    (nextRange: AccessStats['range']) =>
+      run(async () => {
         const [logRes, statRes] = await Promise.all([adminApi.logs(token), adminApi.stats(token, nextRange)])
         setLogs(logRes.logs)
         setStats(statRes)
-        setError(null)
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : String(caught))
-      } finally {
-        setLoading(false)
-      }
-    },
-    [token],
+      }),
+    [run, token],
+  )
+  const loadAnnouncements = useCallback(
+    () => run(async () => setAnnouncements((await announcementApi.list()).announcements)),
+    [run],
   )
 
   useEffect(() => {
     if (!auth.isAdmin) return
     if (tab === 'users') void loadUsers()
-    else void loadLogs(range)
-  }, [auth.isAdmin, tab, range, loadUsers, loadLogs])
+    else if (tab === 'logs') void loadLogs(range)
+    else void loadAnnouncements()
+  }, [auth.isAdmin, tab, range, loadUsers, loadLogs, loadAnnouncements])
 
   if (!auth.isAdmin) {
     return (
       <section className="panel-page">
         <h2 className="panel-title">管理</h2>
-        <p className="panel-lead">这个页面只有管理员能看。当前账号不是管理员。</p>
       </section>
     )
   }
 
   const peak = stats ? Math.max(1, ...stats.points.map((point) => point.count)) : 1
 
+  function resetForm(): void {
+    setEditingId(null)
+    setTitle('')
+    setContent('')
+    setPinned(false)
+  }
+
+  function submitAnnouncement(event: FormEvent): void {
+    event.preventDefault()
+    const payload = { title, content, pinned }
+    void run(async () => {
+      if (editingId === null) {
+        const res = await adminApi.createAnnouncement(token, payload)
+        setAnnouncements((previous) => [res.announcement, ...previous])
+      } else {
+        const res = await adminApi.updateAnnouncement(token, editingId, payload)
+        setAnnouncements((previous) => previous.map((item) => (item.id === editingId ? res.announcement : item)))
+      }
+      resetForm()
+      await loadAnnouncements()
+    })
+  }
+
   return (
     <section className="panel-page">
       <h2 className="panel-title">管理</h2>
 
       <div className="auth-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'users'}
-          className={`auth-tab${tab === 'users' ? ' auth-tab-active' : ''}`}
-          onClick={() => setTab('users')}
-        >
-          用户管理
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'logs'}
-          className={`auth-tab${tab === 'logs' ? ' auth-tab-active' : ''}`}
-          onClick={() => setTab('logs')}
-        >
-          日志记录
-        </button>
+        {(
+          [
+            ['users', '用户管理'],
+            ['logs', '日志记录'],
+            ['announcements', '发布公告'],
+          ] as Array<[AdminTab, string]>
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            className={`auth-tab${tab === key ? ' auth-tab-active' : ''}`}
+            onClick={() => setTab(key)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {error ? <p className="auth-error">{error}</p> : null}
       {loading ? <p className="panel-lead">正在读…</p> : null}
 
       {tab === 'users' ? (
-        <>
-          <p className="panel-lead">
-            共 {users.length} 个账号。管理权限没有自助入口，只能由站主用 SQL 指定
-            （`UPDATE users SET is_admin = 1 WHERE username = '…'`）。
-          </p>
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>用户</th>
-                <th>身份</th>
-                <th>注册时间</th>
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>用户</th>
+              <th>身份</th>
+              <th>注册时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((user) => (
+              <tr key={user.id}>
+                <td>{user.id}</td>
+                <td>
+                  <span className="board-avatar board-avatar-small">
+                    {user.avatar ? <img src={user.avatar} alt="" /> : initialOf(user.username)}
+                  </span>
+                  {user.username}
+                </td>
+                <td>{user.isAdmin ? <span className="badge-admin">管理员</span> : '普通用户'}</td>
+                <td>{formatTime(user.createdAt)}</td>
               </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <tr key={user.id}>
-                  <td>{user.id}</td>
-                  <td>
-                    <span className="board-avatar board-avatar-small">
-                      {user.avatar ? <img src={user.avatar} alt="" /> : initialOf(user.username)}
-                    </span>
-                    {user.username}
-                  </td>
-                  <td>{user.isAdmin ? <span className="badge-admin">管理员</span> : '普通用户'}</td>
-                  <td>{formatTime(user.createdAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      ) : (
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+
+      {tab === 'logs' ? (
         <>
           <div className="admin-range">
             {(Object.keys(RANGE_LABEL) as Array<AccessStats['range']>).map((item) => (
@@ -168,9 +201,6 @@ export function AdminView(): JSX.Element {
             </ul>
           ) : null}
 
-          <p className="panel-lead">
-            最近 {logs.length} 条访问明细（不含 IP）。登录用户显示名字，未登录显示「游客」。
-          </p>
           <table className="admin-table">
             <thead>
               <tr>
@@ -192,7 +222,86 @@ export function AdminView(): JSX.Element {
             </tbody>
           </table>
         </>
-      )}
+      ) : null}
+
+      {tab === 'announcements' ? (
+        <>
+          <form className="announce-form" onSubmit={submitAnnouncement}>
+            <input
+              type="text"
+              value={title}
+              maxLength={MAX_ANNOUNCEMENT_TITLE}
+              placeholder={`标题（≤${MAX_ANNOUNCEMENT_TITLE} 字）`}
+              onChange={(event) => setTitle(event.target.value)}
+              required
+            />
+            <textarea
+              value={content}
+              maxLength={MAX_ANNOUNCEMENT_CONTENT}
+              rows={5}
+              placeholder={`正文（≤${MAX_ANNOUNCEMENT_CONTENT} 字）`}
+              onChange={(event) => setContent(event.target.value)}
+              required
+            />
+            <div className="announce-form-foot">
+              <label className="gen-check">
+                <input type="checkbox" checked={pinned} onChange={(event) => setPinned(event.target.checked)} />
+                置顶
+              </label>
+              <div className="announce-form-buttons">
+                {editingId === null ? null : (
+                  <button type="button" className="btn btn-ghost" onClick={resetForm}>
+                    取消编辑
+                  </button>
+                )}
+                <button type="submit" className="btn btn-primary" disabled={loading || !title.trim() || !content.trim()}>
+                  {editingId === null ? '发布' : '保存修改'}
+                </button>
+              </div>
+            </div>
+          </form>
+
+          <ul className="announce-list">
+            {announcements.map((item) => (
+              <li key={item.id} className="announce-item">
+                <div className="announce-head">
+                  <span className="announce-title">{item.title}</span>
+                  {item.pinned ? <span className="badge-admin">置顶</span> : null}
+                  <span className="board-time">{formatTime(item.createdAt)}</span>
+                  <div className="announce-actions">
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => {
+                        setEditingId(item.id)
+                        setTitle(item.title)
+                        setContent(item.content)
+                        setPinned(item.pinned)
+                      }}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={() =>
+                        void run(async () => {
+                          await adminApi.deleteAnnouncement(token, item.id)
+                          setAnnouncements((previous) => previous.filter((one) => one.id !== item.id))
+                          if (editingId === item.id) resetForm()
+                        })
+                      }
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+                <p className="announce-content">{item.content}</p>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
     </section>
   )
 }

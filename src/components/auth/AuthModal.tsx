@@ -77,7 +77,6 @@ export function AuthModal({
   return (
     <Modal
       title={mode === 'login' ? '登录 翻译批改' : '注册 翻译批改'}
-      note={mode === 'login' ? '登录之后才能提交批改' : '注册即可用，不需要邮箱'}
       onClose={onClose}
     >
       {reason ? <p className="auth-reason">{reason}</p> : null}
@@ -148,11 +147,6 @@ export function AuthModal({
           {busy ? '正在计算密码…' : mode === 'login' ? '登录' : '注册并登录'}
         </button>
       </form>
-
-      <p className="auth-note">
-        密码不会明文离开这台设备——浏览器会先做 12 万次 PBKDF2-SHA-256，只把结果发出去。
-        登录状态在浏览器里保留 30 天，个人中心里可以退出。
-      </p>
     </Modal>
   )
 }

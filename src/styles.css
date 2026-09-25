@@ -3412,3 +3412,83 @@ button {
   width: 56px;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── 公告（留言板顶部与管理员发布那块共用） ─────────────────── */
+
+.announce-list {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.announce-item {
+  padding: 12px 14px;
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--radius);
+  background: var(--accent-tint);
+}
+
+.announce-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.announce-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.announce-content {
+  margin: 0;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.announce-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.announce-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-soft);
+}
+
+.announce-form input[type='text'],
+.announce-form textarea {
+  padding: 8px 11px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: var(--paper-input);
+  color: var(--ink);
+  font: inherit;
+}
+
+.announce-form textarea {
+  resize: vertical;
+  line-height: 1.7;
+}
+
+.announce-form-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.announce-form-buttons {
+  display: flex;
+  gap: 8px;
+}
