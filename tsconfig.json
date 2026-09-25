@@ -16,5 +16,7 @@
     "noEmit": true,
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "vite.config.ts", "vite-plugin-judge-api.ts"]
+  // functions/ 是 Cloudflare Pages Functions（线上那一半的服务端）：
+  // 它按导出名认端点，因此不引 workers-types，用的就是这里那套 DOM 类型。
+  "include": ["src", "functions", "vite.config.ts", "vite-plugin-judge-api.ts"]
 }

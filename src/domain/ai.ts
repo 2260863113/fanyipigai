@@ -28,7 +28,7 @@ import {
 import { parseCorrection, type ParseSuccess } from './parse'
 import { parseRefine, type RefineResult } from './refine'
 import { validateCorrection } from './validate'
-import { FailureCollector } from './archive'
+import { FailureCollector } from './failure-collector'
 import { mergeSectionCorrections, rebuildFromSections, type Section } from './sections'
 import { parseGenerated, toGeneratedExercise, type GeneratedExercise } from './generate'
 
