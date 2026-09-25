@@ -4021,103 +4021,16 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   }
 
   /*
-   * 服务端那一半：口令门、登录凭证、以及"两个宿主共用一份实现"。
+   * 服务端那一半：三个端点的"路由这一层"接得上，以及**两个宿主共用一份实现**。
    *
-   * 这一段全是**纯函数与端点本身**，不发网络请求、不花钱：签到 cookie 里的过期时间
-   * 只有服务端验过才算数、签名被改一定进不来、缺配置一定拒绝……
-   * 这些判断错了的后果是"谁都能拿站主的 API 余额去批改"，所以每一条分支都要钉住。
+   * 这一段不发网络请求、也不花钱：刻意不配 DEEPSEEK_API_KEY，因此最远只走到 503。
+   *
+   * ⚠️ 这里原先还有三十来项口令门与登录凭证的检查。用户要求"去掉进入口令这一环节，
+   * 任何人都可以访问"之后，那道门整个拆掉了（连同 `gate.ts` / `session.ts` /
+   * `login.ts` / `logout.ts`，见 ADR 0027），这些检查也跟着删——留着只会变成
+   * "测一个已经不存在的东西"，而那种检查最坏的结果是让人以为门还在。
    */
   try {
-    const session = await import('../src/server/session')
-    const { decideGate } = await import('../src/server/gate')
-
-    const secret = 'test-secret-not-a-real-one'
-    const now = 1_800_000_000
-
-    check(await session.passwordMatches('正确口令', '正确口令'), '口令对得上就是放行')
-    check(!(await session.passwordMatches('正确口令', '错误口令')), '口令不对就是拒绝')
-    check(
-      !(await session.passwordMatches('正确口令', '')),
-      '空口令不能进（否则"没配口令"会变成"空口令就能进"）',
-    )
-    check(!(await session.passwordMatches('', '任意')), '期望值为空时一律拒绝')
-    check(!(await session.passwordMatches('abc', 'abcdef')), '长度不同也照常拒绝（不抛异常）')
-
-    // 凭证：有效期由**服务端**说了算，浏览器拿着的那串里写的数字不作数
-    const good = await session.signSession(secret, now + 3600)
-    const parts = good.split('.')
-    const signature = parts[2] ?? ''
-    check(await session.verifySession(secret, good, now), '自己签的凭证自己能验过')
-    check(!(await session.verifySession(secret, good, now + 7200)), '过期之后就不认了')
-    check(!(await session.verifySession('另一个密钥', good, now)), '换一个密钥签的凭证验不过')
-    check(
-      !(await session.verifySession(secret, `v1.${Number(parts[1]) + 9_999_999}.${signature}`, now)),
-      '把过期时间往后改会被签名挡住（这正是签名存在的全部意义）',
-    )
-    check(
-      !(await session.verifySession(secret, `v1.${parts[1]}.${signature.slice(0, -2)}aa`, now)),
-      '签名改动一位就作废',
-    )
-    check(!(await session.verifySession(secret, 'v1.9999999999', now)), '只有两段的串不算凭证')
-    check(!(await session.verifySession(secret, 'v2.9999999999.abc', now)), '版本号不认识就拒绝')
-    check(!(await session.verifySession(secret, undefined, now)), '没有 cookie 就是没登录')
-
-    check(
-      session.readCookie('a=1; fanyipigai_session=xyz; b=2', session.SESSION_COOKIE_NAME) === 'xyz',
-      '从一堆 cookie 里能挑出自己那一个',
-    )
-    check(
-      session.readCookie('fanyipigai_session_x=1', session.SESSION_COOKIE_NAME) === undefined,
-      '名字只是前缀相同的不算（不许含糊匹配）',
-    )
-    check(session.readCookie(null, session.SESSION_COOKIE_NAME) === undefined, '没有 Cookie 头时不抛异常')
-
-    const withSecure = session.sessionCookie('v', true)
-    check(
-      /HttpOnly/.test(withSecure) && /SameSite=Lax/.test(withSecure) && /Path=\//.test(withSecure) && /Secure/.test(withSecure),
-      '凭证 cookie 带 HttpOnly + SameSite=Lax + Secure（脚本偷不走、别的站带不上）',
-    )
-    check(
-      !/Secure/.test(session.sessionCookie('v', false)),
-      'http 上不加 Secure（加了浏览器不回传，表现为"口令输对了却一直退回登录页"）',
-    )
-    check(/Max-Age=0/.test(session.clearSessionCookie(true)), '退出是当场作废')
-
-    // 门口的判定：缺配置一定拒绝（fail-closed），这是"扫码就花你钱"与"配置没做完"之间的取舍
-    const gateKind = async (input: {
-      pathname: string
-      cookie: string | null
-      accessPassword?: string
-      sessionSecret?: string
-    }): Promise<string> =>
-      (await decideGate({ now, accessPassword: 'pw', sessionSecret: secret, ...input })).kind
-
-    check(
-      (await gateKind({ pathname: '/', cookie: null, accessPassword: '' })) === 'misconfigured',
-      '缺 ACCESS_PASSWORD 时拒绝一切（放行等于谁都能花站主的 API 余额）',
-    )
-    check(
-      (await gateKind({ pathname: '/', cookie: null, sessionSecret: '' })) === 'misconfigured',
-      '缺 SESSION_SECRET 时同样拒绝——签不出凭证就没法发凭证',
-    )
-    check((await gateKind({ pathname: '/login', cookie: null })) === 'allow', '登录页自己不设门（否则永远进不去）')
-    check(
-      (await gateKind({ pathname: '/logout', cookie: null })) === 'allow',
-      '退出入口不设门（拿着过期凭证的人也要点得动，否则会绕圈）',
-    )
-    check((await gateKind({ pathname: '/', cookie: null })) === 'redirect', '没登录看页面 → 送去登录页')
-    check(
-      (await gateKind({ pathname: '/api/judge', cookie: null })) === 'unauthorized',
-      '没登录调接口 → 401 JSON（回 302 只会让前端报"JSON 解析失败"）',
-    )
-    const cookieHeader = `${session.SESSION_COOKIE_NAME}=${good}`
-    check((await gateKind({ pathname: '/', cookie: cookieHeader })) === 'allow', '带合法凭证看页面 → 放行')
-    check((await gateKind({ pathname: '/api/judge', cookie: cookieHeader })) === 'allow', '带合法凭证调接口 → 放行')
-    const expired = await session.signSession(secret, now - 10)
-    check(
-      (await gateKind({ pathname: '/', cookie: `${session.SESSION_COOKIE_NAME}=${expired}` })) === 'redirect',
-      '凭证过期就当没登录',
-    )
 
     /*
      * Pages 端的三个端点：用假的 Request 直接调，验证"路由这一层"接得上。
