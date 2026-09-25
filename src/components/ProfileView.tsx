@@ -1,11 +1,14 @@
 /**
- * 个人中心：头像、用户名、改密码、退出，外加一条"这台机器上练了多少次"。
+ * 个人中心：头像、用户名、改密码。
  *
- * 复用自「地图记忆」的 `ui/authPanel.ts`，但**界面是重写的**（那边是原生 DOM，
- * 这里是 React）；沿用它的三件事：改用户名、改头像、改密码要**先算旧密码的哈希**。
+ * **结构与类名照搬「地图记忆」的 `src/ui/authPanel.ts`** 的"个人资料"那一屏
+ * （用户要求这一批功能的 UI 完全仿造那个项目）：`.profile-avatar-row` + `.user-avatar.profile-avatar`
+ * + `.avatar-upload`、`.form-row`（标签与输入框同行）、`.card-actions` + `.primary` / `.ghost`。
+ * 样式来自 `src/styles-map-memory.css`。
  *
- * ⚠️ 最后那条不是多余的一步：会话 token 可能落在别人的设备上，
- * 光有 token 不该能改掉密码（服务端也按这条把关，见 `src/server/profile.ts`）。
+ * 与那边**不一样**的两处，都是这边的前置条件：
+ *  1. 它还有"所在省 / 市"两个联动输入（`location-grid` / `auth-select-wrap`）——本项目没有 hometown 字段，不画。
+ *  2. 退出登录与"本机练习记录条数"是这边加的一行（`.card-actions` 里那颗 `ghost`）。
  */
 
 import { useState, type ChangeEvent, type FormEvent, type JSX } from 'react'
@@ -18,7 +21,7 @@ export function ProfileView({
   onRequireLogin,
   onOpenAdmin,
 }: {
-  /** 本机（这台浏览器）的练习记录条数——练习记录仍然只存在本地，不跟着账号走 */
+  /** 本机（这台浏览器）的练习记录条数 */
   recordCount: number
   onRequireLogin: () => void
   onOpenAdmin: () => void
@@ -30,19 +33,20 @@ export function ProfileView({
   const [avatar, setAvatar] = useState<{ dataUrl: string; name: string; size: number; type: string } | null>(null)
   const [oldPassword, setOldPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   if (!user) {
     return (
-      <section className="panel-page">
-        <h2 className="panel-title">个人中心</h2>
-        <button type="button" className="btn btn-primary" onClick={onRequireLogin}>
-          登录 / 注册
-        </button>
-      </section>
+      <div className="admin-container">
+        <h2 className="admin-heading">个人中心</h2>
+        <div className="card-actions">
+          <button type="button" className="primary" onClick={onRequireLogin}>
+            登录 / 注册
+          </button>
+        </div>
+      </div>
     )
   }
 
@@ -56,7 +60,7 @@ export function ProfileView({
     setMessage(null)
     try {
       setAvatar(await compressImage(file))
-      setMessage('图片已压好，点「保存」才会生效')
+      setMessage('图片已压好，点「保存」生效')
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
     }
@@ -65,10 +69,6 @@ export function ProfileView({
   async function save(event: FormEvent): Promise<void> {
     event.preventDefault()
     if (busy) return
-    if (newPassword && newPassword !== confirmPassword) {
-      setError('两次输入的新密码不一样')
-      return
-    }
     setBusy(true)
     setError(null)
     setMessage(null)
@@ -80,7 +80,6 @@ export function ProfileView({
       })
       setOldPassword('')
       setNewPassword('')
-      setConfirmPassword('')
       setMessage('已保存')
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -90,86 +89,70 @@ export function ProfileView({
   }
 
   return (
-    <section className="panel-page">
-      <h2 className="panel-title">个人中心</h2>
+    <div className="admin-container">
+      <h2 className="admin-heading">个人中心</h2>
 
-      <div className="profile-head">
-        <div className="profile-avatar">
-          {shownAvatar ? (
-            <img src={shownAvatar} alt="头像" />
-          ) : (
-            <span className="profile-avatar-letter">{initialOf(user.username)}</span>
-          )}
-        </div>
-        <div className="profile-meta">
-          <p className="profile-name">
-            {user.username}
-            {user.isAdmin ? <span className="badge-admin">管理员</span> : null}
-          </p>
-          <p className="panel-lead">
-            注册于 {new Date(user.createdAt).toLocaleDateString('zh-CN')} · 本机 {recordCount} 条练习记录
-          </p>
-          <div className="profile-actions">
-            <label className="btn btn-ghost profile-upload">
-              换头像
-              <input type="file" accept="image/*" onChange={pickAvatar} hidden />
-            </label>
-            {user.isAdmin ? (
-              <button type="button" className="btn btn-ghost" onClick={onOpenAdmin}>
-                用户管理 / 日志
-              </button>
-            ) : null}
-            <button type="button" className="btn btn-danger" onClick={() => auth.logout()}>
-              退出登录
-            </button>
+      <form className="auth-card" onSubmit={save}>
+        <div className="profile-avatar-row">
+          <div
+            className="user-avatar profile-avatar"
+            style={shownAvatar ? { backgroundImage: `url(${shownAvatar})` } : undefined}
+          >
+            {shownAvatar ? '' : initialOf(user.username)}
           </div>
+          <label className="avatar-upload">
+            换头像
+            <input type="file" accept="image/*" onChange={pickAvatar} />
+          </label>
         </div>
-      </div>
 
-      <form className="profile-form" onSubmit={save}>
-        <fieldset className="profile-section">
-          <legend>用户名</legend>
+        <label className="form-row">
+          用户名
           <input
             type="text"
             value={username}
             maxLength={24}
+            autoComplete="username"
             onChange={(event) => setUsername(event.target.value)}
             required
           />
-        </fieldset>
+        </label>
 
-        <fieldset className="profile-section">
-          <legend>改密码（不改就留空）</legend>
+        <label className="form-row">
+          旧密码
           <input
             type="password"
             value={oldPassword}
-            placeholder="旧密码"
             autoComplete="current-password"
             onChange={(event) => setOldPassword(event.target.value)}
           />
+        </label>
+        <label className="form-row">
+          新密码
           <input
             type="password"
             value={newPassword}
-            placeholder="新密码（至少 6 位）"
             autoComplete="new-password"
             onChange={(event) => setNewPassword(event.target.value)}
           />
-          <input
-            type="password"
-            value={confirmPassword}
-            placeholder="再输一次新密码"
-            autoComplete="new-password"
-            onChange={(event) => setConfirmPassword(event.target.value)}
-          />
-        </fieldset>
+        </label>
 
-        {error ? <p className="auth-error">{error}</p> : null}
-        {message ? <p className="profile-ok">{message}</p> : null}
+        <p className="auth-message">{error ?? message ?? `本机 ${recordCount} 条练习记录`}</p>
 
-        <button type="submit" className="btn btn-primary" disabled={busy}>
-          {busy ? '正在保存…' : '保存'}
-        </button>
+        <div className="card-actions">
+          <button type="submit" className="primary" disabled={busy}>
+            {busy ? '正在保存…' : '保存'}
+          </button>
+          {user.isAdmin ? (
+            <button type="button" className="ghost" onClick={onOpenAdmin}>
+              管理
+            </button>
+          ) : null}
+          <button type="button" className="ghost" onClick={() => auth.logout()}>
+            退出登录
+          </button>
+        </div>
       </form>
-    </section>
+    </div>
   )
 }

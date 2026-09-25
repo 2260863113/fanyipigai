@@ -1890,16 +1890,28 @@ export function App(): JSX.Element {
         theme={theme}
       />
 
+      {/*
+        账号那三页（留言板 / 个人中心 / 管理）外面包一层 `.panel-page`：**整页滚动容器**。
+        里面那几个 `.board-container` / `.admin-container` / `.auth-card` 是**逐字搬自
+        「地图记忆」**的结构与类名（用户要求这一批功能的 UI 完全仿造那个项目），
+        它那边这些容器长在侧栏里、自己不需要滚动，因此这边补一层外壳（见 styles.css 的说明）。
+      */}
       {panel === 'board' ? (
-        <BoardView onRequireLogin={() => openAuth('留言板要登录之后才能发帖与回复。')} />
+        <div className="panel-page">
+          <BoardView onRequireLogin={() => openAuth('留言板要登录之后才能发帖与回复。')} />
+        </div>
       ) : panel === 'profile' ? (
-        <ProfileView
-          recordCount={records.length}
-          onRequireLogin={() => openAuth()}
-          onOpenAdmin={() => setPanel('admin')}
-        />
+        <div className="panel-page">
+          <ProfileView
+            recordCount={records.length}
+            onRequireLogin={() => openAuth()}
+            onOpenAdmin={() => setPanel('admin')}
+          />
+        </div>
       ) : panel === 'admin' ? (
-        <AdminView />
+        <div className="panel-page">
+          <AdminView />
+        </div>
       ) : tab === 'favorites' ? (
         <FavoritesView
           favorites={favorites}

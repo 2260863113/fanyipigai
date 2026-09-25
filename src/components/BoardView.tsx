@@ -1,11 +1,18 @@
 /**
  * 留言板：谁都能看，发帖与回复要登录。
  *
- * 复用自「地图记忆」的 `ui/boardPanel.ts`（列表带预览回复、点开看全部、只能删自己的），
- * 界面按 React 重写。
+ * **结构、类名与文案照搬「地图记忆」的 `src/ui/boardPanel.ts`**（用户要求这一批功能
+ * 的 UI 完全仿造那个项目），样式来自 `src/styles-map-memory.css`：
+ * `.board-container / board-composer / board-composer-actions / board-login-hint /
+ *  board-list / board-post / board-post-head / board-author / board-time / board-delete /
+ *  board-content / board-replies / board-reply / board-reply-head / board-post-actions /
+ *  board-reply-btn / board-reply-input / board-load-more / board-empty`，
+ * 按钮用它那边的 `primary` / `ghost`。
  *
- * ⚠️ 读**不需要登录**：没登录的人也该看得见大家在说什么，否则这个板子对新人是隐形的。
- * 只有写入（发帖、回复、删除）才要求登录——拦在服务端，界面只是提前把话说清楚。
+ * 与那边**不一样**的两处（都是这边的前置条件，不是随手改的）：
+ *  1. 它的回复框是"点「回复」才展开"（`board-reply-input` 平时隐藏）。这边照做，展开状态放在 React state 里。
+ *  2. 它的公告是另一个面板（`announcementPanel.ts`）。这边公告就排在留言板最上面，
+ *     用它那套 `.announcement-*` 类名与结构。
  */
 
 import { useCallback, useEffect, useState, type FormEvent, type JSX } from 'react'
@@ -18,7 +25,7 @@ import {
   type BoardPost,
   type BoardReply,
 } from './auth/api'
-import { initialOf, relativeTime } from './auth/format'
+import { relativeTime } from './auth/format'
 import { useAuth } from './auth/store'
 
 export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): JSX.Element {
@@ -27,8 +34,10 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [draft, setDraft] = useState('')
   const [replyDrafts, setReplyDrafts] = useState<Record<number, string>>({})
+  const [replyOpen, setReplyOpen] = useState<Record<number, boolean>>({})
   const [expanded, setExpanded] = useState<Record<number, BoardReply[]>>({})
   const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -39,9 +48,10 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
       setPosts(boardRes.posts)
       setAnnouncements(announceRes.announcements)
       setExpanded({})
-      setError(null)
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
+      setReplyOpen({})
+      setFailed(false)
+    } catch {
+      setFailed(true)
     } finally {
       setLoading(false)
     }
@@ -64,6 +74,8 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
     }
   }
 
+  const token = auth.session?.token ?? ''
+
   function submitPost(event: FormEvent): void {
     event.preventDefault()
     if (!auth.session) {
@@ -73,14 +85,13 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
     const content = draft.trim()
     if (!content) return
     void run(async () => {
-      const res = await boardApi.createPost(auth.session?.token ?? '', content)
+      const res = await boardApi.createPost(token, content)
       setPosts((previous) => [res.post, ...previous])
       setDraft('')
     })
   }
 
-  function submitReply(event: FormEvent, postId: number): void {
-    event.preventDefault()
+  function submitReply(postId: number): void {
     if (!auth.session) {
       onRequireLogin()
       return
@@ -88,45 +99,42 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
     const content = (replyDrafts[postId] ?? '').trim()
     if (!content) return
     void run(async () => {
-      await boardApi.createReply(auth.session?.token ?? '', postId, content)
+      await boardApi.createReply(token, postId, content)
       setReplyDrafts((previous) => ({ ...previous, [postId]: '' }))
-      // 回完直接展开，让用户看到自己刚写的那条
-      const res = await boardApi.replies(postId)
-      setExpanded((previous) => ({ ...previous, [postId]: res.replies }))
-      const list = await boardApi.list()
+      setReplyOpen((previous) => ({ ...previous, [postId]: false }))
+      const [replies, list] = await Promise.all([boardApi.replies(postId), boardApi.list()])
+      setExpanded((previous) => ({ ...previous, [postId]: replies.replies }))
       setPosts(list.posts)
     })
   }
 
-  function openAll(post: BoardPost): void {
+  function expand(post: BoardPost): void {
     void run(async () => {
       const res = await boardApi.replies(post.id)
       setExpanded((previous) => ({ ...previous, [post.id]: res.replies }))
     })
   }
 
-  const me = auth.user?.username
-
   return (
-    <section className="panel-page">
-      <h2 className="panel-title">留言板</h2>
+    <div className="board-container">
+      <h2 className="board-heading">留言板</h2>
 
       {announcements.length > 0 ? (
-        <ul className="announce-list">
+        <div className="announcement-list">
           {announcements.map((item) => (
-            <li key={item.id} className="announce-item">
-              <div className="announce-head">
-                <span className="announce-title">{item.title}</span>
-                {item.pinned ? <span className="badge-admin">置顶</span> : null}
-                <span className="board-time">{relativeTime(item.createdAt)}</span>
+            <div key={item.id} className={`announcement-item${item.pinned ? ' pinned' : ''}`}>
+              <div className="announcement-head">
+                <span className="announcement-title">{item.title}</span>
+                {item.pinned ? <span className="announcement-badge">置顶</span> : null}
+                <span className="announcement-time">{relativeTime(item.createdAt)}</span>
               </div>
-              <p className="announce-content">{item.content}</p>
-            </li>
+              <div className="announcement-body">{item.content}</div>
+            </div>
           ))}
-        </ul>
+        </div>
       ) : null}
 
-      <form className="board-compose" onSubmit={submitPost}>
+      <div className="board-composer">
         <textarea
           value={draft}
           maxLength={MAX_POST_LEN}
@@ -134,98 +142,144 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
           placeholder="写点什么…"
           onChange={(event) => setDraft(event.target.value)}
         />
-        <div className="board-compose-foot">
+        <div className="board-composer-actions">
           <span className="board-count">
-            {Array.from(draft).length} / {MAX_POST_LEN}
+            {Array.from(draft).length}/{MAX_POST_LEN}
           </span>
-          {auth.session ? (
-            <button type="submit" className="btn btn-primary" disabled={busy || !draft.trim()}>
-              发帖
-            </button>
-          ) : (
-            <button type="button" className="btn btn-primary" onClick={onRequireLogin}>
-              登录后发帖
-            </button>
-          )}
+          <button type="button" className="primary" disabled={busy || !draft.trim()} onClick={submitPost}>
+            发表
+          </button>
         </div>
-      </form>
+      </div>
+      {auth.session ? null : (
+        <div className="board-login-hint">
+          <button type="button" className="ghost" onClick={onRequireLogin}>
+            登录后可以发言
+          </button>
+        </div>
+      )}
 
-      {error ? <p className="auth-error">{error}</p> : null}
-      {loading ? <p className="panel-lead">正在读…</p> : null}
-      {!loading && posts.length === 0 ? <p className="panel-lead">还没有人留言。</p> : null}
+      {error ? <p className="auth-message">{error}</p> : null}
 
-      <ul className="board-list">
-        {posts.map((post) => {
-          const replies = expanded[post.id] ?? post.replies
-          return (
-            <li key={post.id} className="board-post">
-              <div className="board-head">
-                <span className="board-avatar">
-                  {post.avatar ? <img src={post.avatar} alt="" /> : initialOf(post.username)}
-                </span>
-                <span className="board-user">{post.username}</span>
-                <span className="board-time">{relativeTime(post.createdAt)}</span>
-                {me === post.username ? (
+      {loading ? <div className="board-empty">正在读…</div> : null}
+      {!loading && failed ? <div className="board-empty">读不到留言，刷新再试</div> : null}
+      {!loading && !failed && posts.length === 0 ? <div className="board-empty">还没有人留言</div> : null}
+
+      {posts.length > 0 ? (
+        <div className="board-list">
+          {posts.map((post) => {
+            const replies = expanded[post.id] ?? post.replies
+            const hidden = post.replyCount - replies.length
+            return (
+              <div key={post.id} className="board-post">
+                <div className="board-post-head">
+                  <span className="board-author">{post.username}</span>
+                  <span className="board-time">{relativeTime(post.createdAt)}</span>
+                  {auth.user?.username === post.username ? (
+                    <button
+                      type="button"
+                      className="board-delete"
+                      onClick={() =>
+                        void run(async () => {
+                          await boardApi.deletePost(token, post.id)
+                          setPosts((previous) => previous.filter((item) => item.id !== post.id))
+                        })
+                      }
+                    >
+                      删除
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="board-content">{post.content}</div>
+
+                {replies.length > 0 ? (
+                  <div className="board-replies">
+                    {replies.map((reply) => (
+                      <div key={reply.id} className="board-reply">
+                        <div className="board-reply-head">
+                          <span className="board-author">{reply.username}</span>
+                          <span className="board-time">{relativeTime(reply.createdAt)}</span>
+                          {auth.user?.username === reply.username ? (
+                            <button
+                              type="button"
+                              className="board-delete"
+                              onClick={() =>
+                                void run(async () => {
+                                  await boardApi.deleteReply(token, reply.id)
+                                  setExpanded((previous) => ({
+                                    ...previous,
+                                    [post.id]: (previous[post.id] ?? post.replies).filter((one) => one.id !== reply.id),
+                                  }))
+                                })
+                              }
+                            >
+                              删除
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="board-content">{reply.content}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="board-post-actions">
+                  {hidden > 0 && !expanded[post.id] ? (
+                    <button type="button" className="board-expand" onClick={() => expand(post)}>
+                      展开 {hidden} 条回复
+                    </button>
+                  ) : null}
+                  {expanded[post.id] && post.replyCount > post.replies.length ? (
+                    <button
+                      type="button"
+                      className="board-expand"
+                      onClick={() => setExpanded((previous) => ({ ...previous, [post.id]: post.replies }))}
+                    >
+                      收起
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    className="board-delete"
-                    onClick={() =>
-                      void run(async () => {
-                        await boardApi.deletePost(auth.session?.token ?? '', post.id)
-                        setPosts((previous) => previous.filter((item) => item.id !== post.id))
-                      })
-                    }
+                    className="board-reply-btn"
+                    onClick={() => {
+                      if (!auth.session) {
+                        onRequireLogin()
+                        return
+                      }
+                      setReplyOpen((previous) => ({ ...previous, [post.id]: !previous[post.id] }))
+                    }}
                   >
-                    删除
-                  </button>
-                ) : null}
-              </div>
-
-              <p className="board-content">{post.content}</p>
-
-              {replies.length > 0 ? (
-                <ul className="board-replies">
-                  {replies.map((reply) => (
-                    <li key={reply.id} className="board-reply">
-                      <span className="board-avatar board-avatar-small">
-                        {reply.avatar ? <img src={reply.avatar} alt="" /> : initialOf(reply.username)}
-                      </span>
-                      <span className="board-user">{reply.username}</span>
-                      <span className="board-content-inline">{reply.content}</span>
-                      <span className="board-time">{relativeTime(reply.createdAt)}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              {post.replyCount > post.replies.length && !expanded[post.id] ? (
-                <button type="button" className="board-more" onClick={() => openAll(post)}>
-                  查看全部 {post.replyCount} 条回复
-                </button>
-              ) : null}
-
-              <form className="board-reply-form" onSubmit={(event) => submitReply(event, post.id)}>
-                <input
-                  type="text"
-                  value={replyDrafts[post.id] ?? ''}
-                  maxLength={MAX_REPLY_LEN}
-                  placeholder="回复…"
-                  onChange={(event) => setReplyDrafts((previous) => ({ ...previous, [post.id]: event.target.value }))}
-                />
-                {auth.session ? (
-                  <button type="submit" className="btn btn-ghost" disabled={busy || !(replyDrafts[post.id] ?? '').trim()}>
                     回复
                   </button>
-                ) : (
-                  <button type="button" className="btn btn-ghost" onClick={onRequireLogin}>
-                    登录
-                  </button>
-                )}
-              </form>
-            </li>
-          )
-        })}
-      </ul>
-    </section>
+                </div>
+
+                {replyOpen[post.id] ? (
+                  <div className="board-reply-input">
+                    <textarea
+                      value={replyDrafts[post.id] ?? ''}
+                      maxLength={MAX_REPLY_LEN}
+                      rows={2}
+                      placeholder="回复…"
+                      onChange={(event) =>
+                        setReplyDrafts((previous) => ({ ...previous, [post.id]: event.target.value }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={busy || !(replyDrafts[post.id] ?? '').trim()}
+                      onClick={() => submitReply(post.id)}
+                    >
+                      回复
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
   )
 }

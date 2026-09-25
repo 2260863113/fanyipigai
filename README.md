@@ -1066,7 +1066,10 @@ src/
                     format.ts（时间/UA）、AuthModal.tsx（登录注册弹窗）
   components/ProfileView.tsx 个人中心（头像、用户名、改密码、退出）
   components/BoardView.tsx   留言板（谁都能看，登录才能发）
-  components/AdminView.tsx   管理页（用户管理 + 日志记录 + 流量分桶，仅管理员）
+  components/AdminView.tsx   管理页（用户管理 + 日志记录 + 发布公告，仅管理员）
+  styles-map-memory.css  **账号/留言板/管理/公告 的控件样式，逐字搬自「地图记忆」**
+                        （它那 18 个变量加了 `--mm-` 前缀，另外补了一套暗色映射——
+                         来源项目没有暗色模式；见文件顶部说明）
 functions/         Cloudflare Pages Functions（线上那一半的真路由；共享代码不许放这里）
   _middleware.ts   只补三个安全响应头（nosniff / 不许被 iframe 套住 / 不带 referrer）
   api/judge.ts api/refine.ts api/generate.ts  三个薄端点，转手交给 src/server/api.ts

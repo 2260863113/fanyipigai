@@ -218,6 +218,7 @@ try {
     '留言板入口在没登录时也看得见（能看、不能发言）',
   )
 
+
   /*
    * 用**真实鼠标与键盘事件**填作答、点提交。
    *
@@ -250,6 +251,28 @@ try {
     const ok = await clickAt(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(label)})`)
     return ok
   }
+  /*
+   * 留言板那一页要用的正是**「地图记忆」的结构与类名**（用户要求这一批功能完全仿造它）：
+   * `.board-container / board-heading / board-composer / board-empty`。
+   * 只断言这几个类在 DOM 里，就算"结构搬对了"——样式本身是整块搬过来的 CSS，不由脚本验。
+   */
+  await clickButtonByText('留言板')
+  await sleep(700)
+  check(
+    await cdp.evaluate(
+      "!!document.querySelector('.board-container') && !!document.querySelector('.board-heading') && !!document.querySelector('.board-composer')",
+    ),
+    '留言板用的是地图记忆那套结构（board-container / board-heading / board-composer）',
+  )
+  check(
+    await cdp.evaluate(
+      "!!document.querySelector('.board-empty') || !!document.querySelector('.board-list') || !!document.querySelector('.announcement-item')",
+    ),
+    '留言板有内容区（公告 / 列表 / 空态）',
+  )
+  await clickButtonByText('文章')
+  await sleep(400)
+
   const ANSWER = 'Because of the heavy rain, the football match was put off until next week. '.repeat(4)
   /*
    * 填作答用"原生 setter + input 事件"这一招（React 的受控组件认它）。
@@ -270,7 +293,7 @@ try {
   await sleep(600)
 
   check(judgeRequests.length === 0, `没登录时按提交 → 一次 /api/judge 都没发（实际 ${judgeRequests.length} 次）`)
-  check(await cdp.evaluate("!!document.querySelector('.auth-tabs')"), '弹出了登录/注册窗口')
+  check(await cdp.evaluate("!!document.querySelector('.auth-card')"), '弹出了登录/注册窗口（地图记忆那张 .auth-card）')
   check(
     await cdp.evaluate("!!document.querySelector('.auth-reason') && document.querySelector('.auth-reason').textContent.includes('需要先登录')"),
     '弹窗里写清了为什么（"提交批改需要先登录"）',
@@ -278,22 +301,21 @@ try {
 
   // 走一遍真实注册（会在这台服务器背后的 D1 里建一个账号）
   const username = `vg-${Math.random().toString(36).slice(2, 8)}`
-  check(await clickButtonByText('注册'), '切到「注册」标签')
+  check(await clickButtonByText('还没有账号？去注册'), '切到「注册」（地图记忆那个 auth-switch 按钮）')
   await sleep(200)
   /** 往弹窗里第 index 个输入框填值（同样走原生 setter + input 事件，见上面那段说明） */
   const fillInput = (index, value) =>
     cdp.evaluate(`(() => {
-      const box = document.querySelectorAll('.auth-form input')[${index}];
+      const box = document.querySelectorAll('.auth-card .form-row input')[${index}];
       if (!box) return false;
       Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(box, ${JSON.stringify(value)});
       box.dispatchEvent(new Event('input', { bubbles: true }));
       return box.value === ${JSON.stringify(value)};
     })()`)
   check(await fillInput(0, username), '填了用户名')
-  check(await fillInput(1, 'verify-gate-password'), '填了密码')
-  check(await fillInput(2, 'verify-gate-password'), '填了确认密码')
+  check(await fillInput(1, 'verify-gate-password'), '填了密码（它那套没有"再输一遍"）')
   await sleep(200)
-  check(await clickButtonByText('注册并登录'), '点了「注册并登录」')
+  check(await clickButtonByText('注册'), '点了「注册」')
 
   let registered = false
   for (let i = 0; i < 80 && !registered; i += 1) {
@@ -305,7 +327,7 @@ try {
     if (!registered) await sleep(250)
   }
   check(registered, `注册之后顶栏出现用户名（${username}）`)
-  check(!(await cdp.evaluate("!!document.querySelector('.auth-tabs')")), '注册成功之后弹窗自己关掉了')
+  check(!(await cdp.evaluate("!!document.querySelector('.auth-card')")), '注册成功之后弹窗自己关掉了')
 
   /*
    * ⚠️ 这里**到此为止**：本脚本负责的只有"没登录时被拦住并弹窗"这一条（用户的原始要求）。

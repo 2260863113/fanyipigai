@@ -76,6 +76,29 @@ npx wrangler d1 execute fanyipigai-db --remote \
 没要求把练习记录搬上服务端；那是另一件事（D1 版"云同步"，见 README 的「尚未开始」）。
 个人中心里如实写着"本机存着 N 条练习记录"，免得用户以为它跟着账号走。
 
+## 界面：连样式也照搬（用户后续要求）
+
+第一版是"逻辑照搬、界面按本站的令牌自己写"——用户看了以后要求**这一批功能的 UI 也完全仿造那个项目**，
+并明确说"必要的话完全可以复用那个项目的代码"。于是改成：
+
+- **DOM 结构与类名照搬**：留言板用 `board-container / board-composer / board-list / board-post /
+  board-reply-* / board-load-more / board-empty`，管理页用 `admin-container / admin-tabs /
+  admin-user-row / admin-traffic / log-row / admin-ann-*`，账号与个人中心用 `auth-card /
+  form-row / auth-message / auth-switch / card-actions / user-avatar / avatar-upload`，
+  按钮一律它那边的 `primary` / `ghost`。
+- **CSS 逐字搬**：`src/styles-map-memory.css`（98 条规则、约 14KB），文件顶部写明来源与两处必要改动。
+- 两处**必要**的改动，都不是随手改的：
+  1. 它那 18 个变量的名字前面加 `--mm-`。两边都用 `--accent`、`--text` 这类通用名，
+     直接搬会把**整站**配色改掉。
+  2. 补一套暗色映射。**地图记忆没有暗色模式**（纯亮色固定色），而本站是整站可切换的，
+     因此把 `--mm-*` 在本站的 `:root[data-theme='dark']` 下重新映射到本站的暗色令牌。
+- 三处**因为这边没有对应物**而没搬：它个人资料里的"所在省/市"联动输入（本项目没有 hometown）、
+  流量图用的 canvas 折线（这边不引图表库，用同样几个类名画长条）、以及它自己的布局容器
+  `#side-panel`（这边是整页布局，外面套一层 `.panel-page` 负责滚动）。
+
+代价写清楚：这一批控件从此有**两套设计语言**——账号那几页是地图记忆的绿，其余是本站的蓝。
+用户要的就是这个；想统一回去，把 `styles-map-memory.css` 的变量指向本站令牌即可（一文件的事）。
+
 ## 验证
 
 - 冒烟 `npm run smoke` **828 项**通过：新增 32 项账号相关的纯函数与安全细节
