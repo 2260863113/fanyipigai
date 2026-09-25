@@ -636,6 +636,14 @@ export async function renderApp(
      * 等待弹窗、批改中照样翻页、一次只批一页、批完的右下角通知。
      */
     judgeDelayMs?: number
+    /**
+     * 以**没登录**的身份渲染（默认是已登录）。
+     *
+     * 第 15 轮起「提交批改」要求登录（用户要求：没登录就提交失败、弹出登录/注册窗口），
+     * 而探针绝大多数流程测的是批改本身，因此默认塞一个已登录会话进去；
+     * 想验"没登录会被拦下"那条时传 `guest: true`。
+     */
+    guest?: boolean
   } = {},
 ): Promise<RenderProbe> {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -681,6 +689,35 @@ export async function renderApp(
   if (options.seedCustom) {
     const seeded = { id: 'custom-seed', source: options.seedCustom, createdAt: new Date().toISOString() }
     dom.window.localStorage.setItem('translation-practice.custom', JSON.stringify(seeded))
+  }
+
+  /*
+   * 登录态：默认"已登录"（见 options.guest 的说明）。
+   *
+   * 这里只塞 localStorage 那一条记录，不去打 /api/auth/me——接口桩对其他路径是**抛错**的
+   * （见下面的 makeJudgeFetch），而 store 的 restore 对网络错误是"保留本地缓存"，
+   * 因此这个会话会稳稳留着，正好也是真实情况里"断网时也认得你是谁"的那条分支。
+   */
+  if (!options.guest) {
+    dom.window.localStorage.setItem(
+      'translation-practice.session.v1',
+      JSON.stringify({
+        token: 'probe-session-token',
+        user: { username: '探针用户', avatar: null, isAdmin: false, createdAt: 0, updatedAt: 0 },
+      }),
+    )
+  } else {
+    /*
+     * ⚠️ 只清 localStorage 是不够的：`authStore` 是**模块级单例**，而 App 是动态 import 的
+     * （见下面那段），模块只在第一次渲染时加载一次——构造函数读过种子之后就不会再读。
+     * 因此"以游客身份渲染"必须走它自己的 `logout()`：那才是真的"现在没人登录"。
+     *
+     * 由此带来一条使用上的约束：**游客渲染会把单例里的会话清掉**，
+     * 之后再跑的"已登录"探针不会自动恢复（模块不会重跑构造函数）。
+     * smoke 里因此把游客那一段放在最后。
+     */
+    const { authStore } = await import('../src/components/auth/store')
+    authStore.logout()
   }
 
   // jsdom 不实现 ResizeObserver；调序弧线依赖它做尺寸观测
@@ -2023,6 +2060,13 @@ export async function renderApp(
       paneHtml,
     }
   }
+
+  /*
+   * 拍快照之前先冲一次：最后一次交互可能只是**设了状态**（例如被登录门拦下之后
+   * `setAuthOpen(true)`），React 会把它批到下一个微任务里再落到 DOM 上。
+   * 不冲这一下，`html` 拍到的是"上一帧"——弹窗明明开了，快照里却没有。
+   */
+  await act(async () => {})
 
   return {
     sectionNavTrace,

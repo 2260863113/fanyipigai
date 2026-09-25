@@ -1,0 +1,20 @@
+# Cloudflare Pages 项目配置。
+#
+# 有三件事靠这个文件：
+#   1. 项目名（本项目线上叫 fanyipigai，域名 fanyipigai.pages.dev）；
+#   2. `pages_build_output_dir`：`wrangler pages deploy` 直接传 dist，不用再写参数；
+#   3. D1 绑定：`functions/api/**` 里的 `env.DB` 就是它。**没有它，注册登录一律 500**。
+#
+# ⚠️ preview 与 production 指向**同一个库**（照搬「地图记忆」的做法）：预览部署若被用来
+# 注册账号、发留言，写的就是正式数据。本项目只有 main 一个分支在部署，暂时够用；
+# 哪天要开分支预览，先把这行改成另一个库。
+
+name = "fanyipigai"
+compatibility_date = "2026-08-30"
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fanyipigai-db"
+database_id = "0247358c-cded-4c0d-87ef-6455597084a1"
+preview_database_id = "0247358c-cded-4c0d-87ef-6455597084a1"

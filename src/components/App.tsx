@@ -88,6 +88,13 @@ import { JudgeWaitingModal } from './JudgeWaitingModal'
 import { JudgeDoneToast } from './JudgeDoneToast'
 import { dropPageStates, loadPageStates, readPageState, writePageState, type PageStateMap } from './page-state'
 import { checkSubmit } from '../domain/submit-gate'
+import { reportVisit } from './auth/api'
+import { AuthModal } from './auth/AuthModal'
+import { authStore, useAuth } from './auth/store'
+import { BoardView } from './BoardView'
+import { ProfileView } from './ProfileView'
+import { AdminView } from './AdminView'
+import type { NavPanel } from './TopBar'
 
 type Tab = ViewTab
 
@@ -253,6 +260,31 @@ export function App(): JSX.Element {
   const [tab, setTab] = useState<Tab>(startup ? startup.tab : firstCase.exercise.mode)
   const [exerciseId, setExerciseId] = useState(startup ? startup.exerciseId : firstCase.exercise.id)
 
+  /*
+   * 账号那一组页面（留言板 / 个人中心 / 管理）**单独一个状态，不进 `tab`**。
+   *
+   * 理由是 last-view 那条规矩（见它的文件头）：`tab` 会被当作"练习位置"记下来，
+   * 而这三个页面是"去看别的东西"——用户从留言板关掉网页，下次该回到他当时练的那道题。
+   * 这与「记录页与收藏页不记」是同一条理由，因此用同一个做法（另开一个状态）。
+   */
+  const [panel, setPanel] = useState<NavPanel | null>(null)
+  /** 登录 / 注册弹窗；`authReason` 是"为什么现在要你登录"，被提交门拦下时才有 */
+  const [authOpen, setAuthOpen] = useState(false)
+  const [authReason, setAuthReason] = useState<string | null>(null)
+  const auth = useAuth()
+
+  /*
+   * 打开站点做两件事：校验本地会话（401 就清掉，网络错误先留着）、
+   * 上报一次访问（谁看过这个站，只记登录名与 UA，不记 IP）。
+   *
+   * 这里直接读 `authStore` 而不是 `auth`：后者每次渲染都是个新对象，
+   * 放进依赖数组会让这个 effect 每渲染一次跑一遍。
+   */
+  useEffect(() => {
+    void authStore.restore()
+    reportVisit(authStore.getSnapshot()?.token ?? null)
+  }, [])
+
   /**
    * 文章进度（哪几页已经批过）——存在浏览器里，刷新之后还在。
    *
@@ -346,6 +378,15 @@ export function App(): JSX.Element {
   /** 说一句"刚才那一下为什么没生效"。id 逐个往上加，连说两次也会重新计时。 */
   function showToast(message: string): void {
     setToast((previous) => ({ id: (previous?.id ?? 0) + 1, message }))
+  }
+
+  /**
+   * 打开登录 / 注册弹窗。`reason` 会显示在弹窗最上面——被提交门拦下来时必须说清楚
+   * "为什么现在要你登录"，否则用户会以为提交按钮坏了。
+   */
+  function openAuth(reason?: string): void {
+    setAuthReason(reason ?? null)
+    setAuthOpen(true)
   }
   const [selection, setSelection] = useState<Selection | null>(null)
   const [records, setRecords] = useState<RecordView[]>(() => loadRecords())
@@ -1008,6 +1049,8 @@ export function App(): JSX.Element {
    * 免得"题号撞车"（比如某个来源被清掉之后，同一个 id 落到另一来源上）。
    */
   function selectTab(nextTab: Tab): void {
+    // 从账号页面切回练习栏：留言板/个人中心/管理都不是练习位置，切走就关掉
+    setPanel(null)
     /*
      * 换栏也算"离开这一页"：按过「返回编辑」但一个字没改就去了别的栏，
      * 回来时该看到那份批改（与翻页同一条判据，见 session.ts 的 pageLeft）。
@@ -1391,6 +1434,21 @@ export function App(): JSX.Element {
      * 只把原因用吐司说清楚（"还差多少"或"与哪一次重复"），
      * 用户改完还能直接再按一次。
      */
+    /*
+     * **登录门**（用户要求）：没登录就"提交失败"——不标记批改中、不发请求、不弹等待窗，
+     * 只把登录/注册窗口打开，并写清为什么。
+     *
+     * 为什么放在篇幅与去重那两道门**之后**：那两道管的是"你写的这段本身行不行"，
+     * 是用户当场就能改的事；而"还得先登录"要等他改完再面对。先报篇幅问题，少一次白弹窗。
+     *
+     * 服务端并不依赖这一条：`/api/judge` 前面有 `requireSession`（见 src/server/guard.ts），
+     * 这里只是提前拦住，不让他白等一次失败。
+     */
+    if (!auth.user) {
+      openAuth('提交批改需要先登录或注册。登录之后这段译文才会发去批改——密码不会明文离开这台设备。')
+      return false
+    }
+
     const verdict = checkSubmit({
       mode: exercise.mode,
       direction: exercise.direction,
@@ -1821,13 +1879,28 @@ export function App(): JSX.Element {
       */}
       <TopBar
         tab={tab}
+        panel={panel}
+        user={auth.user}
+        isAdmin={auth.isAdmin}
         onSelectTab={selectTab}
+        onSelectPanel={setPanel}
+        onOpenAuth={() => openAuth()}
         onOpenSettings={() => setSettingsOpen(true)}
         onToggleTheme={() => updateSettings({ theme: theme === 'dark' ? 'light' : 'dark' })}
         theme={theme}
       />
 
-      {tab === 'favorites' ? (
+      {panel === 'board' ? (
+        <BoardView onRequireLogin={() => openAuth('留言板要登录之后才能发帖与回复。')} />
+      ) : panel === 'profile' ? (
+        <ProfileView
+          recordCount={records.length}
+          onRequireLogin={() => openAuth()}
+          onOpenAdmin={() => setPanel('admin')}
+        />
+      ) : panel === 'admin' ? (
+        <AdminView />
+      ) : tab === 'favorites' ? (
         <FavoritesView
           favorites={favorites}
           onRemove={(id) => setFavorites((previous) => removeFavorite(previous, id))}
@@ -2253,6 +2326,16 @@ export function App(): JSX.Element {
           </button>
         </div>
       )}
+
+      {/* 登录 / 注册：用户自己点顶栏进来，或者被提交门拦下来时自动弹出 */}
+      <AuthModal
+        open={authOpen}
+        reason={authReason}
+        onClose={() => {
+          setAuthOpen(false)
+          setAuthReason(null)
+        }}
+      />
 
       {/* 设置：行距、是否显示填补的文字、译文默认视图。纯界面偏好，存在浏览器里 */}
       {settingsOpen && (

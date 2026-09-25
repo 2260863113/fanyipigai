@@ -1,28 +1,49 @@
 /**
- * 顶栏：站名 + 题型导航 + 「暗夜 / 设置」。
+ * 顶栏：站名 + 题型导航 + 账号区 + 「暗夜 / 设置」。
  *
  * ⚠️ 这里**没有 `meta` 参数了**（第 13 轮）。它原先是"当前这一题的元信息"，最后只剩
- * 「内置示例批改」那一枚警告芯片——用户要求"去掉右上角内置示例批改标志"，于是整枚删掉，
- * 这个入口也就没有存在的意义了（示例批改的提醒搬进了结果栏，见 AnswerPane）。
- * 删掉之后顶栏最右边的就是「暗夜 · 设置」：`.topbar-right` 本来就是 `margin-left: auto`，
- * 因此"把暗夜模式和设置按钮挪到右边"这条要求不需要改任何布局，删掉那枚芯片就到位了。
+ * 「内置示例批改」那一枚警告芯片——用户要求"去掉右上角内置示例批改标志"，于是整枚删掉。
+ * `.topbar-right` 本来就是 `margin-left: auto`，因此"把暗夜模式和设置按钮挪到右边"
+ * 这条要求不需要改任何布局。
+ *
+ * ⚠️ 账号那一组（留言板 / 个人中心 / 管理）**不放在 `MODE_TABS` 里**：
+ * 那个表是"题型的四个栏位 + 收藏/记录"，会被 last-view 当作"练习位置"记下来；
+ * 而留言板这类页面是"去看别的东西"，不该把下次打开的落点抢走
+ * （与「记录页与收藏页不记」同一条理由，见 last-view.ts 的注释）。
  */
 
 import type { JSX } from 'react'
 import { VISIBLE_MODE_TABS, type Mode } from '../domain/types'
+import type { PublicUser } from './auth/api'
+import { initialOf } from './auth/format'
 
 /** 顶栏导航的取值：四类题型 + 三个独立页面（它们不是题型）。 */
 export type NavTab = Mode | 'records' | 'custom' | 'favorites'
 
+/** 账号那一组页面：留言板人人都能进，个人中心要登录，管理要管理员。 */
+export type NavPanel = 'board' | 'profile' | 'admin'
+
 export function TopBar({
   tab,
+  panel,
+  user,
+  isAdmin,
   onSelectTab,
+  onSelectPanel,
+  onOpenAuth,
   onOpenSettings,
   onToggleTheme,
   theme,
 }: {
   tab: NavTab
+  /** 当前打开的账号页面；为 null 表示正在练习/记录/收藏那一侧 */
+  panel: NavPanel | null
+  user: PublicUser | null
+  isAdmin: boolean
   onSelectTab: (tab: NavTab) => void
+  onSelectPanel: (panel: NavPanel) => void
+  /** 没登录时点「登录 / 注册」：打开登录弹窗 */
+  onOpenAuth: () => void
   onOpenSettings: () => void
   /** 切换明暗主题（第 9 条）：点了就存下来，下次打开按存下来的那套 */
   onToggleTheme: () => void
@@ -41,23 +62,56 @@ export function TopBar({
           <button
             key={item.mode}
             type="button"
-            className={item.mode === tab ? 'mode-tab mode-tab-active' : 'mode-tab'}
+            className={panel === null && item.mode === tab ? 'mode-tab mode-tab-active' : 'mode-tab'}
             onClick={() => onSelectTab(item.mode)}
             title={item.hint}
           >
             {item.label}
           </button>
         ))}
+        <button
+          type="button"
+          className={panel === 'board' ? 'mode-tab mode-tab-active' : 'mode-tab'}
+          onClick={() => onSelectPanel('board')}
+          title="留言板：练下来的心得、题目问题都可以写在这里（登录后才能发言）"
+        >
+          留言板
+        </button>
+        {isAdmin ? (
+          <button
+            type="button"
+            className={panel === 'admin' ? 'mode-tab mode-tab-active' : 'mode-tab'}
+            onClick={() => onSelectPanel('admin')}
+            title="用户管理与访问日志（只有管理员看得到）"
+          >
+            管理
+          </button>
+        ) : null}
       </nav>
 
       {/*
-        「设置」留在顶栏，**不进任何一条题目横条**：题目横条只在某一栏出现，
-        而设置（行距、译文视图、是否显示填补文字）是每一栏都要用的，
-        放到那里会导致段落/句子/术语栏没有设置入口。
-        暗夜开关挨着它、在它左边（用户第 9 条改过一轮顺序，最后一句是
-        "设置最右边，暗夜次右边"）：两颗都是"整站界面"的开关，摆在一起才对得上。
+        右侧四样从右往左：设置 → 暗夜 → 账号。
+        前两样的顺序是用户定的（"设置最右边，暗夜次右边"），
+        账号按钮放在它们左边，因此**没有动**那两颗的位置。
       */}
       <div className="topbar-right">
+        {user ? (
+          <button
+            type="button"
+            className={`btn btn-ghost account-button${panel === 'profile' ? ' account-button-active' : ''}`}
+            onClick={() => onSelectPanel('profile')}
+            title="个人中心：头像、用户名、密码、退出登录"
+          >
+            <span className="account-avatar">
+              {user.avatar ? <img src={user.avatar.dataUrl} alt="" /> : initialOf(user.username)}
+            </span>
+            <span className="account-name">{user.username}</span>
+          </button>
+        ) : (
+          <button type="button" className="btn btn-primary account-button" onClick={onOpenAuth} title="登录或注册后才能提交批改">
+            登录 / 注册
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-ghost theme-toggle"

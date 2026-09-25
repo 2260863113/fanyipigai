@@ -257,6 +257,24 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
           mobile: shot.width < 700,
         })
         await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: buildStubSource(shotTableFor(shot)) })
+        /*
+         * 「提交批改」现在要求登录（用户要求：没登录就提交失败并弹登录窗），
+         * 而截屏要拍的是**批改结果**，不是登录框——因此先在页面里塞一个已登录会话。
+         *
+         * 只塞 localStorage 那一条：store 打开时会拿它去打 /api/auth/me 校验，
+         * 而这个页面上的接口桩只接管 /api/judge，别的请求原样发出去，
+         * 拿回来的不是 JSON（本地 dev 会把 SPA 的 index.html 回给它），
+         * 于是走"网络/格式错误 → 保留本地会话"那条分支，会话正好留着。
+         */
+        await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+          source:
+            `try { window.localStorage.setItem('translation-practice.session.v1', ${JSON.stringify(
+              JSON.stringify({
+                token: 'shot-session-token',
+                user: { username: '截图用户', avatar: null, isAdmin: false, createdAt: 0, updatedAt: 0 },
+              }),
+            )}); } catch (error) {}`,
+        })
         await cdp.send('Page.navigate', { url: pageUrl })
 
         let mounted = false

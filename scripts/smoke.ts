@@ -29,6 +29,7 @@ import { mergeRowsOnTopEdge as mergePageRows } from './lib/row-merge.mjs'
 import { mergeRowsOnTopEdge } from '../src/domain/row-merge'
 import { INITIAL_SESSIONS, pageResultOf, sessionOf, sessionReducer, type ExerciseSession } from '../src/components/session'
 import type { RecordView } from '../src/components/RecordsView'
+import type { Env } from '../src/server/http'
 import path from 'node:path'
 
 // 本文件由 scripts/run-smoke.mjs 用 esbuild 打包后交给 Node 运行，
@@ -1732,8 +1733,8 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     // 「段落」栏已从导航撤掉（文章题本来就按自然段切、逐段作答，另开一栏是重复），
     // 因此导航上是六个：四类题型去掉段落 + 自定义 + 收藏 + 练习记录
     check(
-      rendered.modeTabLabels.join(',') === '文章,句子,术语,自定义,收藏,练习记录',
-      `顶部导航有文章/句子/术语、自定义、收藏与练习记录（实际：${rendered.modeTabLabels.join(' / ')}）`,
+      rendered.modeTabLabels.join(',') === '文章,句子,术语,自定义,收藏,练习记录,留言板',
+      `顶部导航有文章/句子/术语、自定义、收藏、练习记录与留言板（实际：${rendered.modeTabLabels.join(' / ')}）`,
     )
     check(rendered.sampleIds.length >= 4, `题库覆盖 ${rendered.sampleIds.length} 道示例，四类题型都有题`)
 
@@ -4042,14 +4043,27 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       console.log('  – 跳过 Pages 端点的检查（这个运行时里没有 Request/Response）')
     } else {
       const { onRequest } = await import('../functions/api/judge')
-      const callEndpoint = (method: string, body?: unknown, env: Record<string, string> = {}) =>
+      /*
+       * 账号接口要 D1，而这一段只验批改端点的"路由这一层"。
+       * 给一个**碰库就报错**的桩：万一哪次改动让它走到了数据库，这里会立刻炸，
+       * 而不是悄悄通过（那才是"测试测了个寂寞"）。
+       */
+      const noDb = (overrides: Partial<Env> = {}): Env => ({
+        DB: {
+          prepare() {
+            throw new Error('这个检查不该碰数据库')
+          },
+        } as never,
+        ...overrides,
+      })
+      const callEndpoint = (method: string, body?: unknown, env: Partial<Env> = {}) =>
         onRequest({
           request: new Request('https://fanyipigai.pages.dev/api/judge', {
             method,
             headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
             body: body === undefined ? undefined : JSON.stringify(body),
           }),
-          env,
+          env: noDb(env),
           next: async () => new Response('不该走到这里', { status: 200 }),
           params: {},
         })
@@ -4113,6 +4127,162 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     }
   } catch (error) {
     check(false, '服务端那一半可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 账号那一套（复用自「地图记忆」，见 ADR 0028）：纯函数与几个安全细节。
+   *
+   * 这里能钉住的是"不碰数据库就能验"的部分——用户名归一化、密码哈希结构、
+   * 头像与改密码的校验、留言长度、以及**会话 token 在库里存的是摘要而不是明文**。
+   * 真正的注册/登录/留言/管理整条链路由 `wrangler pages dev` + 本地 D1 验（见 README）。
+   */
+  try {
+    const { cleanUsername, normalizePasswordHash } = await import('../src/server/validate')
+    const { resolveAvatar, resolvePassword } = await import('../src/server/profile')
+    const { cleanBoardText, parseLimit, parsePositiveInt, DEFAULT_LIMIT, MAX_LIMIT } = await import('../src/server/board')
+    const { sha256Hex, randomToken, createSession } = await import('../src/server/auth')
+    const { MAX_POST_LEN, MAX_AVATAR_SIZE } = await import('../src/server/limits')
+
+    check(cleanUsername('  冉  云天 ') === '冉 云天', '用户名归一化：去首尾空白、把中间连续空白压成一个')
+    check(cleanUsername('x'.repeat(40)).length === 24, '用户名截到 24 个字符（前后端同一口径）')
+    check(cleanUsername(123) === '', '用户名不是字符串时归一化成空串（交给调用方报 400）')
+
+    const goodHash = {
+      algorithm: 'PBKDF2-SHA-256',
+      salt: 'MDEyMzQ1Njc4OWFiY2RlZg==',
+      hash: 'q83vIhFmNP2buqo0Fk9yCAp0Q2SEyrTXoYWLGkz3jE8=',
+      iterations: 120000,
+    }
+    check(normalizePasswordHash(goodHash).iterations === 120000, '合法的密码哈希结构能通过')
+    for (const [label, bad] of [
+      ['算法名不对', { ...goodHash, algorithm: 'plain' }],
+      ['盐不是 base64', { ...goodHash, salt: 'not base64!!' }],
+      ['迭代次数过低', { ...goodHash, iterations: 1000 }],
+      ['整体不是对象', null],
+    ] as Array<[string, unknown]>) {
+      let threw = false
+      try {
+        normalizePasswordHash(bad)
+      } catch {
+        threw = true
+      }
+      check(threw, `密码哈希：${label} → 拒收（迭代次数下限是这套方案的地基）`)
+    }
+
+    check(resolveAvatar({}, 'keep') === 'keep', '头像：这次没传就沿用原值')
+    check(resolveAvatar({ avatar: null }, 'keep') === null, '头像：显式传 null 表示清空')
+    const smallAvatar = { dataUrl: 'data:image/png;base64,iVBORw0KGgo=', name: 'a.png', size: 100, type: 'image/png' }
+    check(
+      (resolveAvatar({ avatar: smallAvatar }, null) ?? '').includes('iVBORw0KGgo='),
+      '头像：合法的 dataUrl 存进库里',
+    )
+    for (const [label, bad] of [
+      ['不是 data:image 前缀', { ...smallAvatar, dataUrl: 'https://example.com/a.png' }],
+      ['自报体积超上限', { ...smallAvatar, size: MAX_AVATAR_SIZE + 1 }],
+      ['dataUrl 实际长超上限', { ...smallAvatar, dataUrl: `data:image/png;base64,${'A'.repeat(50 * 1024)}` }],
+    ] as Array<[string, unknown]>) {
+      let threw = false
+      try {
+        resolveAvatar({ avatar: bad as never }, null)
+      } catch {
+        threw = true
+      }
+      check(threw, `头像：${label} → 拒收（只信自报的 size 会让超大文本绕过限制）`)
+    }
+
+    const stored = { password_salt: 'S', password_hash: 'H', password_iterations: 120000 }
+    check(
+      resolvePassword(stored, {}).hash === 'H',
+      '改密码：两个哈希都没传 = 本次不改密码',
+    )
+    let halfOnly = false
+    try {
+      resolvePassword(stored, { oldPasswordHash: goodHash })
+    } catch {
+      halfOnly = true
+    }
+    check(halfOnly, '改密码：只传一半 → 明确报错（静默不改会让用户以为改成功了）')
+    let wrongOld = false
+    try {
+      resolvePassword(stored, { oldPasswordHash: goodHash, newPasswordHash: goodHash })
+    } catch {
+      wrongOld = true
+    }
+    check(wrongOld, '改密码：旧密码哈希对不上 → 拒绝（光有 token 不该能改掉密码）')
+    const matching = resolvePassword(
+      { password_salt: goodHash.salt, password_hash: goodHash.hash, password_iterations: goodHash.iterations },
+      { oldPasswordHash: goodHash, newPasswordHash: { ...goodHash, salt: 'bmV3c2FsdA==', hash: 'bmV3aGFzaA==' } },
+    )
+    check(matching.salt === 'bmV3c2FsdA==' && matching.hash === 'bmV3aGFzaA==', '改密码：旧密码对得上就换成新哈希')
+
+    check(cleanBoardText('  今天练了一段  ', MAX_POST_LEN) === '今天练了一段', '留言内容去首尾空白')
+    check(cleanBoardText('   ', MAX_POST_LEN) === null, '留言内容全是空白 = 空')
+    check(cleanBoardText('汉'.repeat(MAX_POST_LEN), MAX_POST_LEN) !== null, `留言正好 ${MAX_POST_LEN} 个汉字可以通过`)
+    check(cleanBoardText('汉'.repeat(MAX_POST_LEN + 1), MAX_POST_LEN) === null, '超一个字就拒（按字符数，不按字节）')
+    check(cleanBoardText('a'.repeat(MAX_POST_LEN + 1), MAX_POST_LEN) === null, '英文同样按字符数算')
+
+    check(parseLimit('999') === MAX_LIMIT, `分页 limit 超上限被钳到 ${MAX_LIMIT}`)
+    check(parseLimit('abc') === DEFAULT_LIMIT, '分页 limit 不合法时回默认值')
+    let badId = false
+    try {
+      parsePositiveInt('0', '帖子ID')
+    } catch {
+      badId = true
+    }
+    check(badId, '帖子/回复 id 必须是正整数（0 与负数一律拒）')
+
+    check(
+      (await sha256Hex('abc')) === 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      'sha256Hex 与标准结果一致（会话摘要靠它）',
+    )
+    const tokenA = randomToken()
+    check(/^[0-9a-f]{64}$/.test(tokenA) && tokenA !== randomToken(), 'token 是 32 字节随机十六进制，两次不同')
+
+    // 会话写库：**存的是摘要**这条要钉死——它决定"库被看到也拿不到能用的登录态"
+    let bound: unknown[] = []
+    const captureDb = {
+      prepare: () => ({
+        bind: (...values: unknown[]) => {
+          bound = values
+          return { run: async () => ({ success: true, meta: {} }) }
+        },
+      }),
+    }
+    const issued = await createSession({ DB: captureDb as never }, 7, 1_800_000_000)
+    const [writtenHash, writtenUser, writtenAt, writtenExpires] = bound as [string, number, number, number]
+    check(/^[0-9a-f]{64}$/.test(writtenHash) && writtenHash !== issued, '会话写库时存的是摘要，不是 token 明文')
+    check(writtenHash === (await sha256Hex(issued)), '库里那个摘要正是这次发出的 token 的 SHA-256')
+    check(writtenUser === 7 && writtenAt === 1_800_000_000, '会话记在正确的用户与时间上')
+    check(writtenExpires - writtenAt === 30 * 24 * 60 * 60 * 1000, '会话有效期 30 天（与 README 的口径一致）')
+  } catch (error) {
+    check(false, '账号这一套可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 登录门（用户要求）：**没登录时按「提交批改」要提交失败**——不发请求、不标记批改中，
+   * 只把登录/注册窗口弹出来，并写清为什么。
+   *
+   * 探针默认是"已登录"（见 renderApp 的 guest 参数），因此这里显式以游客身份再渲染一次：
+   * `judgeCalls === 0` 是这条要求的硬指标——**一次接口都不能调**，
+   * 否则"没登录也能提交"就是真的漏了。
+   */
+  try {
+    const guest = await renderApp({ guest: true })
+    /*
+     * ⚠️ 这里**不断言"弹窗此刻开着"**：探针在提交之后还会继续点别处，
+     * 其中点到弹窗外面的地方会顺手把它关掉——那本来就是弹窗该有的行为
+     * （Modal.tsx 的 backdrop 上挂的就是"点外面关闭"）。
+     * 因此这一段只钉住"拦下来了"（一次接口都没调）+ "入口在"，
+     * 而"按下去确实弹了登录窗"由真实浏览器那一步验（README 的验收清单里那条）。
+     */
+    check(guest.judgeCalls === 0, `没登录时按「提交批改」一次批改接口都没调（实际 ${guest.judgeCalls} 次）`)
+    // 注意：`guest.text` 只是左下分数栏 + 右下批注栏那两块，顶栏要看 html
+    check(guest.html.includes('登录 / 注册'), '顶栏上出现了「登录 / 注册」入口')
+    check(guest.composeStageHadInput, '被拦下时作答框还在（用户写的东西一个字没丢）')
+    check(guest.html.includes('留言板'), '留言板入口在游客身份下也可见（能看、不能发言）')
+    guest.restore()
+  } catch (error) {
+    check(false, '登录门可以验证', error instanceof Error ? error.message : String(error))
   }
 
   return { checks, failures, skipped }

@@ -1,63 +1,35 @@
 /**
- * 线上那一半的"宿主"：把 Cloudflare 给的东西（环境变量、请求）翻译成 `ApiHost`。
+ * 线上宿主：把 Cloudflare 给的东西（环境变量、请求）翻译成 `ApiHost`，供批改那三条链路使用。
  *
- * 这个文件是**唯一**知道"我们在 Cloudflare 上"的地方——三个接口端点都只调 `handleApi`，
- * 因此本地与线上的业务逻辑必然一致（见 `src/server/api.ts` 顶部的说明）。
+ * 这个文件是**唯一**知道"我们在 Cloudflare 上"的地方——三个批改端点都只调 `handleApi`，
+ * 因此本地与线上的业务逻辑必然一致（见 `src/server/api.ts` 顶部的说明与 ADR 0026）。
  *
- * 它为什么不放在 `functions/` 里：**`functions/` 下每个文件都是一个路由**。
- * 放一个 `host.ts` 进去，就等于对外开了一条 `/host`——那种"没人知道为什么存在、
- * 但确实能被访问"的端点正是该避免的。因此共享代码一律留在 `src/server/`，
- * `functions/` 里只放真路由（以及 `_middleware.ts`）。
+ * ⚠️ 账号那一套（注册/登录/留言板/管理）用的是另一条底座：直接吃 Pages 的 `context`
+ * （`src/server/http.ts` 的 `Ctx`），因为它们只跑在线上、本地没有对应实现。
+ * 两条底座共用同一个 `Env`：批改读 `DEEPSEEK_*`，账号读 `DB`。
+ *
+ * 共享代码为什么不放在 `functions/` 里：**`functions/` 下每个文件都是一个路由**。
+ * 放一个 `host.ts` 进去就等于对外开了一条 `/host`。
  */
 
 import * as domain from '../domain/ai'
 import { summarizeFailureRecord, type FailureRecord } from '../domain/failure-collector'
 import { handleApi, type ApiHost, type ApiKind } from './api'
+import { json, type Ctx, type Env } from './http'
+
+// 账号端点与批改端点都用这一个上下文类型；老名字 PagesContext 保留，免得改一堆 import。
+export type { Ctx as PagesContext, Env }
 
 /**
- * Cloudflare 上的环境变量与 Secret。
+ * 批改端点的 JSON 响应：在 `json()` 之上加一条 `Cache-Control: no-store`。
  *
- * 三个名字与本地 `.dev.vars` 完全一致，是为了让"本地能跑、线上忘了配"这种错误
- * 变成一次明显的失败（提示里会点名缺哪一个），而不是行为悄悄不同。
+ * 与账号接口**刻意不同**：账号响应本来就短、且要按语义缓存；批改结果是一份"你这次写得怎么样"，
+ * 被任何一层缓存住都是错的（用户会看到上一次的批改）。
  */
-export interface Env {
-  DEEPSEEK_API_KEY?: string
-  /** 可选：覆盖模型名。不给就用领域层的默认值（`deepseek-flash`） */
-  DEEPSEEK_MODEL?: string
-  /** 站点访问口令 */
-  ACCESS_PASSWORD?: string
-  /** 登录凭证的签名密钥 */
-  SESSION_SECRET?: string
-}
-
-/**
- * Pages Functions 传进来的上下文。
- *
- * 这里**刻意不引 `@cloudflare/workers-types`**：Pages 是按**导出名**（`onRequestPost` 等）
- * 认端点的，不需要任何 import，因此只要结构对得上就能跑；引了那套全局类型反而会与
- * 前端那份 DOM 类型打架（两份 `Request`/`Response` 混在一起报错最费时间）。
- */
-export interface PagesContext {
-  request: Request
-  env: Env
-  next(): Promise<Response>
-  params: Record<string, string | string[]>
-}
-
 export function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      // 批改结果与登录态都不该被任何一层缓存住
-      'Cache-Control': 'no-store',
-    },
-  })
-}
-
-/** 请求是不是 https。cookie 的 Secure 属性据此决定（本地 http 上加了就回传不了）。 */
-export function isSecureRequest(request: Request): boolean {
-  return new URL(request.url).protocol === 'https:'
+  const response = json(payload, status)
+  response.headers.set('Cache-Control', 'no-store')
+  return response
 }
 
 /**
@@ -91,8 +63,6 @@ export function buildHost(env: Env): ApiHost {
      * 失败存档：线上没有文件系统，只能打进服务端日志。
      * 两行一起打——一行是给人扫的摘要，一行是完整的 json（能直接喂给 scripts/failures.mjs 那套分析）。
      * 看日志的办法：面板里的实时日志，或 `npx wrangler pages deployment tail`。
-     * 完整的记录整条打出来，是因为本地那份存档的价值恰恰在于"原始返回全文不截断"，
-     * 线上只留摘要就等于把改提示词最需要的那部分丢了。
      */
     archive: (record: FailureRecord) => {
       console.error(`[ai-failure] ${summarizeFailureRecord(record)}`)
@@ -102,13 +72,13 @@ export function buildHost(env: Env): ApiHost {
   }
 }
 
-/** 三个端点的公共入口：读 JSON → 交给共用实现 → 变成响应。 */
-export async function runEndpoint(kind: ApiKind, context: PagesContext): Promise<Response> {
+/** 三个批改端点的公共入口：读 JSON → 交给共用实现 → 变成响应。 */
+export async function runEndpoint(kind: ApiKind, context: Ctx): Promise<Response> {
   let body: unknown
   try {
     body = await context.request.json()
   } catch {
-    return jsonResponse({ ok: false, kind: 'bad-request', message: '请求体不是合法的 JSON' }, 400)
+    return jsonResponse({ ok: false, kind: 'bad-request', message: '请求体不是合法 JSON' }, 400)
   }
 
   const result = await handleApi(kind, body, buildHost(context.env))
