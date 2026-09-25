@@ -1,9 +1,9 @@
 {
-  "name": "translation-practice",
+  "name": "fanyipigai",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "「外研社·国才杯」笔译赛项英语翻译练习站",
+  "description": "翻译批改（fanyipigai）：「外研社·国才杯」笔译赛项的个人练习站，原文与译文对照、AI 逐处批注",
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",

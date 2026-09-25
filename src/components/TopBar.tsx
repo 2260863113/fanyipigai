@@ -32,7 +32,7 @@ export function TopBar({
   return (
     <header className="topbar">
       <div className="topbar-brand">
-        <h1>英语翻译练习站</h1>
+        <h1>翻译批改</h1>
         <span className="tagline">外研社·国才杯 笔译赛项</span>
       </div>
 

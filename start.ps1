@@ -43,7 +43,7 @@ function Say([string]$text, [string]$color = 'Gray') {
 }
 
 Write-Host ''
-Write-Host '  Translation Practice - local dev server' -ForegroundColor White
+Write-Host '  Fanyipigai - local dev server' -ForegroundColor White
 Write-Host '  ---------------------------------------' -ForegroundColor DarkGray
 
 # -- 1. Node ----------------------------------------------------------

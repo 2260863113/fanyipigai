@@ -11,7 +11,7 @@ rem  literals and breaks parsing. The Chinese UI text lives inside
 rem  start.ps1 as \uXXXX escapes (ASCII source, correct output).
 rem ===================================================================
 chcp 65001 >nul
-title Translation Practice - local dev server
+title Fanyipigai - local dev server
 cd /d "%~dp0"
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1" %*
