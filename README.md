@@ -862,6 +862,9 @@ node scripts/failures.mjs --raw 1      # 看第 1 条的原始返回全文
 1. 推送到 GitHub 仓库（`main` 分支）
 2. Cloudflare 控制台 → Workers & Pages → 创建 Pages 项目 → 关联该仓库，构建设置填：
 
+   > 走控制台这条路建出来的项目，Git 推送会自动接好（下文"改了代码怎么同步"那一节）。
+   > 本项目线上那个实例是**用 API 建的**，因此还差一步授权，见下面那一节。
+
    | 项 | 值 |
    | --- | --- |
    | 生产分支 | `main` |
@@ -885,6 +888,39 @@ node scripts/failures.mjs --raw 1      # 看第 1 条的原始返回全文
    想加一道闸不必改这个仓库的任何代码——Cloudflare 的 Rate limiting 规则（按 IP 限速），
    或者给 `/api/*` 挂 Turnstile，两种都在 Cloudflare 那一层。
 4. D1 数据库（**尚未开始**）：题库与练习记录现在都存在浏览器里，接 D1 是另一件独立的事。
+
+### 改了代码怎么同步到线上
+
+**自动（首选）**：`git push origin main` → Cloudflare 收到 GitHub 的推送就自己构建部署。
+
+> ⚠️ **这条链子目前还差一步没接上**。线上那个项目是**用 Cloudflare API 建的**
+> （绕过了控制台的授权向导），因此 GitHub 上那个 Cloudflare Pages App 很可能没被
+> 授权访问这个仓库——实测两次 push 都没产生 `github:push` 类型的部署，部署列表里
+> 只有 `ad_hoc`（我手动触发的那些）。
+>
+> 修法（一次性，两分钟）：GitHub → Settings → Applications → Cloudflare Pages →
+> Configure → Repository access 里把 `fanyipigai` 加进去（或直接选 All repositories），
+> 再回 Cloudflare 面板确认 Pages → fanyipigai → Settings → Builds & deployments 里
+> Git 仓库指向 `2260863113/fanyipigai`。做完之后 push 就会自动部署。
+>
+> 修好之前，**手动那条路一直是通的**（下一条），所以不影响开发。
+
+**手动（现在就能用）**：
+
+```
+npm run deploy
+```
+
+等于 `npm run build` + `wrangler pages deploy dist --project-name fanyipigai --branch main`。
+它**把静态产物与 Functions 一起传**，因此改了 `functions/` 里的东西也一样生效
+（这条实测过：能传上去，不会被"项目已连 Git"挡住）。不想敲命令也行——Cloudflare 面板
+Pages → fanyipigai → 点 "Create new deployment"，那是同一件事。
+
+**推 Gitee 不会触发 Cloudflare**：Cloudflare 只连着 GitHub，Gitee 那份是镜像，
+推它是为了留一份国内可访问的副本。
+
+**怎么确认线上是不是新的**：面板的部署列表每条都写着 commit 短号与提交信息，
+对照 `git log --oneline -1` 即可。
 
 ### 本地把线上那一半也跑起来
 

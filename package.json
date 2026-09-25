@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
     "typecheck:src": "tsc --noEmit",
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
-    "smoke": "node scripts/run-smoke.mjs"
+    "smoke": "node scripts/run-smoke.mjs",
+    "deploy": "npm run build && npx --yes wrangler@latest pages deploy dist --project-name fanyipigai --branch main"
   },
   "dependencies": {
     "react": "^19.1.1",
