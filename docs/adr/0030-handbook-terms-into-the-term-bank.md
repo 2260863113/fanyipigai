@@ -1,6 +1,7 @@
 # 手册术语进术语库：三部分各成一个板块，组大小按板块各一个数
 
-> **状态**：已落地。材料在 `handbook-src/`（20 个 JSON），生成器是 `scripts/build-handbook-terms.mjs`，
+> **状态**：已落地、已上线（https://fanyipigai.pages.dev 上跑的就是这一版）。材料在 `handbook-src/`
+> （20 个 JSON 与 `ocr/` 下同名的 20 个块文本），生成器是 `scripts/build-handbook-terms.mjs`，
 > 数据在 `src/domain/terms-data/` 下新增的三个文件里。**题号没有换代**，仍是 `term-v3-<范围>-<方向>`。
 
 ## 决定
