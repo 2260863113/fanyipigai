@@ -19,6 +19,10 @@
  *
  * 行首标签**可以换**（`labels`）：大改档用「原文 / 我的译文 / 修改译文」，
  * 精修档沿用「原译 / 改后」。判据只有一处，两个档位不会各说各话。
+ *
+ * ⚠️ 第 17 条第 5 条：大改档每句**原文后面**多一颗「收藏」（`sentenceFavorite`），
+ * 点一下就把这一句的原文、译文、修改译文与解释四样存进「收藏」栏。
+ * 只有大改档有它——理由见那个参数的说明。
  */
 
 import type { JSX } from 'react'
@@ -43,12 +47,26 @@ export function CompareLines({
   selection,
   onSelect,
   labels = DEFAULT_LABELS,
+  sentenceFavorite,
 }: {
   lines: readonly CompareLine[]
   selection: Selection | null
   onSelect: (selection: Selection | null) => void
   /** 行首标签；大改档传「原文 / 我的译文 / 修改译文」 */
   labels?: CompareLabels
+  /**
+   * 大改档的**逐句收藏**（第 17 条第 5 条）：给了它就在每句**原文后面**画一颗「收藏」。
+   *
+   * 用户原话："每一句原文后面加一个收藏按钮，点击后，收藏这一句，包括原文，译文，修改后的译文，
+   * 解释四大部分。" 因此按钮长在原文那一行（`line.source` 存在时才有），
+   * 而"收藏这一句都存了什么"由 `domain/favorites.ts` 的 `sentenceFavoriteOf` 说了算。
+   *
+   * 精修档不传它（那边的对照视图一行没有"原文"，收藏入口在右下角的批注卡片里）。
+   */
+  sentenceFavorite?: {
+    favorited: (line: CompareLine) => boolean
+    onToggle: (line: CompareLine) => void
+  }
 }): JSX.Element {
   if (lines.length === 0) return <p className="hint">提交批改后，这里会按句子给出「改前 / 改后」对照。</p>
 
@@ -100,6 +118,25 @@ export function CompareLines({
                 <span className="compare-source-warn" title="这一句没能与屏幕上的原文对上（模型可能改写了几个字），只能当参考">
                   与原文对不上
                 </span>
+              )}
+              {/*
+                这一句的「收藏」（第 17 条第 5 条）。位置就在**原文那一行的末尾**——
+                用户点名的位置是"每一句原文后面"。按钮上的字在「收藏 / 已收藏」之间切，
+                与批注卡片里那颗同一个说法（同一件事两处不能各叫一个名字）。
+              */}
+              {sentenceFavorite && (
+                <button
+                  type="button"
+                  className={sentenceFavorite.favorited(line) ? 'compare-fav compare-fav-on' : 'compare-fav'}
+                  title={
+                    sentenceFavorite.favorited(line)
+                      ? '已收藏这一句（原文 / 你的译文 / 修改译文 / 解释）；再点一下取消'
+                      : '收藏这一句：原文、你的译文、修改译文与解释一起存进「收藏」栏'
+                  }
+                  onClick={() => sentenceFavorite.onToggle(line)}
+                >
+                  {sentenceFavorite.favorited(line) ? '已收藏' : '收藏'}
+                </button>
               )}
             </p>
           )}

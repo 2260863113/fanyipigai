@@ -9,6 +9,19 @@
  *
  * 收藏里为什么还要存"那句话所在的整句"：用户说的是"保存这句话"——
  * 单独一句 `farmer → farmers` 过几天看就不知道在说什么了，连着整句才有复习价值。
+ *
+ * ## 两种收藏（用户第 17 条第 5 条）
+ *
+ * 用户原话："文章模式下，大改模式下，每一句原文后面加一个收藏按钮，点击后，收藏这一句，
+ * 包括原文，译文，修改后的译文，解释四大部分。"
+ *
+ * 于是多了一种**整句收藏**，与原先那一种（精修档点某处批注、收藏"这一处"）并排存在：
+ *   - `kind: 'mark'`：精修档的一处改动（改前 / 改后 / 为什么）——早先只有这一种；
+ *   - `kind: 'sentence'`：大改档的**一整句**（原文 / 我的译文 / 修改译文 / 解释四块）。
+ * 两者共用一个列表、一个存储键、一套去重与删除，只有"画什么"不一样（见 FavoritesView）。
+ *
+ * ⚠️ 早先存下来的条目**没有 `kind`**：读的时候一律当作 `mark`（见 `loadFavorites`），
+ * 因此老收藏一条都不会丢（存储键 `translation-practice.favorites` 从建站起就没改过）。
  */
 
 import type { Direction, MarkColor, Mode } from './types'
@@ -20,9 +33,33 @@ const STORAGE_KEY = 'translation-practice.favorites'
 /** 最多留这么多条，再多就把最旧的挤掉（本地存储不是仓库） */
 const MAX_FAVORITES = 200
 
-export interface Favorite {
+/** 两种收藏共有的那一半：谁的、哪道题、什么时候存的、为什么。 */
+interface FavoriteBase {
   id: string
   createdAt: string
+  /** 这一条是哪种收藏（见文件头） */
+  kind: 'mark' | 'sentence'
+  /** 为什么错 / 为什么这么改（哪种收藏都有它） */
+  why: string
+  /** 条目的颜色：精修档按错误的轻重定，大改档一律橙（大改不分类） */
+  color: MarkColor
+  /** 当时是哪道题 */
+  exerciseId: string
+  mode: Mode
+  direction: Direction
+  topic: string
+  /**
+   * 这一处当时在第几页（文章题用；其它题型恒为 0）。
+   *
+   * 有了它，收藏页才能显示「这一处是从**哪一段**里来的」——
+   * 用户要求「收藏模式下，原文应该是**当前一段**的原文，而不是整篇文章」。
+   */
+  sectionIndex: number
+}
+
+/** 精修档那一处：某一处批注（改前 / 改后 / 为什么）。 */
+export interface MarkFavorite extends FavoriteBase {
+  kind: 'mark'
   /** 这一处批注的编号（同一处再收藏一次算同一条） */
   errorId: string
   /** 改前 / 改后（标签是「要改的是 / 改成」这类说法） */
@@ -30,12 +67,9 @@ export interface Favorite {
   from: string
   toLabel: string
   to: string
-  /** 为什么错 / 为什么好 */
-  why: string
-  /** 这一处是什么类型、什么分类，以及它的颜色 */
+  /** 这一处是什么类型、什么分类 */
   typeLabel: string
   categoryLabel: string
-  color: MarkColor
   /** 修改前的整句 */
   sentenceBefore: string
   /** 修改后的整句（把这一处的改法应用上去之后的整句） */
@@ -50,19 +84,27 @@ export interface Favorite {
   beforeEnd: number
   afterStart: number
   afterEnd: number
-  /** 当时是哪道题 */
-  exerciseId: string
-  mode: Mode
-  direction: Direction
-  topic: string
-  /**
-   * 这一处当时在第几页（文章题用；其它题型恒为 0）。
-   *
-   * 有了它，收藏页才能显示「这一处是从**哪一段**里来的」——
-   * 用户要求「收藏模式下，原文应该是**当前一段**的原文，而不是整篇文章」。
-   */
-  sectionIndex: number
 }
+
+/**
+ * 大改档那一整句：**原文 / 我的译文 / 修改译文 / 解释**四部分（用户第 17 条第 5 条点名的那四样）。
+ *
+ * 与 `MarkFavorite` 的差别不只是多了"原文"一行：那边收藏的是**一处改动**，
+ * 那边整句只是"这一处所在的上下文"；这边**整句就是收藏的对象**——
+ * 大改是整篇逐句重写，用户回头要复习的是"这一句我原来怎么写、AI 改成什么样、为什么"。
+ * 因此这里没有 `beforeStart/End` 那套区间：整句都要，不必标其中一段。
+ */
+export interface SentenceFavorite extends FavoriteBase {
+  kind: 'sentence'
+  /** 这一句对应的**原文**（对照视图里最上面那一行） */
+  source: string
+  /** 我的译文（那一句） */
+  sentenceBefore: string
+  /** 修改译文（AI 重写后的那一句） */
+  sentenceAfter: string
+}
+
+export type Favorite = MarkFavorite | SentenceFavorite
 
 /**
  * 把一段文本切成句子（返回**首尾相接、不重不漏**的区间），**逗号也算句末**。
@@ -162,10 +204,11 @@ export function favoriteOf(input: {
   span: { start: number; end: number }
   context: { exerciseId: string; mode: Mode; direction: Direction; topic: string; sectionIndex: number }
   now?: Date
-}): Favorite {
+}): MarkFavorite {
   const createdAt = (input.now ?? new Date()).toISOString()
   const sentences = sentencePair(input.answer, input.span, input.summary.to)
   return {
+    kind: 'mark',
     id: `fav-${input.context.exerciseId}-${input.summary.key}`,
     createdAt,
     errorId: input.summary.key,
@@ -191,7 +234,63 @@ export function favoriteOf(input: {
   }
 }
 
-/** 读出全部收藏（新的在前）。存坏了、没存过都返回空数组。 */
+/**
+ * 一串文字的短摘要（收藏条目的编号用它）。
+ *
+ * 为什么整句收藏的编号不写"第几句"：同一个题号、同一页**可以重新大改一次**，
+ * 而重新大改之后句子的顺序未必与上一次相同——按序号编号的话，第二次点「收藏」
+ * 会去把上一次**另一句**的收藏取消掉（编号撞上了），用户看到的是"按钮亮着，可我没收藏过这句"。
+ * 按内容摘要编号就没有这件事：同一句永远是同一个编号（点第二次＝取消），换了句子就是另一条。
+ *
+ * djb2：够短、够稳、不引依赖。它**不是**安全哈希，这里也不需要有安全性——
+ * 只要"同一串文字同号、不同文字基本不同号"。
+ */
+export function textKey(text: string): string {
+  let hash = 5381
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) + hash + text.charCodeAt(index)) | 0
+  }
+  return (hash >>> 0).toString(36)
+}
+
+/**
+ * 大改档的**整句收藏**（用户第 17 条第 5 条）：原文 + 我的译文 + 修改译文 + 解释，四样一起存。
+ *
+ * 编号按"原文 + 我的译文"这串文字算（见 `textKey` 的说明），因此同一句反复收藏是幂等的、
+ * 重新大改之后也不会串到别的句子上去。
+ */
+export function sentenceFavoriteOf(input: {
+  source: string
+  before: string
+  after: string
+  why: string
+  context: { exerciseId: string; mode: Mode; direction: Direction; topic: string; sectionIndex: number }
+  now?: Date
+}): SentenceFavorite {
+  return {
+    kind: 'sentence',
+    id: `fav-${input.context.exerciseId}-s${textKey(`${input.source}\u0000${input.before}`)}`,
+    createdAt: (input.now ?? new Date()).toISOString(),
+    why: input.why,
+    /* 大改档一律橙（那一档不分类，见 domain/refine.ts） */
+    color: 'orange',
+    source: input.source,
+    sentenceBefore: input.before,
+    sentenceAfter: input.after,
+    exerciseId: input.context.exerciseId,
+    mode: input.context.mode,
+    direction: input.context.direction,
+    topic: input.context.topic,
+    sectionIndex: input.context.sectionIndex,
+  }
+}
+
+/**
+ * 读出全部收藏（新的在前）。存坏了、没存过都返回空数组。
+ *
+ * ⚠️ 早先的条目**没有 `kind`**（这个字段是第 17 条才加的），一律按 `mark` 认——
+ * 存储键从建站起没改过，老收藏因此一条都不会丢。
+ */
 export function loadFavorites(): Favorite[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -203,18 +302,21 @@ export function loadFavorites(): Favorite[] {
         const favorite = item as Partial<Favorite> | null
         return Boolean(favorite && typeof favorite.id === 'string' && typeof favorite.why === 'string')
       })
-      /*
-       * 补上页号：`sectionIndex` 是后加的字段，早先存下来的收藏里没有它。
-       * 老条目一律当作第 0 页——它多半本来就是单页题（句子题、术语题）。
-       */
       .map((favorite) => ({
         ...favorite,
+        kind: favorite.kind === 'sentence' ? ('sentence' as const) : ('mark' as const),
+        /*
+         * 补上页号：`sectionIndex` 是后加的字段，早先存下来的收藏里没有它。
+         * 老条目一律当作第 0 页——它多半本来就是单页题（句子题、术语题）。
+         */
         sectionIndex: Number.isInteger(favorite.sectionIndex) ? favorite.sectionIndex : 0,
-      }))
+      })) as Favorite[]
   } catch {
     return []
   }
-}function persist(favorites: readonly Favorite[]): Favorite[] {
+}
+
+function persist(favorites: readonly Favorite[]): Favorite[] {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(favorites))
   } catch {

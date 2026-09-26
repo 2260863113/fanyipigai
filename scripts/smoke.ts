@@ -2911,6 +2911,46 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         refine.noteCircled[1] === '②',
         `第二行也带圈号（实际 ${JSON.stringify(refine.noteCircled[1] ?? '(没有)')}）`,
       )
+      /*
+       * 第 17 条第 5 条：**每一句原文后面有一颗「收藏」**，点一下把这一句的
+       * 原文 / 我的译文 / 修改译文 / 解释四部分一起存进「收藏」栏。
+       * 三件事都要量：按钮在（文案是「收藏」）、点完文案变成「已收藏」、
+       * 浏览器里存下来的那一条**四部分齐全**（少一样，用户回头复习时就是个残条）。
+       */
+      check(
+        refine.sentenceFavButton === '收藏',
+        `大改档每句原文后面有一颗「收藏」（实际 ${JSON.stringify(refine.sentenceFavButton)}）`,
+      )
+      check(
+        refine.sentenceFavAfterClick === '已收藏',
+        `点过之后那颗按钮变成「已收藏」（实际 ${JSON.stringify(refine.sentenceFavAfterClick)}）`,
+      )
+      const sentenceFavs = refine.sentenceFavStored.filter((item) => item['kind'] === 'sentence')
+      const favStored = sentenceFavs[0]
+      check(
+        sentenceFavs.length === 1,
+        `收藏里多出一条「整句收藏」（整句 ${sentenceFavs.length} 条／一共 ${refine.sentenceFavStored.length} 条）`,
+      )
+      check(
+        Boolean(favStored?.['source']) &&
+          Boolean(favStored?.['sentenceBefore']) &&
+          Boolean(favStored?.['sentenceAfter']) &&
+          Boolean(favStored?.['why']),
+        '这一条里**原文 / 我的译文 / 修改译文 / 解释**四部分都在',
+        JSON.stringify(favStored ?? {}).slice(0, 200),
+      )
+      check(
+        favStored?.['source'] !== undefined &&
+          favStored['source'] !== favStored['sentenceBefore'] &&
+          favStored['why'] !== favStored['sentenceAfter'],
+        '四部分各是各的（原文不是译文、解释不是改写句）',
+        JSON.stringify({
+          原文: String(favStored?.['source']).slice(0, 30),
+          译文: String(favStored?.['sentenceBefore']).slice(0, 30),
+          改后: String(favStored?.['sentenceAfter']).slice(0, 30),
+          解释: String(favStored?.['why']).slice(0, 30),
+        }),
+      )
     }
     refineProbe.restore()
 
@@ -4548,6 +4588,309 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(writtenExpires - writtenAt === 30 * 24 * 60 * 60 * 1000, '会话有效期 30 天（与 README 的口径一致）')
   } catch (error) {
     check(false, '账号这一套可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 账号下拉栏 / 管理端 / 留言板（第 17 条第 6、7、8、9 条）。
+   *
+   * 为什么这几条必须**挂起来点**：它们每一条都是"点了之后落到哪儿"的断言——
+   * 下拉栏里有哪几项、点「用户管理」落在哪一屏、折线图有没有画出来、鼠标挪上去弹不弹、
+   * 留言板每条前面有没有头像。这些都只有真 DOM 才答得上来（纯函数测不到）。
+   */
+  try {
+    console.log('\n[账号下拉栏 · 管理端 · 留言板] 第 17 条第 6／7／8／9 条')
+    const accountProbe = await renderApp({ exerciseId: 'sentence-001', admin: true, checkAccounts: true })
+    const accounts = accountProbe.accounts
+    check(Boolean(accounts), '账号那一段探针跑通了')
+    if (accounts) {
+      check(
+        !accounts.navHasAdminTab && accounts.navHasBoard,
+        `顶栏不再有「管理」（它搬进下拉栏了），「留言板」照旧在（实际 ${JSON.stringify(accounts.navHasAdminTab)} / ${JSON.stringify(accounts.navHasBoard)}）`,
+      )
+      check(
+        accounts.menuItems.join('｜') === '个人中心｜修改密码｜用户管理｜日志管理｜发布公告｜退出登录',
+        `下拉栏里那几项、而且顺序对（实际 ${accounts.menuItems.join('｜')}）`,
+      )
+      check(
+        accounts.passwordFields.join('｜') === '旧密码｜新密码｜确认新密码',
+        `「修改密码」弹出三格（实际 ${accounts.passwordFields.join('｜')}）`,
+      )
+      check(
+        accounts.adminTab === '用户管理' && accounts.userRows === 3,
+        `下拉栏点「用户管理」直接落到用户那一屏（高亮 ${JSON.stringify(accounts.adminTab)}，${accounts.userRows} 行用户）`,
+      )
+      check(
+        accounts.userAvatars === accounts.userRows,
+        `用户管理每一行都画了头像（${accounts.userAvatars}/${accounts.userRows}）`,
+      )
+      /* 折线图（第 7 条）：7 个桶 → 7 个圆点、一条平滑折线、一层渐变面积、两轴刻度 */
+      check(
+        accounts.chart.dots === 7 && accounts.chart.hasLine && accounts.chart.hasArea,
+        `流量板画成了折线图（${accounts.chart.dots} 个圆点／折线 ${accounts.chart.hasLine}／面积 ${accounts.chart.hasArea}）`,
+      )
+      check(
+        accounts.chart.yLabels.length >= 2 && accounts.chart.xLabels.length >= 2,
+        `两轴都有刻度（y ${accounts.chart.yLabels.join(',')}；x ${accounts.chart.xLabels.join(',')}）`,
+      )
+      check(
+        accounts.chart.tooltip.includes('次访问') && accounts.chart.activeDotGrew,
+        `鼠标挪到某个点上会弹出那一桶的访问量，那个点也跟着变大（提示 ${JSON.stringify(accounts.chart.tooltip)}）`,
+      )
+      /* 完整设备名（第 8 条）：游客那一行也要有完整 UA 原样摊在列表上 */
+      const guestRow = accounts.logRows.find((row) => row.user === '游客')
+      check(
+        accounts.logRows.length === 2 && Boolean(guestRow),
+        `访问明细里游客那一条在（${accounts.logRows.map((row) => row.user).join('／')}）`,
+      )
+      check(
+        Boolean(guestRow?.ua.startsWith('Mozilla/5.0 (Linux; Android 13; SM-G991B')),
+        `游客那条记的是**完整**设备名称（原样 UA，实际 ${JSON.stringify(guestRow?.ua.slice(0, 60))}）`,
+      )
+      check(
+        (guestRow?.device ?? '').includes('Android 13') && (guestRow?.device ?? '').includes('Chrome 118'),
+        `设备名那一列给的是带版本号的人话版本（实际 ${JSON.stringify(guestRow?.device)}）`,
+      )
+      /* 留言板头像（第 6 条）：帖子和回复都有；没头像的那条画首字，不是一个空圈 */
+      check(
+        accounts.board.postAvatars === 2 && accounts.board.replyAvatars === 1,
+        `留言板每条帖子/回复前面都有头像（帖子 ${accounts.board.postAvatars}／回复 ${accounts.board.replyAvatars}）`,
+      )
+      check(
+        accounts.board.firstAvatarHasImage && accounts.board.defaultAvatarText === '没',
+        `有头像的铺 dataUrl、没头像的画首字（首字 ${JSON.stringify(accounts.board.defaultAvatarText)}）`,
+      )
+    }
+    accountProbe.restore()
+  } catch (error) {
+    check(false, '账号下拉栏 / 管理端 / 留言板可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  /*
+   * 流量看板的算法（第 17 条第 7 条）与"术语更正怎么摆"（第 2 条）——
+   * 这两块都是**纯函数**，可以对着数字一条条钉住（画出来之前就该是对的）。
+   */
+  try {
+    console.log('\n[流量折线的算法] 桶标签 / 坐标 / 路径 / 刻度')
+    const traffic = await import('../src/domain/traffic')
+    check(traffic.formatAxisLabel('day', '2026-09-06') === '9/6', '按天：x 轴刻度写成 9/6')
+    check(traffic.formatAxisLabel('hour', '2026-09-06 14:00') === '14:00', '按小时：x 轴刻度写成 14:00')
+    check(
+      traffic.formatPointLabel('day', '2026-09-06') === '9月6日' &&
+        traffic.formatPointLabel('hour', '2026-09-06 14:00') === '9月6日 14:00',
+      '悬停提示里的日期是人话（9月6日 / 9月6日 14:00）',
+    )
+    /* 桶标签**绝不用 Date 解析**：不含时区的日历串按本地时区解释会整条漂（见模块头） */
+    check(
+      traffic.formatAxisLabel('day', '2026-01-01') === '1/1' &&
+        traffic.formatAxisLabel('day', '') === '' &&
+        traffic.formatAxisLabel('day', '不是日期') === '不是日期',
+      '脏标签原样返回、不猜（认不出来不等于崩掉）',
+    )
+    check(traffic.niceMax(0) === 1 && traffic.niceMax(3) === 5 && traffic.niceMax(11) === 20 && traffic.niceMax(120) === 200,
+      'y 轴上限取整齐上界（0→1、3→5、11→20、120→200）')
+    const points = [
+      { label: '2026-09-20', count: 3 },
+      { label: '2026-09-21', count: 0 },
+      { label: '2026-09-22', count: 8 },
+    ]
+    const box = { width: 300, height: 240, padding: { left: 44, right: 16, top: 14, bottom: 26 } }
+    const coords = traffic.chartPoints(points, box)
+    check(coords.length === 3 && coords[0]?.x === 44 && coords[2]?.x === 284, '点数与首尾 x 坐标对得上（左内边距 → 右内边距）')
+    /*
+     * y 的算法：内高 200（240 减去上下内边距 14/26）、上限取整齐上界 10。
+     * 0 → 落在基线 214；3 → 214 - 200×0.3 = 154；8 → 214 - 200×0.8 = 54。
+     */
+    check(
+      coords[0]?.y === 154 && coords[1]?.y === 214 && coords[2]?.y === 54,
+      `y 按峰值归一化且翻过来（0/3/8 → 214/154/54，实际 ${coords.map((c) => c.y).join('/')}）`,
+    )
+    check(traffic.chartPoints([points[0]!], box)[0]?.x === 164, '只有一个点时放在正中（不然除以 0 会得到 NaN）')
+    const path = traffic.linePath(coords)
+    check(path.startsWith('M 44') && path.includes(' C '), `折线是平滑的（${path.slice(0, 40)}…）`)
+    check(path.split('C').length - 1 === 2, '两段之间正好一条三次贝塞尔（点数-1）')
+    const area = traffic.areaPath(coords, 214)
+    check(area.endsWith('Z') && area.includes('L 284 214') && area.includes('L 44 214'), '面积路径收口到基线（下沿封住才填得出渐变）')
+    check(traffic.areaPath(coords.slice(0, 1), 214) === '', '只有一个点时画不出面积（宽为 0），返回空串只画圆点')
+    check(
+      traffic.yTicks(points).join(',') === '0,3,5,8,10',
+      `y 轴刻度等分四段（实际 ${traffic.yTicks(points).join(',')}）`,
+    )
+    check(
+      traffic.axisTickIndexes(7, 800).join(',') === '0,1,2,3,4,5,6',
+      '近七天七个点全都写得下（不抽稀）',
+    )
+    const monthTicks = traffic.axisTickIndexes(30, 800)
+    check(
+      monthTicks[0] === 0 && monthTicks[monthTicks.length - 1] === 29 && monthTicks.length < 30,
+      `近一个月 30 个点会抽稀，首尾一定保留（实际 ${monthTicks.length} 个刻度：${monthTicks.join(',')}）`,
+    )
+    check(
+      traffic.axisTickIndexes(7, 240).length < 7,
+      '图窄的时候同一批点会抽稀（刻度不会叠成一片）',
+    )
+    check(traffic.totalTraffic(points) === 11 && traffic.peakTraffic(points) === 8, '合计与峰值（8 是峰值、合计 11）')
+  } catch (error) {
+    check(false, '流量折线的算法可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  try {
+    console.log('\n[术语更正怎么摆] 一行装下 / 左右加空格拓宽（第 17 条第 2 条）')
+    const fit = await import('../src/components/term-above-fit')
+    check(
+      fit.correctionFit({ correctionWidth: 60, anchorWidth: 60, availableWidth: 400 }).pad === 0,
+      '更正与标记段一样宽：不用加空格',
+    )
+    const wider = fit.correctionFit({ correctionWidth: 200, anchorWidth: 60, availableWidth: 400 })
+    check(
+      wider.oneLine && wider.pad === 70,
+      `更正比词宽 140px：左右各撑开 70px（正好包住它，实际 ${JSON.stringify(wider)}）`,
+    )
+    /*
+     * 撑开量不能把这一行撑出 ✗ 之外：可用 100px、标记段 61px 时，
+     * "正好包住更正"要 20px，而"不许撑出去"只允许 19px —— 取小的那个（19）。
+     */
+    const capped = fit.correctionFit({ correctionWidth: 100, anchorWidth: 61, availableWidth: 100 })
+    check(
+      capped.oneLine && capped.pad === 19,
+      `撑开量不许把这一行撑出 ✗ 之外（可用 100px → 每边只加 19px，实际 ${JSON.stringify(capped)}）`,
+    )
+    const noRoom = fit.correctionFit({ correctionWidth: 500, anchorWidth: 60, availableWidth: 400 })
+    check(
+      !noRoom.oneLine && noRoom.pad === 0,
+      `整行都放不下时才退回折行（一行 500px > 可用 400px，实际 ${JSON.stringify(noRoom)}）`,
+    )
+    check(
+      fit.correctionFit({ correctionWidth: 0, anchorWidth: 60, availableWidth: 400 }).pad === 0,
+      '更正比标记段窄时不缩（只加、不减）',
+    )
+  } catch (error) {
+    check(false, '术语更正的摆法可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  try {
+    console.log('\n[设备名] 完整名称与短名字（第 17 条第 8 条）')
+    const { describeDevice, shortenUserAgent } = await import('../src/components/auth/format')
+    const edge =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0'
+    check(
+      describeDevice(edge).browser === 'Edge' && describeDevice(edge).browserVersion === '140',
+      `Edge 认得出（实际 ${describeDevice(edge).browser} ${describeDevice(edge).browserVersion}）`,
+    )
+    check(
+      describeDevice(edge).os === 'Windows' && describeDevice(edge).osVersion === '10/11',
+      'Windows NT 10.0 → 「Windows 10/11」（11 与 10 在 UA 上分不开，照实这么写）',
+    )
+    const android =
+      'Mozilla/5.0 (Linux; Android 13; SM-G991B Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/118.0.0.0 Mobile Safari/537.36'
+    const phone = describeDevice(android)
+    check(
+      phone.os === 'Android' && phone.osVersion === '13' && phone.kind === '手机' && phone.model === 'SM-G991B',
+      `安卓认出系统版本与机型（实际 ${JSON.stringify({ os: phone.os, ver: phone.osVersion, kind: phone.kind, model: phone.model })}）`,
+    )
+    check(
+      describeDevice('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1').osVersion ===
+        '17.0',
+      'iPhone OS 17_0 → iOS 17.0（下划线换成点）',
+    )
+    check(
+      describeDevice('curl/8.4.0').browser === '命令行 / 脚本' && describeDevice('').label === '（没有 UA）',
+      '命令行与空 UA 都不假装认出来了',
+    )
+    check(
+      shortenUserAgent(edge) === 'Edge · Windows',
+      `短名字照旧是"浏览器 · 系统"（实际 ${JSON.stringify(shortenUserAgent(edge))}）`,
+    )
+    check(
+      describeDevice(edge).label.includes('Edge 140') && describeDevice(edge).label.includes('电脑'),
+      `人话版本带版本号与形态（实际 ${JSON.stringify(describeDevice(edge).label)}）`,
+    )
+  } catch (error) {
+    check(false, '设备名可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  try {
+    console.log('\n[整句收藏] 四部分 / 编号稳定 / 老条目兼容（第 17 条第 5 条）')
+    const favorites = await import('../src/domain/favorites')
+    const context = {
+      exerciseId: 'art-economy-1',
+      mode: 'article' as const,
+      direction: 'zh-to-en' as const,
+      topic: '经济',
+      sectionIndex: 2,
+    }
+    const one = favorites.sentenceFavoriteOf({
+      source: 'The reform is deepened.',
+      before: '改革被加深了。',
+      after: '改革不断深化。',
+      why: '语态不对；时态也要跟着改。',
+      context,
+      now: new Date('2026-09-26T00:00:00Z'),
+    })
+    check(
+      one.kind === 'sentence' &&
+        one.source === 'The reform is deepened.' &&
+        one.sentenceBefore === '改革被加深了。' &&
+        one.sentenceAfter === '改革不断深化。' &&
+        one.why.includes('语态不对'),
+      '一条收藏里原文 / 我的译文 / 修改译文 / 解释四部分齐全',
+    )
+    check(
+      one.id.startsWith('fav-art-economy-1-s') && one.sectionIndex === 2 && one.mode === 'article' && one.color === 'orange',
+      `编号带上题号、页号也存住了、颜色是大改那一档的橙（实际 ${one.id}）`,
+    )
+    const sameA = favorites.sentenceFavoriteOf({ source: 'A', before: 'B', after: 'X', why: 'w', context })
+    const sameB = favorites.sentenceFavoriteOf({ source: 'A', before: 'B', after: 'Y', why: 'w2', context })
+    const other = favorites.sentenceFavoriteOf({ source: 'A', before: 'C', after: 'X', why: 'w', context })
+    check(
+      sameA.id === sameB.id && sameA.id !== other.id,
+      '同一句永远是同一个编号（改后文字变了也还是它），换了一句就是另一条',
+    )
+    const list = favorites.toggleFavorite([], one)
+    check(list.length === 1 && favorites.toggleFavorite(list, one).length === 0, '再点一次是取消（同一处只留一条）')
+    check(
+      favorites.removeFavorite(list, one.id).length === 0 && favorites.clearFavorites().length === 0,
+      '收藏页的「删除」与「全部清空」照旧管用',
+    )
+    /* 老条目没有 kind：读回来必须当成 mark，一条都不能丢（存储键从建站起没改过） */
+    const legacy = {
+      id: 'fav-legacy-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      why: '为什么',
+      sentenceBefore: '改前',
+      sentenceAfter: '改后',
+      exerciseId: 'article-001',
+      mode: 'article',
+      direction: 'zh-to-en',
+      topic: '话题',
+      sectionIndex: 1,
+    }
+    const store = (globalThis as unknown as { localStorage: { setItem: (k: string, v: string) => void } }).localStorage
+    store.setItem('translation-practice.favorites', JSON.stringify([legacy]))
+    const loaded = favorites.loadFavorites()
+    check(
+      loaded.length === 1 && loaded[0]?.kind === 'mark' && loaded[0]?.id === 'fav-legacy-1',
+      '早先存的收藏（没有 kind 那一位）读回来仍是一条，按「某处批注」认',
+    )
+    store.setItem('translation-practice.favorites', '{"不是数组":true}')
+    check(favorites.loadFavorites().length === 0, '存坏了返回空列表，不抛（收藏页照样能打开）')
+  } catch (error) {
+    check(false, '整句收藏可以验证', error instanceof Error ? error.message : String(error))
+  }
+
+  try {
+    console.log('\n[管理页三个子视图] 名字与落点（第 17 条第 9 条）')
+    const tabs = await import('../src/components/admin-tabs')
+    check(
+      tabs.ADMIN_TABS.map((tab) => tab.label).join('｜') === '用户管理｜日志管理｜发布公告',
+      `三个子视图的名字用用户点名的说法（实际 ${tabs.ADMIN_TABS.map((tab) => tab.label).join('｜')}）`,
+    )
+    check(
+      tabs.isAdminTab('users') && tabs.isAdminTab('logs') && !tabs.isAdminTab('profile') && !tabs.isAdminTab(''),
+      '只认这三个编号（下拉栏点错一项不会落到别的屏上）',
+    )
+    check(tabs.DEFAULT_ADMIN_TAB === 'users', '默认落点是用户管理（与地图记忆一致）')
+  } catch (error) {
+    check(false, '管理页的子视图定义可以验证', error instanceof Error ? error.message : String(error))
   }
 
   /*

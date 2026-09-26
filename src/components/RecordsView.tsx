@@ -17,8 +17,10 @@ import { ScoreSummary } from './ScoreSummary'
 import { DetailPanel } from './DetailPanel'
 import { RawResponseButton } from './RawResponseButton'
 import { favoriteFor } from './annotation-summary'
+import { sentenceFavoriteOf, type Favorite, type SentenceFavorite } from '../domain/favorites'
+import type { CompareLine } from '../domain/compare'
 import { useSplitDrag } from './split-drag'
-import type { Favorite } from '../domain/favorites'
+import { useEqualPaneHeadHeights } from './pane-heads'
 import type { ViewSettings } from './settings'
 
 /**
@@ -127,6 +129,11 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
   const { split, style: splitStyle, beginDrag, resetSplit } = useSplitDrag('records-outer', splitRef)
   const nestedRef = useRef<HTMLDivElement | null>(null)
   const nested = useSplitDrag('records-nested', nestedRef)
+  /*
+   * 回看这一屏里也有"原文 / 当时的译文"两栏，标题栏同样要等高（用户第 17 条第 3 条说"所有模式"）。
+   * 判据与练习页是同一份（见 pane-heads.ts），因此两处的等高方式不会各说各话。
+   */
+  useEqualPaneHeadHeights(nestedRef)
 
   /** 当前选中那一处的收藏内容（记录页也要能收藏） */
   const favorite = openRecord
@@ -156,6 +163,28 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
         : { segments: [], reorderGroups: [], rejectedIds: [], droppedCount: 0 },
     [openRecord],
   )
+
+  /**
+   * 大改档的一句话 → 一条**整句收藏**（第 17 条第 5 条：原文 / 我的译文 / 修改译文 / 解释）。
+   *
+   * 与练习页那一份是同一个构造（`sentenceFavoriteOf`），只有上下文来自**这条记录**而不是
+   * 当前会话——回看旧记录时收藏下来的仍要记得"是哪一页的那一句"。
+   */
+  function sentenceFavoriteOfRecord(line: CompareLine): SentenceFavorite {
+    return sentenceFavoriteOf({
+      source: line.source ?? '',
+      before: line.original,
+      after: line.corrected.map((span) => span.text).join(''),
+      why: line.note ?? '',
+      context: {
+        exerciseId: openRecord?.exerciseId ?? '',
+        mode: openRecord?.mode ?? 'article',
+        direction: openRecord?.direction ?? 'zh-to-en',
+        topic: openRecord?.topic ?? '',
+        sectionIndex: openRecord?.sectionIndex ?? 0,
+      },
+    })
+  }
 
   return (
     <main className={`split split-records${split ? ' split-manual' : ''}`} ref={splitRef} style={splitStyle}>
@@ -335,8 +364,16 @@ export function RecordsView({ records, openRecord, onOpen, selection, settings, 
               </header>
               <div className="pane-body">
                 {openRecord.refine ? (
-                  /* 大改档：回看时同样只有一种看法——逐句「原译 / 改后」+ 每句的解释 */
-                  <RefineView refine={openRecord.refine} />
+                  /* 大改档：回看时同样只有一种看法——逐句「原译 / 改后」+ 每句的解释；
+                     每句原文后面那颗「收藏」在这里也照旧（回看时照样能收藏这一句） */
+                  <RefineView
+                    refine={openRecord.refine}
+                    favorite={{
+                      favorited: (line: CompareLine) =>
+                        favorites.some((item) => item.id === sentenceFavoriteOfRecord(line).id),
+                      onToggle: (line: CompareLine) => onToggleFavorite(sentenceFavoriteOfRecord(line)),
+                    }}
+                  />
                 ) : settings.answerView === 'compare' ? (
                   /* 对照视图：与练习页同一套排版（一句原译、一句改后，各占一行） */
                   <CompareView

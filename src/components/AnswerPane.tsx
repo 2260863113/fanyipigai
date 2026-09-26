@@ -40,6 +40,7 @@ import { RefineView } from './RefineView'
 import { GradeHistoryPicker, type GradeHistoryEntry } from './GradeHistoryPicker'
 import { LEVEL_LABEL, type PolishLevel } from '../domain/types'
 import type { AnnotatedLayout } from '../domain/layout'
+import type { CompareLine } from '../domain/compare'
 import type { RefineResult } from '../domain/refine'
 import type { ValidatedCorrection } from '../domain/validate'
 import type { ViewSettings } from './settings'
@@ -120,6 +121,7 @@ export function AnswerPane({
   onAnswerChange,
   favorite,
   onToggleFavorite,
+  sentenceFavorite,
 }: {
   shown: ShownCorrection | null
   layout: AnnotatedLayout
@@ -168,6 +170,14 @@ export function AnswerPane({
   /** 小卡片里的「收藏」；不传就不显示那颗按钮（记录页不传） */
   favorite?: boolean
   onToggleFavorite?: () => void
+  /**
+   * 大改档的**逐句收藏**（第 17 条第 5 条）：传给 `RefineView`，每句原文后面多一颗「收藏」。
+   * 不传就没有那颗按钮（精修档、以及别处单独用这个组件时）。
+   */
+  sentenceFavorite?: {
+    favorited: (line: CompareLine) => boolean
+    onToggle: (line: CompareLine) => void
+  }
 }): JSX.Element {
   const hasAnswer = currentAnswer.trim().length > 0
   /**
@@ -320,8 +330,8 @@ export function AnswerPane({
 
         {showResult && shown ? (
           refine ? (
-            /* 大改档：只有一种看法——逐句「原译 / 改后」+ 每句的解释 */
-            <RefineView refine={refine} />
+            /* 大改档：只有一种看法——逐句「原译 / 改后」+ 每句的解释；每句原文后面那颗「收藏」由这里传下去 */
+            <RefineView refine={refine} {...(sentenceFavorite ? { favorite: sentenceFavorite } : null)} />
           ) : settings.answerView === 'compare' ? (
             /*
              * 对照视图**不受行距设置影响**（用户要求"对照视图还是保持以前那样一句对一句"）。

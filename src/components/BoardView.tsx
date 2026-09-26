@@ -13,6 +13,11 @@
  *  1. 它的回复框是"点「回复」才展开"（`board-reply-input` 平时隐藏）。这边照做，展开状态放在 React state 里。
  *  2. 它的公告是另一个面板（`announcementPanel.ts`）。这边公告就排在留言板最上面，
  *     用它那套 `.announcement-*` 类名与结构。
+ *
+ * ⚠️ **每条留言前面加了头像**（用户第 17 条第 6 条：原文"留言板每条信息加上用户头像"）。
+ * 头像本来就在接口里（`BoardPost.avatar` / `BoardReply.avatar` 一直是服务端 JOIN users 取出来的），
+ * 只是一直没画——因此这一条是纯前端的事，接口与库表一个字没动。
+ * 画法用 `<UserAvatar mini>`，与用户管理里那一批同一张脸（见 UserAvatar.tsx）。
  */
 
 import { useCallback, useEffect, useState, type FormEvent, type JSX } from 'react'
@@ -27,6 +32,7 @@ import {
 } from './auth/api'
 import { relativeTime } from './auth/format'
 import { useAuth } from './auth/store'
+import { UserAvatar } from './UserAvatar'
 
 export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): JSX.Element {
   const auth = useAuth()
@@ -173,6 +179,7 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
             return (
               <div key={post.id} className="board-post">
                 <div className="board-post-head">
+                  <UserAvatar username={post.username} avatar={post.avatar} mini />
                   <span className="board-author">{post.username}</span>
                   <span className="board-time">{relativeTime(post.createdAt)}</span>
                   {auth.user?.username === post.username ? (
@@ -198,6 +205,7 @@ export function BoardView({ onRequireLogin }: { onRequireLogin: () => void }): J
                     {replies.map((reply) => (
                       <div key={reply.id} className="board-reply">
                         <div className="board-reply-head">
+                          <UserAvatar username={reply.username} avatar={reply.avatar} mini />
                           <span className="board-author">{reply.username}</span>
                           <span className="board-time">{relativeTime(reply.createdAt)}</span>
                           {auth.user?.username === reply.username ? (

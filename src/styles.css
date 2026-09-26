@@ -303,7 +303,16 @@ button {
   color: var(--ink-faint);
 }
 
+/*
+ * 题干那一侧（中译英给中文名、英译中给官方英文名）。
+ *
+ * `flex: 0 1 auto` + `min-width` 是**为了给右边那条标准译法让位**（第 17 条第 1 条）：
+ * 题干自己短（「中央政治局」）时不要撑开，长的英文名也留一个下限，
+ * 剩下的宽度就交给标准译法——它一行装得下就一行，装不下才折行（见下一条）。
+ */
 .term-source-text {
+  flex: 0 1 auto;
+  min-width: 11em;
   font-size: 14px;
   line-height: 1.6;
   color: var(--ink);
@@ -316,13 +325,25 @@ button {
  * `margin-left: auto` 就是"右对齐"这件事的全部实现：这一行是 flex，
  * 题干那一侧占着它的自然宽度，答案于是被推到行尾——与右边作答栏那一行**同一水平高度**，
  * 一眼能对上"这条题干的标准译法是什么"。
- * 长英文名（`Central Committee of the Communist Party of China`）会折行，
- * 因此给它一个宽度上限：不限制的话它会把题干挤成一条竖线。
+ *
+ * ⚠️ 宽度上限从 46% 放宽到 64%（第 17 条第 1 条）。用户原话：
+ * "术语模式的参考译文能一行装下就一行装下，如果无法装下，才变成两行。"
+ *
+ * 46% 那一条是当年为了"别把题干挤成一条竖线"定的，但它**不看内容**：
+ * 1440 宽的窗口里一行有 688px，46% = 316px，于是
+ * 「Central Committee of the Communist Party of China(CPC Central Committee)」（71 字符，约 410px）
+ * 明明一行放得下（题干只占 140px），也被硬折成两行——实测第 1 页十条里有两条是这样的。
+ *
+ * 现在：上限 64%（约 440px，覆盖国内/国际机关名称里所有一条能放下的官方译名），
+ * 加上题干那一侧的 `min-width: 11em`，两边都还有位置。超过上限的（《手册》那三个板块里
+ * 那些整句的当代术语，长的有 1400px 上下）本来就一行放不下，照旧折行——
+ * 折行时行高仍由等分决定，因此两栏的横线不会因为折行而错位。
  */
 .term-source-ref {
-  flex: none;
+  flex: 0 1 auto;
   margin-left: auto;
-  max-width: 46%;
+  min-width: 5em;
+  max-width: 64%;
   text-align: right;
   font-size: 12.5px;
   line-height: 1.45;
@@ -460,13 +481,19 @@ button {
  *
  * `bottom: 100%` 就是"写在它上方"的全部实现：绝对定位，因此不占这一行的排版高度，
  * 两栏的横线仍然对得上。字号比正文小一号，颜色跟着这一条的对错走（红色）。
- * 长一点（整条都写错时）会折行，`max-width` 兜住它不要横着跑出这一栏。
+ *
+ * ⚠️ 第 17 条第 2 条起它**一行就写完**（用户："需要让修改内容一行就写完"）：
+ * 早先是 `max-width: 100%` + 允许折行，而被划掉的常常只是一个词，
+ * 于是「Central Committee of the Communist Party of China」这样一条更正会被折成五六行，
+ * 一路往上一行压过去。现在默认 `nowrap`——上面那行字只占一行，宽度不够时
+ * **由标记段左右各加空白让位**（`.term-wrong-text` 的 `--term-pad`，量出来的，见 term-above-fit.ts）；
+ * 连整行都放不下（《手册》那三个板块里上千像素的整句更正）才退回折行，
+ * 那时由内联样式把 `white-space` 改回 `normal` 并把宽度限制在整行以内，于是不会横着跑出这一栏。
  */
 .term-above {
   position: absolute;
   bottom: 100%;
   left: 0;
-  max-width: 100%;
   /*
    * 字号比正文小一号、行高收紧：这一行是**吊在词的上面**的，占的是两行文字之间的空白——
    * 十等份的行并不高，字号一大就会压到上一行的字上去（实测过：12px/1.35 时只剩 12px 余量）。
@@ -475,14 +502,21 @@ button {
   line-height: 1.2;
   padding-bottom: 2px;
   font-weight: 600;
-  white-space: normal;
+  white-space: nowrap;
   word-break: break-word;
   pointer-events: none;
 }
 
-/* 划掉的那一层：底色是完整的一条带子，横线与文字同色（与文章模式一致）。 */
+/*
+ * 划掉的那一层：底色是完整的一条带子，横线与文字同色（与文章模式一致）。
+ *
+ * `--term-pad` 就是"**左右加空格**拓宽标记色的部分"（用户第 17 条第 2 条）：
+ * 量出来的一行更正比词宽多少，就往两边各撑多少——撑开之后上方那行字正好落在
+ * 这条带子的正上方，而不是悬在它左上方。没量出来（首帧）时是 0，宽度与从前一样。
+ */
 .term-wrong-text {
   border-radius: 2px;
+  padding: 0 var(--term-pad, 0);
 }
 
 /*
@@ -1115,6 +1149,41 @@ button {
   border-bottom: none;
 }
 
+/*
+ * ── 术语模式：两栏的**格子必须一格对一格**（用户第 17 条第 4 条）────────
+ *
+ * 用户原话："术语模式下，我的译文的每个术语所占格子的高度需要和原文每个术语所占格子高度一致。"
+ *
+ * 两栏的格子数一样（都是 `TERMS_PER_PAGE` 行、每行 `flex: 1 1 0`），因此"等高"这件事
+ * 唯一的敌人是**两栏的正文区不一样高**。改之前实测：原文栏正文 710px、译文栏正文 760px，
+ * 于是原文栏每格 68px、译文栏每格 73px——十行下来第十格差了 50px，两栏的横线彻底错位。
+ *
+ * 那 50px 的来路有两段：
+ *   1. **标题栏**（5px）：原文栏那个控件比译文栏矮，已由 `.pane-head` 的 `min-height` 拉平；
+ *   2. **页脚**（55px）：翻页那一条只长在**原文栏**里（用户第 8 条："上一页，下一页两个按钮
+ *      固定在原文栏的最下方"），而译文栏底下什么都没有。
+ *
+ * 第 2 段不能靠"把页脚搬走"解决——那会破坏第 8 条；也不能两边各画一条（那是两个控件）。
+ * 这里的做法是：**把页脚的高度从译文栏正文里让出来**。给译文栏正文加一段与页脚等高的
+ * 下内边距，两栏的"可用高度"于是完全相等，格子也就一格对一格了；译文栏底下那一段空白
+ * 正对着原文栏的页脚，看上去是两栏各自收在一条相同的基线上。
+ *
+ * ⚠️ 高度只写一次（`--term-foot-h`）：页脚自己的高度与译文栏让出的内边距必须是**同一个数**，
+ * 各写一个的话，哪天页脚改高一点，两栏的格子又错开了，而且在屏幕上看不出来是谁错了。
+ * ⚠️ `14px` 是 `.pane-body` 自己的下内边距，别把它吃掉（`calc` 里必须带上）。
+ */
+.split-term {
+  --term-foot-h: 55px;
+}
+
+.split-term .pane-source .pane-foot {
+  height: var(--term-foot-h);
+}
+
+.split-term .pane-answer .pane-body {
+  padding-bottom: calc(14px + var(--term-foot-h));
+}
+
 /* 练习记录页：左边记录列表，右边沿用四栏结构 */
 .split-records {  display: flex;
   flex-direction: row;
@@ -1167,6 +1236,18 @@ button {
   border-right: 1px solid var(--line);
 }
 
+/*
+ * ── 标题栏的高度**同一排里几栏一致**（用户第 17 条第 3 条）────────────────
+ *
+ * 用户原话："所有模式下，将原文和我的译文两个标题栏的高度变成一致。"
+ *
+ * `min-height` 那 51px 是**兜底**（最高的常驻控件 34px + 上下内边距 16px + 底线 1px）。
+ * 真正让它"无论什么状态都一样高"的是下面这条：上排每个栏的最小高度都跟着
+ * `--pane-head-h` 走，而这个变量由 `useEqualPaneHeadHeights` 按**内容最高的那一栏**
+ * 量出来、写在**这一排**（`.split-row-top`）上（见 pane-heads.ts 的说明：为什么写死的数字凑不准、
+ * 为什么不能只靠 CSS、以及为什么变量不写在外层那个 `main.split` 上）。
+ * 变量没写上去时（只有一栏、或者还没量）回落到 51px。
+ */
 .pane-head {
   flex: none;
   display: flex;
@@ -1174,8 +1255,13 @@ button {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+  min-height: 51px;
   padding: 8px 14px;
   border-bottom: 1px solid var(--line);
+}
+
+.split-row-top > .pane > .pane-head {
+  min-height: var(--pane-head-h, 51px);
 }
 
 .pane-head h2 {
@@ -2897,6 +2983,41 @@ button {
 }
 
 /*
+ * 大改档每句原文后面那颗「收藏」（第 17 条第 5 条）。
+ *
+ * 用户要求"每一句原文后面加一个收藏按钮"，因此它就长在原文那一行的末尾
+ * （`margin-left: 8px` 跟在那句话后面，不换到单独一行）。
+ * 字号比原文小一号、平时淡淡的：它是这一行的**动作**，不该抢过原文本身；
+ * 鼠标挪上去才显色。已收藏时填成主色（与右下角那颗「已收藏」同一个记号），
+ * 一眼扫下来就知道哪几句存过了。
+ */
+.compare-fav {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+  vertical-align: 1px;
+}
+
+.compare-fav:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.compare-fav-on {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
+/*
  * 「一句译文、一句修改后译文」**各占一行、上下交替**（用户要求）。
  * 两句都允许在内部自动折行——长句子不会被截断，也不会把栏撑宽。
  */
@@ -3007,7 +3128,7 @@ button {
   padding: 22px 24px 80px;
 }
 
-/* 顶栏右上角的账号按钮：登录前是主色按钮，登录后是「头像 + 用户名」 */
+/* 顶栏右上角的账号按钮：登录前是主色按钮，登录后是「头像 + 用户名」（点一下弹下拉栏） */
 .account-button {
   display: inline-flex;
   align-items: center;
@@ -3015,9 +3136,62 @@ button {
   max-width: 190px;
 }
 
+/*
+ * ── 账号下拉栏（用户第 17 条第 9 条）──────────────────────────────
+ *
+ * 用户原话："对于日志管理，用户管理，发布公告，个人中心，修改密码这些内容，
+ * 都放到点击个人中心后的下拉栏中，就跟『地图记忆』一样。"
+ *
+ * 这三条规则是**照搬「地图记忆」**的 `.user-center-wrap / .user-menu`（用户点名要那个样子），
+ * 只把颜色换成本站的令牌：它那边是纯亮色固定色（`--floating-border` / `--card-bg` /
+ * `--control-hover` / `--text` / `--muted`），这边用本站同一位置的那几个
+ * （`--line-strong` / `--paper` / `--paper-soft` / `--ink` / `--ink-faint`），
+ * 于是明暗两套主题都不用再各写一份。尺寸、圆角、间距、阴影一个数没动。
+ */
+.user-center-wrap {
+  position: relative;
+}
+
+/* 当前正停在个人中心那一屏：账号按钮亮一下（与题型栏的高亮同一套记号） */
 .account-button-active {
   background: var(--accent-tint);
   color: var(--accent);
+}
+
+.user-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 120;
+  display: grid;
+  gap: 4px;
+  min-width: 142px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+}
+
+.user-menu button {
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.user-menu button:hover {
+  background: var(--paper-soft);
+}
+
+/* 「退出登录」用危险色：它是这一列里唯一"做了就回不去"的一项（与地图记忆的删除同一套语言） */
+.user-menu .user-menu-danger {
+  color: var(--mark-red);
 }
 
 .account-avatar {
@@ -3041,6 +3215,13 @@ button {
   object-fit: cover;
 }
 
+/* 那颗小三角：告诉人"这里点得动、点开是一列菜单" */
+.account-caret {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
 .account-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3056,4 +3237,108 @@ button {
   border: 1px solid var(--accent-ring);
   font-size: 13px;
   line-height: 1.7;
+}
+
+/* ── 流量看板那张折线图（用户第 17 条第 7 条）─────────────────────────
+   用户要求"形同『地图记忆』一样的折线图"。那边用 ECharts，这边手写 SVG
+   （理由见 domain/traffic.ts 与 components/TrafficChart.tsx 的文件头）。
+   外面那个框仍然用它那套 `.admin-traffic-chart`（240px 高，样式在 styles-map-memory.css 里），
+   这里只补它没有的那几条——它那边是 canvas，图上的颜色全在 JS 里给，CSS 里什么都不需要写。 */
+.traffic-chart {
+  position: relative;
+  /* 图上画的坐标都是"容器内的像素"，因此这里不能有内边距，否则圆点与鼠标位置会差一截 */
+  padding: 0;
+}
+
+.traffic-svg {
+  display: block;
+}
+
+/* 折线与面积：只用站点主色，明暗主题各用自己那一份（变量自己会切） */
+.traffic-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.traffic-area {
+  stroke: none;
+}
+
+.traffic-area-top {
+  stop-color: var(--accent);
+  stop-opacity: 0.3;
+}
+
+.traffic-area-bottom {
+  stop-color: var(--accent);
+  stop-opacity: 0.02;
+}
+
+/* 圆点：底色描一圈纸色，让它压在折线与面积上仍然清楚 */
+.traffic-dot {
+  fill: var(--accent);
+  stroke: var(--paper);
+  stroke-width: 1;
+  /* 与「地图记忆」一样关掉过渡：这是"看一眼就走"的只读图，动画只会让脸前晃 */
+  transition: none;
+}
+
+.traffic-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+/* 悬停时那条竖线与"撞上哪个点"的那一格 */
+.traffic-pointer {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.traffic-hit {
+  /* 必须是 transparent 而不是 none：`fill: none` 命中不了鼠标 */
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.traffic-axis-label {
+  fill: var(--ink-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 悬停提示：与那边 ECharts 的 tooltip 同一观感（纸底、细边、12px 字、贴近那个点） */
+.traffic-tip {
+  position: absolute;
+  z-index: 5;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.14);
+}
+
+/* 日志里那一列"设备"：完整名称要能折行看全（第 17 条第 8 条），因此不用省略号 */
+.log-device {
+  color: var(--ink-faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.log-ua-full {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--mm-muted-strong);
+  font-size: 11.5px;
+  line-height: 1.5;
+  word-break: break-all;
 }

@@ -19,6 +19,7 @@ import { variantsFor } from '../domain/variants'
 import { GENERATION_TOPICS, type GeneratedExercise } from '../domain/generate'
 import type { JudgeFailureKind } from '../domain/ai'
 import { useSplitDrag } from './split-drag'
+import { useEqualPaneHeadHeights } from './pane-heads'
 import { resolveTheme, useSettings } from './settings'
 import { RecordsView, type RecordView } from './RecordsView'
 import { exerciseOf, loadCustom, newCustom, openCustom, saveCustomSource, type CustomExercise } from '../domain/custom'
@@ -26,11 +27,14 @@ import {
   clearFavorites,
   loadFavorites,
   removeFavorite,
+  sentenceFavoriteOf,
   toggleFavorite,
   type Favorite,
+  type SentenceFavorite,
 } from '../domain/favorites'
 import { FavoritesView } from './FavoritesView'
 import { favoriteFor } from './annotation-summary'
+import type { CompareLine } from '../domain/compare'
 import type { Selection } from './AnnotationText'
 import { INITIAL_SESSIONS, sessionOf, sessionReducer, type JudgeDraft } from './session'
 import { SettingsModal } from './SettingsModal'
@@ -92,10 +96,12 @@ import { dropPageStates, loadPageStates, readPageState, writePageState, type Pag
 import { checkSubmit } from '../domain/submit-gate'
 import { reportVisit } from './auth/api'
 import { AuthModal } from './auth/AuthModal'
+import { PasswordModal } from './auth/PasswordModal'
 import { authStore, useAuth } from './auth/store'
 import { BoardView } from './BoardView'
 import { ProfileView } from './ProfileView'
 import { AdminView } from './AdminView'
+import { DEFAULT_ADMIN_TAB, type AdminTab } from './admin-tabs'
 import type { NavPanel } from './TopBar'
 
 type Tab = ViewTab
@@ -279,6 +285,10 @@ export function App(): JSX.Element {
   /** 登录 / 注册弹窗；`authReason` 是"为什么现在要你登录"，被提交门拦下时才有 */
   const [authOpen, setAuthOpen] = useState(false)
   const [authReason, setAuthReason] = useState<string | null>(null)
+  /** 改密码弹窗（第 17 条第 9 条：它从个人中心里挪进了账号下拉栏） */
+  const [passwordOpen, setPasswordOpen] = useState(false)
+  /** 管理页正在看哪一屏（下拉栏里点「日志管理」就直接落到日志那一屏，见 AdminView 的文件头） */
+  const [adminTab, setAdminTab] = useState<AdminTab>(DEFAULT_ADMIN_TAB)
   const auth = useAuth()
 
   /*
@@ -313,6 +323,14 @@ export function App(): JSX.Element {
   /** 四栏边界：默认按内容自动平衡，用户拖过之后按他定的比例（位置落盘，见 split-drag.ts） */
   const splitRef = useRef<HTMLElement | null>(null)
   const { split, style: splitStyle, beginDrag, resetSplit } = useSplitDrag('practice', splitRef)
+  /*
+   * 「原文」与「我的译文」两个标题栏**必须一样高**（用户第 17 条第 3 条）。
+   *
+   * 两边装的东西不一样（左边是领域/范围下拉，右边是勾画开关 + 批改记录 + 按钮），
+   * 各按内容定高就必然差一截（实测平时差 5px、术语判完差 31px），而差多少随状态与窗口宽度变，
+   * 因此这里量一遍再拉平（见 pane-heads.ts）。
+   */
+  useEqualPaneHeadHeights(splitRef)
   /** 界面偏好：行距、是否显示填补的文字、译文看哪种视图、明暗主题（存 localStorage） */
   const { settings, update: updateSettings } = useSettings()
   /**
@@ -1937,6 +1955,43 @@ export function App(): JSX.Element {
         })
       : null
 
+  /**
+   * 大改档的**逐句收藏**（第 17 条第 5 条：每句原文后面那颗「收藏」）。
+   *
+   * 一条收藏里要带上"哪道题、什么方向、什么话题、第几页"，这些只有这一层知道，
+   * 因此"这一句怎么变成一条收藏"这件事在这里拼（`sentenceFavoriteOf`），
+   * 大改视图只负责画那颗按钮。同一条收藏对象既用来判断"收藏过没有"（比 id），
+   * 也用来在点击时入库——**两处同一个来源**，不会出现"按钮说已收藏、库里却没有"。
+   */
+  const refineFavorite = shown?.refine
+    ? {
+        favorited: (line: CompareLine): boolean => {
+          const one = refineFavoriteOf(line)
+          return favorites.some((item) => item.id === one.id)
+        },
+        onToggle: (line: CompareLine): void => {
+          setFavorites((previous) => toggleFavorite(previous, refineFavoriteOf(line)))
+        },
+      }
+    : null
+
+  /** 对照视图里那一句 → 一条整句收藏（大改档的四部分：原文 / 我的译文 / 修改译文 / 解释） */
+  function refineFavoriteOf(line: CompareLine): SentenceFavorite {
+    return sentenceFavoriteOf({
+      source: line.source ?? '',
+      before: line.original,
+      after: line.corrected.map((span) => span.text).join(''),
+      why: line.note ?? '',
+      context: {
+        exerciseId: exercise.id,
+        mode,
+        direction: exercise.direction,
+        topic: currentTopic,
+        sectionIndex,
+      },
+    })
+  }
+
   return (
     <div className="app" data-exercise-id={exercise.id}>
       {/*
@@ -1961,6 +2016,13 @@ export function App(): JSX.Element {
         onOpenAuth={() => openAuth()}
         onOpenSettings={() => setSettingsOpen(true)}
         onToggleTheme={() => updateSettings({ theme: theme === 'dark' ? 'light' : 'dark' })}
+        /* 下拉栏里那三项（第 17 条第 9 条）：改密码、管理三屏、退出登录 */
+        onChangePassword={() => setPasswordOpen(true)}
+        onOpenAdminView={(view: AdminTab) => {
+          setAdminTab(view)
+          setPanel('admin')
+        }}
+        onLogout={() => auth.logout()}
         theme={theme}
       />
 
@@ -1976,15 +2038,15 @@ export function App(): JSX.Element {
         </div>
       ) : panel === 'profile' ? (
         <div className="panel-page">
-          <ProfileView
-            recordCount={records.length}
-            onRequireLogin={() => openAuth()}
-            onOpenAdmin={() => setPanel('admin')}
-          />
+          <ProfileView recordCount={records.length} onRequireLogin={() => openAuth()} />
         </div>
       ) : panel === 'admin' ? (
+        /*
+         * 管理页看哪一屏由**这里**决定（第 17 条第 9 条）：下拉栏里点「用户管理」要直接落到用户那一屏，
+         * 不能落在默认那一屏上再让人自己点一次（见 AdminView 的文件头）。
+         */
         <div className="panel-page">
-          <AdminView />
+          <AdminView tab={adminTab} onTabChange={setAdminTab} />
         </div>
       ) : tab === 'favorites' ? (
         <FavoritesView
@@ -2191,9 +2253,14 @@ export function App(): JSX.Element {
                       ⚠️ 第 14 条起这一页属于**哪一组**也一起写出来：题号里没有组号
                       （见 term-scopes.ts 的文件头），而用户刚才是"点名选了某一组"才进来的，
                       屏幕上总得有一样东西对上他刚才那一下（不然"我选的第 3 组，现在这是哪儿"）。
+
+                      ⚠️ 第 17 条第 3 条起**去掉了「术语翻译 ·」这个前缀**：那一句是多余的
+                      （人就在术语栏里），而这两个字加上去会让这一行标题栏在 1440 宽的窗口下
+                      刚好放不下、折到第二行——两边标题栏一起被撑高一整行（实测 51 → 83），
+                      底下十格每格跟着少 3px。留下的是"哪一组 · 第几页 · 几条"这三样实时信息。
                     */}
                     <span className="chip">
-                      术语翻译 · {groupOfPage(termScope, sectionIndex)?.label ?? labelOfScope(termScope)} · 第{' '}
+                      {groupOfPage(termScope, sectionIndex)?.label ?? labelOfScope(termScope)} · 第{' '}
                       {sectionIndex + 1} 页 · {activeTerms.length} 条
                     </span>
                     <span className="chip" title="术语题按官方译名由程序本地对照判分，不交给 AI、不用等、不花钱">
@@ -2364,6 +2431,7 @@ export function App(): JSX.Element {
                       setFavorites((previous) => toggleFavorite(previous, practiceFavorite)),
                   }
                 : null)}
+              {...(refineFavorite ? { sentenceFavorite: refineFavorite } : null)}
             />
             )}
 
@@ -2475,6 +2543,9 @@ export function App(): JSX.Element {
           setAuthReason(null)
         }}
       />
+
+      {/* 修改密码（第 17 条第 9 条）：账号下拉栏里点进来，与登录弹窗同一套卡片样式 */}
+      <PasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} />
 
       {/* 设置：行距、是否显示填补的文字、译文默认视图。纯界面偏好，存在浏览器里 */}
       {settingsOpen && (

@@ -140,6 +140,11 @@ export interface RenderProbe {
     scoreChip: string[]
     /** 右下角说清"不逐处批改" */
     notesPaneText: string
+    /** 第 17 条第 5 条：每句原文后面那颗「收藏」的文案（点之前 / 点之后） */
+    sentenceFavButton: string
+    sentenceFavAfterClick: string
+    /** 点过之后浏览器里存下来的那些收藏条目（要能看到四部分齐全） */
+    sentenceFavStored: Array<Record<string, unknown>>
     paneHtml: string
   }
   /** 四栏边界可拖动；「返回编辑」之后输入框回来 */
@@ -206,8 +211,58 @@ export interface RenderProbe {
     /** 跳过去之后通知自己消失了没有 */
     toastGoneAfterRoute: boolean
   }>
-  /** 逐页批改：翻回第 1 页（已批过）时，批改结果是直接显示出来的，还是被重新提交了 */
+  /**
+   * 逐页批改：翻回第 1 页（已批过）时，批改结果是直接显示出来的，还是被重新提交了
+   */
   revisit: { showsResult: boolean; hasInput: boolean; judgeCalls: number }
+  /**
+   * 账号下拉栏 / 管理端 / 留言板（第 17 条第 6、7、8、9 条）。
+   *
+   * 为什么要单独一段：这几样**都在账号那一组页面里**（留言板、个人中心、管理），
+   * 而探针原先一个都不进——管理那三屏读的是另外几个接口，桩没搭之前进了也是空屏。
+   * 现在桩补齐了（见 `makeApiFetch`），于是头像、折线图、完整设备名、下拉栏落点都能在这里验。
+   */
+  accounts?: {
+    /** 顶栏那排里有没有「管理」（第 9 条要求：它搬进下拉栏了，这里**不该**有） */
+    navHasAdminTab: boolean
+    /** 顶栏有没有「留言板」（它没搬走） */
+    navHasBoard: boolean
+    /** 点账号按钮之后下拉栏里那几项（顺序也要对：个人中心 → 修改密码 → 管理三项 → 退出登录） */
+    menuItems: string[]
+    /** 下拉栏里有没有管理员那三项 */
+    menuHasAdminItems: boolean
+    /** 点「修改密码」弹出的窗里有哪几格（旧密码 / 新密码 / 确认新密码） */
+    passwordFields: string[]
+    /** 点「用户管理」落在哪一屏（管理页高亮的那颗分段按钮） */
+    adminTab: string
+    /** 用户管理那一屏里有几行用户、几个头像 */
+    userRows: number
+    userAvatars: number
+    /** 日志那一屏：折线图的点/线/刻度/提示 */
+    chart: {
+      dots: number
+      hasLine: boolean
+      hasArea: boolean
+      yLabels: string[]
+      xLabels: string[]
+      /** 鼠标挪到某个点上之后提示里的文字 */
+      tooltip: string
+      /** 鼠标挪上去的那一个点是不是变大了（`r` 更大） */
+      activeDotGrew: boolean
+    }
+    /** 日志明细：游客那一行的设备名（短名 / 完整 UA 是否原样摊在列表上） */
+    logRows: Array<{ user: string; device: string; ua: string }>
+    /** 留言板：每条帖子/回复前面有没有头像、没头像的那条画的是什么 */
+    board: {
+      postAvatars: number
+      replyAvatars: number
+      defaultAvatars: number
+      /** 有头像那一条的背景图是不是真的挂上了（dataUrl） */
+      firstAvatarHasImage: boolean
+      /** 没头像那一条画的是首字（不是空白圈） */
+      defaultAvatarText: string
+    }
+  }
   /**
    * 「返回编辑」没改字就翻页：回来时是批改界面还是作答框（用户要求必须是批改界面）。
    * 另一头：改过字再翻页，回来该是作答框（结果那时已经作废了）。
@@ -609,6 +664,126 @@ function makeJudgeFetch(options: { judgeDelayMs?: number } = {}): {
   return { fetch: impl as unknown as typeof fetch, calls: () => calls, lastBody: () => lastBody }
 }
 
+/**
+ * 留言板 / 公告 / 管理端那几个接口的**响应桩**（第 17 条新增）。
+ *
+ * 为什么要有它：`makeJudgeFetch` 只认批改那三条路径（其余一律抛错），于是留言板与管理页
+ * 在探针里永远停在"读不到数据"那一屏——头像、折线图、设备名、下拉栏落点这些
+ * 第 17 条新加的东西一样都验不到。这里补上那几条只读接口的固定响应：
+ *   - `/api/board`：两条帖子（**一条有头像、一条没有**）＋每条一条回复，专门用来验头像的两种画法；
+ *   - `/api/announcements`：一条公告；
+ *   - `/api/admin/users`：三个用户（**带头像与管理员标记**）；
+ *   - `/api/admin/logs`：`?view=stats` 返回折线要用的连续点序列，否则返回日志明细
+ *     （**一条游客 + 一条登录**，UA 都是真的那种长串，用来验第 8 条的"完整设备名"）。
+ *
+ * 响应体与真实接口（`src/server/*` 的 DTO）**严格同形**：少一个字段就会在渲染时炸掉，
+ * 而那种失败看起来像"功能坏了"，其实是桩没搭对。
+ */
+export function makeApiFetch(): (input: RequestInfo | URL) => Response | null {
+  const json = (body: unknown): Response =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+  const avatarDataUrl =
+    'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwcJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPDIzNP/AABF'
+
+  const posts = [
+    {
+      id: 2,
+      content: '今天练了一篇英译中，感觉有进步。',
+      createdAt: 1_700_000_200_000,
+      username: '有头像的人',
+      avatar: avatarDataUrl,
+      replyCount: 1,
+      replies: [
+        {
+          id: 11,
+          postId: 2,
+          content: '一起加油。',
+          createdAt: 1_700_000_210_000,
+          username: '有头像的人',
+          avatar: avatarDataUrl,
+        },
+      ],
+    },
+    {
+      id: 1,
+      content: '术语那一栏的十个格子很好用。',
+      createdAt: 1_700_000_100_000,
+      username: '没头像的人',
+      avatar: null,
+      replyCount: 0,
+      replies: [],
+    },
+  ]
+
+  const announcements = [
+    { id: 1, title: '公告标题', content: '公告正文', pinned: true, createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000 },
+  ]
+
+  const users = [
+    { id: 1, username: '有头像的人', avatar: avatarDataUrl, isAdmin: true, createdAt: 1_700_000_000_000 },
+    { id: 2, username: '没头像的人', avatar: null, isAdmin: false, createdAt: 1_700_000_100_000 },
+    { id: 3, username: '第三个人', avatar: null, isAdmin: false, createdAt: 1_700_000_200_000 },
+  ]
+
+  const logs = [
+    {
+      id: 2,
+      username: '有头像的人',
+      ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0',
+      createdAt: 1_700_000_200_000,
+    },
+    {
+      id: 1,
+      username: null,
+      ua: 'Mozilla/5.0 (Linux; Android 13; SM-G991B Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/118.0.0.0 Mobile Safari/537.36',
+      createdAt: 1_700_000_100_000,
+    },
+  ]
+
+  /* 近七天：七个桶、缺桶补 0 的那种（与服务端 buildStatsPoints 同形） */
+  const stats = {
+    range: 'week',
+    unit: 'day',
+    points: [
+      { label: '2026-09-20', count: 3 },
+      { label: '2026-09-21', count: 0 },
+      { label: '2026-09-22', count: 8 },
+      { label: '2026-09-23', count: 2 },
+      { label: '2026-09-24', count: 11 },
+      { label: '2026-09-25', count: 5 },
+      { label: '2026-09-26', count: 7 },
+    ],
+  }
+
+  return (input: RequestInfo | URL): Response | null => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const parsed = new URL(url, 'http://localhost/')
+    const { pathname, searchParams } = parsed
+    if (pathname === '/api/board') {
+      if (searchParams.get('post')) {
+        const id = Number(searchParams.get('post'))
+        const found = posts.find((post) => post.id === id)
+        return json({ replies: found ? found.replies : [] })
+      }
+      return json({ posts })
+    }
+    /*
+     * 个人资料保存：探针用它把**当前会话换成管理员**（见 renderApp 里 options.admin 那段说明）。
+     * 响应形状与 `functions/api/auth/profile.ts` 一致：`{ user }`。
+     */
+    if (pathname === '/api/auth/profile') {
+      return json({ user: { username: '探针用户', avatar: null, isAdmin: true, createdAt: 0, updatedAt: 1 } })
+    }
+    if (pathname === '/api/announcements') return json({ announcements })
+    if (pathname === '/api/admin/users') return json({ users })
+    if (pathname === '/api/admin/logs') {
+      return searchParams.get('view') === 'stats' ? json(stats) : json({ logs })
+    }
+    return null
+  }
+}
+
 /** 在 jsdom 环境里挂载界面并与之交互，返回渲染出的 HTML 与纯文本。 */
 export async function renderApp(
   options: {
@@ -624,6 +799,15 @@ export async function renderApp(
     seedCustom?: string
     /** 走一遍「自定义」贴题流程，并把这一段期间贴进去的原文填成这个 */
     checkCustom?: string
+    /**
+     * 以**管理员**身份渲染（默认不是）。
+     *
+     * 第 17 条第 9 条之后，管理那三屏的入口在账号下拉栏里、只给管理员看，
+     * 因此要验那三项就必须是一个管理员会话（判据只在界面上"不给看"，真正的门在服务端）。
+     */
+    admin?: boolean
+    /** 走一遍账号下拉栏 / 管理端 / 留言板（第 17 条第 6、7、8、9 条） */
+    checkAccounts?: boolean
     /**
      * 目标题**不在内置题库里**时的题型（文章库 / 句子库 / 术语库供题的栏）。
      * 指定了 exerciseId 又查不到内置示例时，用它决定切到哪一栏；不指定就按文章栏。
@@ -681,7 +865,17 @@ export async function renderApp(
   install('IS_REACT_ACT_ENVIRONMENT', true)
 
   const judgeFetch = makeJudgeFetch({ judgeDelayMs: options.judgeDelayMs ?? 0 })
-  install('fetch', judgeFetch.fetch)
+  /*
+   * 留言板/公告/管理端那几条只读接口走 `makeApiFetch`，其余照旧交给批改桩
+   * （它只认批改那三条路径，别的路径会抛错——那正是"没有桩"的诚实表现）。
+   * 顺序要紧：API 桩先问，问不到（返回 null）才回落到批改桩。
+   */
+  const apiFetch = makeApiFetch()
+  install('fetch', (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const hit = apiFetch(input)
+    if (hit) return hit
+    return judgeFetch.fetch(input as RequestInfo, init)
+  }) as typeof fetch)
 
   /*
    * 「自定义」那一栏：模拟"上一次贴过的一篇还留在浏览器里"。
@@ -703,7 +897,13 @@ export async function renderApp(
       'translation-practice.session.v1',
       JSON.stringify({
         token: 'probe-session-token',
-        user: { username: '探针用户', avatar: null, isAdmin: false, createdAt: 0, updatedAt: 0 },
+        user: {
+          username: '探针用户',
+          avatar: null,
+          isAdmin: options.admin === true,
+          createdAt: 0,
+          updatedAt: 0,
+        },
       }),
     )
   } else {
@@ -718,6 +918,23 @@ export async function renderApp(
      */
     const { authStore } = await import('../src/components/auth/store')
     authStore.logout()
+  }
+
+  /*
+   * 「管理员」这一段会话：**必须在挂载之前把单例里的用户换成管理员**。
+   *
+   * 为什么不是"往 localStorage 里塞一条 isAdmin 的会话就完事"：`authStore` 是**模块级单例**，
+   * 它在第一次被 import 时就按当时的 localStorage 建好了自己那份会话（几个探针共用同一个单例、
+   * 每次都是新的 jsdom），此后自己塞进去的东西它根本不看——实测表现就是
+   * "下拉栏里只有个人中心/修改密码/退出登录，管理员那三项没有"。
+   *
+   * 这里走 `saveProfile` 这条路：它是**真实的**一条"用户资料保存成功、服务端回一个用户对象"的路径
+   * （接口桩回的是 isAdmin: true），因此单例里的用户就此变成管理员，
+   * 生产代码里不用为测试开任何后门（与游客那一段走 `logout()` 同一个思路）。
+   */
+  if (options.admin) {
+    const { authStore } = await import('../src/components/auth/store')
+    if (authStore.getSnapshot()) await authStore.saveProfile({ username: '探针用户' })
   }
 
   // jsdom 不实现 ResizeObserver；调序弧线依赖它做尺寸观测
@@ -1975,6 +2192,135 @@ export async function renderApp(
    * 这里只留一个位置说明，免得后来人以为漏了一段。
    */
 
+  /*
+   * 账号下拉栏 / 管理端 / 留言板（第 17 条第 6、7、8、9 条）。
+   *
+   * 走法就是一串真实点击：点账号按钮 → 下拉栏出现 → 点「修改密码」（弹窗）→
+   * 点「用户管理」（管理页那一屏）→ 点页内「日志管理」（折线图 + 完整设备名）→
+   * 点顶栏「留言板」（头像）。最后**切回原来的题型栏**：下面还要用练习页的文字流做断言，
+   * 停在留言板上会把那一段弄成空字符串（那种失败看起来像"译文丢了"，其实是走错页了）。
+   */
+  let accounts: RenderProbe['accounts']
+  if (options.checkAccounts) {
+    const clickByText = async (selector: string, label: string): Promise<HTMLElement | null> => {
+      const node = [...container.querySelectorAll<HTMLElement>(selector)].find(
+        (item) => item.textContent?.trim() === label,
+      )
+      if (!node) return null
+      await act(async () => {
+        node.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      return node
+    }
+    const accountButton = container.querySelector<HTMLElement>('.user-center')
+    const navLabels = [...container.querySelectorAll('.mode-tab')].map((node) => node.textContent?.trim() ?? '')
+    await act(async () => {
+      accountButton?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    const menuItems = [...container.querySelectorAll('.user-menu button')].map((node) => node.textContent?.trim() ?? '')
+
+    /* 「修改密码」：三格 + 保存按钮（用户在弹窗里改，个人中心那一屏已经没有密码格了） */
+    await clickByText('.user-menu button', '修改密码')
+    const passwordFields = [...container.querySelectorAll('.auth-card .form-row')].map((node) =>
+      (node.textContent ?? '').replace(/\s+/g, '').trim(),
+    )
+    /* 关掉弹窗：`Modal` 的关闭按钮是那一枚 × */
+    const closeModal = container.querySelector<HTMLElement>('.raw-modal-close')
+    if (closeModal) {
+      await act(async () => {
+        closeModal.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+    }
+
+    /* 「用户管理」：应当直接落在管理页的用户那一屏（而不是默认那一屏之后再自己点一次） */
+    await act(async () => {
+      accountButton?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    await clickByText('.user-menu button', '用户管理')
+    await tick()
+    await act(async () => {
+      await tick()
+    })
+    const adminTab = container.querySelector('.admin-tab.active')?.textContent?.trim() ?? ''
+    const userRows = container.querySelectorAll('.admin-user-row').length
+    const userAvatars = container.querySelectorAll('.admin-user-row .user-avatar').length
+
+    /* 页内切到「日志管理」：折线图 + 访问明细 */
+    await clickByText('.admin-tab', '日志管理')
+    await act(async () => {
+      await tick()
+    })
+    const dots = [...container.querySelectorAll('.traffic-dot')]
+    const chart = {
+      dots: dots.length,
+      hasLine: container.querySelector('.traffic-line')?.getAttribute('d')?.startsWith('M') === true,
+      hasArea: container.querySelector('.traffic-area')?.getAttribute('d')?.includes('Z') === true,
+      yLabels: [...container.querySelectorAll('.traffic-axis-label')]
+        .map((node) => node.textContent?.trim() ?? '')
+        .filter((label) => /^\d+$/.test(label)),
+      xLabels: [...container.querySelectorAll('.traffic-axis-label')]
+        .map((node) => node.textContent?.trim() ?? '')
+        .filter((label) => label.includes('/')),
+      tooltip: '',
+      activeDotGrew: false,
+    }
+    /*
+     * 悬停命中区：每格一块透明矩形。jsdom 里 dispatch 一次 `mouseover`，
+     * React 的 onMouseEnter 靠它合成（事件要冒泡，否则挂在根上的委托收不到）。
+     */
+    const hit = container.querySelector<SVGRectElement>('.traffic-hit[data-traffic-index="2"]')
+    if (hit) {
+      await act(async () => {
+        hit.dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }))
+      })
+      chart.tooltip = container.querySelector('.traffic-tip')?.textContent?.trim() ?? ''
+      const active = container.querySelector('.traffic-dot-active') as SVGCircleElement | null
+      chart.activeDotGrew = Number(active?.getAttribute('r') ?? 0) > 3.5
+    }
+    const logRows = [...container.querySelectorAll('.log-row')].map((row) => ({
+      user: row.querySelector('.log-user')?.textContent?.trim() ?? '',
+      device: row.querySelector('.log-device')?.textContent?.trim() ?? '',
+      ua: row.querySelector('.log-ua-full')?.textContent?.trim() ?? '',
+    }))
+
+    /* 「留言板」：每条帖子/回复前面的头像 */
+    await clickByText('.mode-tab', '留言板')
+    await act(async () => {
+      await tick()
+    })
+    const postsWithAvatar = [...container.querySelectorAll('.board-post .board-post-head .user-avatar')]
+    const repliesWithAvatar = [...container.querySelectorAll('.board-reply .board-reply-head .user-avatar')]
+    const defaults = [...container.querySelectorAll('.board-list .user-avatar.default-avatar')]
+    accounts = {
+      navHasAdminTab: navLabels.includes('管理'),
+      navHasBoard: navLabels.includes('留言板'),
+      menuItems,
+      menuHasAdminItems:
+        menuItems.includes('用户管理') && menuItems.includes('日志管理') && menuItems.includes('发布公告'),
+      passwordFields,
+      adminTab,
+      userRows,
+      userAvatars,
+      chart,
+      logRows,
+      board: {
+        postAvatars: postsWithAvatar.length,
+        replyAvatars: repliesWithAvatar.length,
+        defaultAvatars: defaults.length,
+        firstAvatarHasImage:
+          (postsWithAvatar[0]?.getAttribute('style') ?? '').includes('data:image/jpeg') ||
+          (postsWithAvatar[0]?.getAttribute('style') ?? '').includes('url('),
+        defaultAvatarText: defaults[0]?.textContent?.trim() ?? '',
+      },
+    }
+
+    /* 切回原来那一栏（否则下面读练习页的文字流会读到空） */
+    await clickByText('.mode-tab', MODE_TAB_LABEL[targetMode] ?? '文章')
+    await act(async () => {
+      await tick()
+    })
+  }
+
   // 译文文字流：把调序圈号（绝对定位的标记）去掉后，必须与作答逐字相同
   const flowLines = container.querySelector('.pane-answer .annotated-lines')
   const flowText = (flowLines?.textContent ?? '').replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, '')
@@ -2057,7 +2403,31 @@ export async function renderApp(
       scoreChip: [...container.querySelectorAll('.pane-score .chip')].map((node) => node.textContent?.trim() ?? ''),
       /** 右下角说清"不逐处批改" */
       notesPaneText: textOf('.pane-notes'),
+      /*
+       * 逐句「收藏」（第 17 条第 5 条）：每句原文后面那颗按钮点一下，
+       * 应当往浏览器里存下**四部分**（原文 / 我的译文 / 修改译文 / 解释）。
+       * 按钮的文案也要跟着变（收藏 → 已收藏），否则用户不知道点没点上。
+       */
+      sentenceFavButton: container.querySelector('.pane-answer .compare-fav')?.textContent?.trim() ?? '',
+      sentenceFavAfterClick: '',
+      sentenceFavStored: [] as Array<Record<string, unknown>>,
       paneHtml,
+    }
+
+    /* 点第一句原文后面那颗「收藏」，再从 localStorage 里把存下来的那条读回来 */
+    const favButton = container.querySelector<HTMLElement>('.pane-answer .compare-fav')
+    if (favButton) {
+      await act(async () => {
+        favButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      refine.sentenceFavAfterClick = container.querySelector('.pane-answer .compare-fav')?.textContent?.trim() ?? ''
+      try {
+        const raw = dom.window.localStorage.getItem('translation-practice.favorites')
+        const parsed = raw ? (JSON.parse(raw) as unknown) : []
+        refine.sentenceFavStored = Array.isArray(parsed) ? (parsed as Array<Record<string, unknown>>) : []
+      } catch {
+        refine.sentenceFavStored = []
+      }
     }
   }
 
@@ -2079,6 +2449,7 @@ export async function renderApp(
     panels,
     refine,
     custom,
+    accounts,
     views,
     record,
     generated,

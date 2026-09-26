@@ -1561,6 +1561,220 @@ try {
       JSON.stringify(topbar),
     )
 
+    console.log('\n=== 13. 第 17 条的版式：两栏标题栏等高 / 每格等高 / 参考译文一行 / 更正一行 ===')
+    /*
+     * 这一节量的是**第 17 条**那四条版式要求（用户原话见 README 的第 17 条）：
+     *   1. 参考译文"能一行装下就一行装下，装不下才两行"；
+     *   2. 我的译文里那条更正"一行就写完"——放不下时**左右加空格**把标记色那一段拓宽；
+     *   3. 所有模式下「原文」与「我的译文」两个标题栏等高；
+     *   4. 术语模式下两栏的**格子一格对一格**（画在同一水平线上）。
+     *
+     * 为什么非要真浏览器：这四条全是**像素几何**（行数、等高、有没有压到上一行、有没有出界），
+     * 在 jsdom 里所有元素的 rect 都是 0×0，量什么都是 0。
+     *
+     * 走法：把这一页填成"官方译名里错一个词"，提交（本地判分，不发任何请求），再量。
+     * 第 1 行**故意留空**——那是"没作答就用红色补上正确答案"那条的另一半。
+     */
+    const layout = await cdp.evaluate(
+      `(async () => {
+         const T = window.__T;
+         const lines = (node) => {
+           if (!node) return 0;
+           const range = document.createRange();
+           range.selectNodeContents(node);
+           return new Set([...range.getClientRects()].filter((r) => r.height > 0).map((r) => Math.round(r.top))).size;
+         };
+         const heights = (selector) => T.qa(selector).map((n) => Math.round(n.getBoundingClientRect().height * 10) / 10);
+         const heads = () => ({
+           source: Math.round(T.q('.pane-source .pane-head').getBoundingClientRect().height),
+           answer: Math.round(T.q('.pane-answer .pane-head').getBoundingClientRect().height),
+         });
+         /**
+          * 标题栏里"谁把这一行撑成了两行"：逐个子元素量宽度，并把每一栏的可用宽度也算出来。
+          * 第 17 条第 3 条只要求**两栏等高**（它们由 --pane-head-h 保证），
+          * 但真撑成两行会白白吃掉十行的高度，因此这里把证据留下来。
+          */
+         const headDetail = (pane) => {
+           const head = T.q(pane + ' .pane-head');
+           const meta = head.querySelector('.head-meta');
+           const children = [...meta.children].map((node) => ({
+             cls: (node.className || node.tagName).split(' ')[0],
+             w: Math.round(node.getBoundingClientRect().width),
+             text: (node.textContent || '').trim().slice(0, 24),
+           }));
+           return {
+             headWidth: Math.round(head.getBoundingClientRect().width),
+             metaWidth: Math.round(meta.getBoundingClientRect().width),
+             titleWidth: Math.round(head.querySelector('h2').getBoundingClientRect().width),
+             childrenWidthSum: children.reduce((sum, child) => sum + child.w, 0),
+             rows: new Set([...meta.children].map((n) => Math.round(n.getBoundingClientRect().top))).size,
+             children,
+           };
+         };
+
+         // 先切回「中译英」：这样"参考译文"那一侧是**官方英文**，
+         // 改坏一个字母（Committee → Comittee）就能造出"只错一个词"的答案
+         const dirButton = T.qa('.pane-source .dir-btn').find((b) => (b.textContent || '').trim() === '中译英');
+         if (dirButton && !dirButton.classList.contains('dir-btn-active')) {
+           dirButton.click();
+           await T.sleep(800);
+         }
+
+         // 站到第 1 页；如果这一页已经判过，先按「返回编辑」放开它
+         await T.goto(0);
+         const primary = T.primary();
+         if (primary && (primary.textContent || '').trim() === '返回编辑') {
+           primary.click();
+           await T.sleep(300);
+         }
+
+         // 打开「参考译文」：这一页十条的官方译名就是"正确答案表"，也顺便量它占几行
+         const toggle = T.referenceToggle();
+         const wasOff = toggle && toggle.getAttribute('aria-pressed') !== 'true';
+         if (wasOff) await T.toggleReference(400);
+         const sourceRows = T.qa('.pane-source .term-source-row');
+         const refs = sourceRows.map((row) => {
+           const ref = row.querySelector('.term-source-ref');
+           return ref ? (ref.textContent || '').trim() : '';
+         });
+         const refLineCounts = sourceRows.map((row) => lines(row.querySelector('.term-source-ref')));
+         // 参考译文有没有**伸出这一格**（伸出就会压到下面那一格的字）
+         const refOverflows = sourceRows.map((row) => {
+           const ref = row.querySelector('.term-source-ref');
+           return ref ? Math.round(ref.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom) : 0;
+         });
+         const editing = { heads: heads(), sourceRows: heights('.pane-source .term-source-row'), answerRows: heights('.pane-answer .term-row') };
+         if (wasOff) await T.toggleReference(300);
+
+         // 逐行填"官方译名里错一个词"；第 1 行**留空**（验"没作答＝红色补上"）
+         const inputs = T.qa('.pane-answer .term-input');
+         if (inputs[0] && !inputs[0].disabled) T.setInput(inputs[0], '');
+         for (let i = 1; i < inputs.length; i += 1) {
+           if (inputs[i].disabled) continue;
+           const official = refs[i] || '';
+           const corrupted = /Committee/.test(official)
+             ? official.replace('Committee', 'Comittee')
+             : official.replace(/(\\w+)/, (word) => word + 'x');
+           T.setInput(inputs[i], corrupted);
+           await T.sleep(30);
+         }
+         const filled = inputs.map((input) => input.value);
+
+         // 提交（术语判分是本地对照官方译名，不发请求）
+         T.primary().click();
+         await T.sleep(700);
+
+         const rows = T.qa('.pane-answer .term-row');
+         const corrections = T.qa('.pane-answer .term-above').map((node) => {
+           const anchor = node.parentElement;
+           const row = node.closest('.term-row');
+           return {
+             text: (node.textContent || '').trim(),
+             lines: lines(node),
+             pad: getComputedStyle(anchor).getPropertyValue('--term-pad').trim(),
+             anchorWidth: Math.round(anchor.getBoundingClientRect().width),
+             // 更正那一行有没有跑出这一格（跑出去就压到 ✗ 或者栏外了）
+             overRowRight: Math.round(node.getBoundingClientRect().right - row.getBoundingClientRect().right),
+             // 标记色那一段够不够宽：更正的字必须落在它上方（宽度至少和它一样）
+             wraps: getComputedStyle(node).whiteSpace,
+           };
+         });
+         return {
+           refs,
+           refLineCounts,
+           refOverflows,
+           filled,
+           editing,
+           headDetail: { source: headDetail('.pane-source'), answer: headDetail('.pane-answer') },
+           graded: {
+             heads: heads(),
+             sourceRows: heights('.pane-source .term-source-row'),
+             answerRows: heights('.pane-answer .term-row'),
+             corrections,
+             aboveCount: T.qa('.pane-answer .term-above').length,
+             addedCount: T.qa('.pane-answer .term-added').length,
+           },
+         };
+       })()`,
+    )
+
+    /* 用一个块把这一节的局部名字圈起来：上面第 5 节也有一个叫 `graded` 的常量 */
+    {
+    const { editing, graded } = layout
+    /* 诊断：标题栏里谁把这一行撑成了两行（信息量够大，失败时一眼看得出） */
+    if (graded.heads.source !== graded.heads.answer || graded.heads.source > 60) {
+      console.log(`      （标题栏明细：原文 ${JSON.stringify(layout.headDetail.source)}）`)
+      console.log(`      （标题栏明细：译文 ${JSON.stringify(layout.headDetail.answer)}）`)
+    }
+    /* 3) 两个标题栏等高（改之前实测差 5px：原文栏 46、译文栏 51） */
+    check(
+      editing.heads.source === editing.heads.answer,
+      `编辑态：原文栏与译文栏的标题栏等高（${editing.heads.source} / ${editing.heads.answer}）`,
+      JSON.stringify(editing.heads),
+    )
+    check(
+      graded.heads.source === graded.heads.answer,
+      `判分后：两个标题栏仍然等高（${graded.heads.source} / ${graded.heads.answer}）`,
+      JSON.stringify(graded.heads),
+    )
+    /* 4) 两栏的格子一格对一格（改之前 68 vs 73：差的那 5px 一路乘十） */
+    const rowPairs = graded.sourceRows.map((height, index) => `${height}/${graded.answerRows[index] ?? '—'}`)
+    check(
+      graded.sourceRows.length === 10 &&
+        graded.answerRows.length === 10 &&
+        graded.sourceRows.every((height, index) => Math.abs(height - (graded.answerRows[index] ?? -1)) <= 0.5),
+      `判分后：两栏十格**逐格等高**（原文/译文 ${rowPairs.join(' ')}）`,
+      JSON.stringify({ 原文: graded.sourceRows, 译文: graded.answerRows }),
+    )
+    check(
+      editing.sourceRows.length === 10 &&
+        editing.sourceRows.every((height, index) => Math.abs(height - (editing.answerRows[index] ?? -1)) <= 0.5),
+      `编辑态：两栏十格也逐格等高（${editing.sourceRows.map((h, i) => `${h}/${editing.answerRows[i] ?? '—'}`).join(' ')}）`,
+      JSON.stringify({ 原文: editing.sourceRows, 译文: editing.answerRows }),
+    )
+    /* 1) 参考译文：一行装得下就一行（改之前 46% 的宽度上限把两条硬折成两行） */
+    const twoLineRefs = layout.refLineCounts.filter((count) => count > 1).length
+    check(
+      layout.refs.filter((text) => text.length > 0).length === 10,
+      `正文栏十条标准译法都画出来了（${layout.refs.filter((text) => text.length > 0).length} 条）`,
+    )
+    check(
+      twoLineRefs <= 1,
+      `十条里最多一条因为"真的装不下"才折行（实际 ${twoLineRefs} 条两行：${layout.refLineCounts.join(',')}）`,
+      JSON.stringify(layout.refs.map((text, index) => `${layout.refLineCounts[index]}行 ${text.slice(0, 40)}`)),
+    )
+    check(
+      layout.refOverflows.every((overflow) => overflow <= 0),
+      `参考译文都没有伸出自己那一格（最大伸出 ${Math.max(...layout.refOverflows)}px）`,
+      JSON.stringify(layout.refOverflows),
+    )
+    /* 2) 更正那一行只占一行，且放不下时靠"左右加空格"把标记段拓宽 */
+    check(
+      graded.aboveCount >= 5,
+      `判分后画出了 ${graded.aboveCount} 条更正（每条都错一个词，因此每条都该有）`,
+    )
+    check(
+      graded.corrections.every((item) => item.lines === 1),
+      `每条更正都**只占一行**（${graded.corrections.map((c) => c.lines).join(',')}）`,
+      JSON.stringify(graded.corrections.filter((c) => c.lines !== 1)),
+    )
+    check(
+      graded.corrections.every((item) => item.wraps === 'nowrap' || item.overRowRight <= 0),
+      '更正没有横向跑出这一格（放得下就一行，放不下才折行）',
+      JSON.stringify(graded.corrections.map((c) => c.overRowRight)),
+    )
+    const padded = graded.corrections.filter((item) => Number.parseFloat(item.pad) > 0)
+    check(
+      padded.length >= 1 && padded.every((item) => item.anchorWidth >= 1),
+      `标记色那一段被左右加空格拓宽了（${padded.length} 条，例如 ${JSON.stringify(padded[0] ?? null)}）`,
+      JSON.stringify(graded.corrections.map((c) => ({ 更正: c.text, 空白: c.pad, 标记段宽: c.anchorWidth }))),
+    )
+    check(
+      layout.filled.filter((value) => value.length > 0).length === 9,
+      `这一页填了 9 条、第 1 行故意留空（${layout.filled.filter((v) => v.length > 0).length} 条）`,
+    )
+    }
+
     console.log('\n=== 12. 全程干净：没有页面异常、没有批改接口 ===')
     const finalApi = await cdp.evaluate('window.__T.apiCalls()')
     check(
