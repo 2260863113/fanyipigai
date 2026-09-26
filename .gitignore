@@ -29,3 +29,12 @@ Thumbs.db
 
 # 界面截屏：由 npm run smoke 或 node scripts/shots.mjs 生成，仅供人工查看
 .screenshots/
+
+# 大文件：**参考书 PDF 绝不入库**。
+# 2026-09-26 踩过一次：整理代理把一个 167.8 MB 的《理解当代中国 核心术语学习手册》拷到仓库根、
+# 被 git add -A 收进提交，push 被 GitHub 拒收（单文件上限 100 MB）——
+# 本地看着"提交成功"，实际上远端没收到，是最容易误判的一类事故。
+# 材料类 docx（文章.docx 等）仍然入库：它们是数据源，体积在 100 KB 量级。
+*.pdf
+*.zip
+*.apk
