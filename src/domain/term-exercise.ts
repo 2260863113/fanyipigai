@@ -57,6 +57,7 @@
 
 import type { Direction } from './types'
 import { CATEGORY_LABEL, type Correction, type ErrorObject, type Exercise } from './types'
+import { minimizeChange } from './minimal'
 import {
   TERMS_PER_PAGE,
   acceptedAnswers,
@@ -269,6 +270,88 @@ export function answeredTermCount(answers: readonly string[]): number {
  */
 export function termPageComplete(total: number, answers: readonly string[]): boolean {
   return total > 0 && answeredTermCount(answers) === total
+}
+
+/**
+ * 一条作答里要画的一段（第 16 条：**只改不对的字或词**，不要整条重写）。
+ *
+ * - `same`：这一段本来就对，原样画；
+ * - `wrong`：这一段写错了——界面上把它**划掉**，并把 `to`（正确的字/词）**写在它上方**；
+ * - `added`：用户**漏写**的字/词——界面上**直接用红色补进译文**（`text` 就是要补的内容）。
+ */
+export interface TermAnswerPiece {
+  text: string
+  kind: 'same' | 'wrong' | 'added'
+  /** `wrong` 时：这一处应该写成的样子 */
+  to?: string
+}
+
+/**
+ * 挑一条**离用户写的最接近**的官方写法。
+ *
+ * 为什么需要它：一英多中（`直辖市人民政府／设区的市人民政府`）与手册的多译法都会让
+ * `accepted` 有好几条。若拿屏幕上的标准答案那一串（可能用「／」连着两个）去比，
+ * 逐词对齐会算出一堆假的差异；先挑最接近的那一条，差异才反映用户真正写错的地方。
+ *
+ * 判据用"公共前后缀的总长"——够用且**稳**：它不依赖编辑距离的权重，
+ * 也不会因为 `a` 出现在别处而把两条不相干的写法判成近的。
+ */
+function closestWriting(answer: string, accepted: readonly string[]): string {
+  let best = accepted[0] ?? ''
+  let bestScore = -1
+  for (const candidate of accepted) {
+    let head = 0
+    while (head < answer.length && head < candidate.length && answer[head] === candidate[head]) head += 1
+    let tail = 0
+    while (
+      tail < answer.length - head &&
+      tail < candidate.length - head &&
+      answer[answer.length - 1 - tail] === candidate[candidate.length - 1 - tail]
+    ) {
+      tail += 1
+    }
+    const score = head + tail
+    if (score > bestScore) {
+      bestScore = score
+      best = candidate
+    }
+  }
+  return best
+}
+
+/** 作答里最多切出几处改动；再多就整条按"写错了"画（与批注口径同源，见 minimal.ts）。 */
+const MAX_ANSWER_CHANGES = 3
+
+/**
+ * 把「用户写的」与「官方写法」整成一条**可以逐段画**的片段序列（第 16 条的口径）。
+ *
+ * 三条规矩，都是用户点名的：
+ *   1. **只改不对的字或词**：对齐到词边界（`minimizeChange` 已经这么做了），
+ *      写错的那个词划掉、正确写法写在它上方——**不是整条重写**；
+ *   2. **漏写的词直接红色补进译文**：不划任何横线，就地插进去；
+ *   3. **整条**（没作答、或整个答得不相干）就按"这一整段写错了"画：
+ *      空作答返回的是一段 `added`（屏幕上因此只看到红色正确答案，不再写"没作答"）。
+ */
+export function answerPieces(answer: string, accepted: readonly string[]): TermAnswerPiece[] {
+  const target = closestWriting(answer, accepted.length > 0 ? accepted : [''])
+  if (answer.trim().length === 0 || target.length === 0) {
+    return target.length > 0 ? [{ text: target, kind: 'added' }] : []
+  }
+  const changes = minimizeChange(answer, target, { maxChanges: MAX_ANSWER_CHANGES })
+  // 切不出小块（整条都不一样）就当成"这一整段写错了 + 上方写正确的"
+  if (!changes) return [{ text: answer, kind: 'wrong', to: target }]
+
+  const pieces: TermAnswerPiece[] = []
+  let cursor = 0
+  for (const change of changes) {
+    if (change.startOffset > cursor) pieces.push({ text: answer.slice(cursor, change.startOffset), kind: 'same' })
+    if (change.from.length === 0) pieces.push({ text: change.to, kind: 'added' })
+    else if (change.to.length === 0) pieces.push({ text: change.from, kind: 'wrong' })
+    else pieces.push({ text: change.from, kind: 'wrong', to: change.to })
+    cursor = change.endOffset
+  }
+  if (cursor < answer.length) pieces.push({ text: answer.slice(cursor), kind: 'same' })
+  return pieces
 }
 
 /**

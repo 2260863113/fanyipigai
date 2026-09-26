@@ -1848,8 +1848,6 @@ export function App(): JSX.Element {
     const answers = termAnswers
     const verdicts = judgeTerms(activeTerms, answers, termDirection)
     const { correction, validated } = correctionFromVerdicts(verdicts)
-    const wrong = verdicts.filter((verdict) => !verdict.correct).length
-    const missing = activeTerms.length - answeredTermCount(answers)
     // 术语题的一页就是这几条，合起来当作被批的那段文字（与练习记录、收藏、对照视图一致）
     const pageAnswer = termAnswer
     /*
@@ -1890,16 +1888,13 @@ export function App(): JSX.Element {
       { persist: complete },
     )
     /*
-     * 结果栏那一句话要把两件事都说到：判成什么样（错几条），以及**这一次算不算数**
-     * （没写满的那一次不落练习记录）。不说的话用户会以为记录已经存下来了——
-     * 而"记录里没有"这件事在界面上完全看不出来（这一页照样显示着判分结果）。
+     * ⚠️ 术语模式**不再写结果栏那句话**（用户第 16 条点名去掉："这一页 10 条，错 9 条——
+     * 官方译名就写在每一条右边。还有 8 条没写：这一次不留练习记录，写满了才有。"）。
+     * 两点理由：① 判分结果已经**逐条写在那一行里**了（错的那个词划掉、正确写法写在它上方，
+     * 没写的直接用红色补上），再概括一句"错几条、答案在哪"是重复的说明；
+     * ② "没写满就不留记录"这条规矩用户在提交前就写着（那颗按钮的悬停提示），
+     * 判完再喊一遍属于解释性文字。别的题型照旧用结果栏（它们的判分没有逐条落在那一行里）。
      */
-    setNotice(
-      wrong === 0
-        ? `这一页 ${verdicts.length} 条都译对了${complete ? '' : '（这一页还没写满）'}。`
-        : `这一页 ${verdicts.length} 条，错 ${wrong} 条——官方译名就写在每一条右边。` +
-          (complete ? '' : `还有 ${missing} 条没写：这一次不留练习记录，写满了才有。`),
-    )
   }
 
   /**

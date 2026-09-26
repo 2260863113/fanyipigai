@@ -780,6 +780,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   try {
     const {
       answeredTermCount,
+      answerPieces,
       correctionFromVerdicts,
       judgeTerms,
       termAnswerText,
@@ -836,6 +837,35 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(
       termAnswerText(answers) === answers.join('\n'),
       '各条答案拼成的"整段作答文字"就是逐行用换行连接（下游一律按它办事）',
+    )
+    /*
+     * 第 16 条的**画法**：判完之后一行里画什么，由 `answerPieces` 算——
+     * 只改不对的字或词（划掉 + 上方写正确的），漏写的直接补，整条对的不动。
+     * 这四条把四种情形都钉住：多写一个词、只错一个词、完全写错、没作答。
+     */
+    const sample = first.en
+    const 多写 = answerPieces(`${sample} xyz`, [sample])
+    const [多写的头, 多写的尾] = 多写
+    check(
+      多写.length === 2 && 多写的头?.kind === 'same' && 多写的头.text === sample &&
+        多写的尾?.kind === 'wrong' && 多写的尾.text === ' xyz' && 多写的尾.to === undefined,
+      `多写一个词：官方那截**原样留着**、只把多出来的那个词划掉（没有"上方写什么"）——${JSON.stringify(多写)}`,
+    )
+    const 错一个词 = answerPieces(sample.replace(/\bCommittee\b/, 'Comittee'), [sample])
+    check(
+      错一个词.some((piece) => piece.kind === 'wrong' && piece.text === 'Comittee' && piece.to === 'Committee'),
+      `只错一个词：**那个词**划掉、正确写法写在它上方（不是一个词都不差就整条重写）——${JSON.stringify(错一个词)}`,
+    )
+    const 整条错 = answerPieces('definitely wrong here', [sample])
+    check(
+      整条错.length === 1 && 整条错[0]?.kind === 'wrong' && 整条错[0].text === 'definitely wrong here' &&
+        整条错[0].to === sample,
+      `完全写错：整段划掉、上方写官方译法——${JSON.stringify(整条错)}`,
+    )
+    const 空着 = answerPieces('', [sample])
+    check(
+      空着.length === 1 && 空着[0]?.kind === 'added' && 空着[0].text === sample,
+      `没作答：不写"没作答"，只给一段**红色补上的正确答案**——${JSON.stringify(空着)}`,
     )
 
     const { correction, validated } = correctionFromVerdicts(verdicts)

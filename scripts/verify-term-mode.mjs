@@ -1028,7 +1028,7 @@ try {
            const node = T.q('.pane-answer .mk-delete .mk-deleted');
            return node ? getComputedStyle(node).textDecorationLine : null;
          })();
-         out.fixes = T.texts('.pane-answer .term-fix');
+         out.fixes = T.texts('.pane-answer .term-above');
          out.highlights = T.qa('.pane-answer .mk-highlight').length;
          out.hint = T.text('.pane-source .section-nav .hint');
          out.button = T.text('.pane-answer .pane-head .btn-primary');
@@ -1036,6 +1036,23 @@ try {
          out.进度 = T.progressFor(exerciseId);
          out.historyPicker = T.qa('.pane-answer .pane-head .domain-trigger').length;
          out.topbarHasFixtureChip = (T.q('.topbar')?.innerText || '').includes('内置示例批改');
+         /* 第 16 条要的是"写在**上方**"：量一下它真的在那个词上面，以及会不会压到**上一行**的文字 */
+         out.校正几何 = (() => {
+           const above = T.q('.pane-answer .term-above');
+           const word = above?.parentElement ?? null;
+           const row = above?.closest('.term-row') ?? null;
+           if (!above || !word || !row) return null;
+           const a = above.getBoundingClientRect();
+           const w = word.getBoundingClientRect();
+           const prev = row.previousElementSibling?.querySelector('.term-result') ?? null;
+           const p = prev ? prev.getBoundingClientRect() : null;
+           return {
+             在词的正上方: a.bottom <= w.top + 1 && a.left >= w.left - 1,
+             没压住上一行的字: p === null || a.top >= p.bottom - 1,
+             上方离行顶: Math.round(a.top - row.getBoundingClientRect().top),
+             离上一行的字: p === null ? null : Math.round(a.top - p.bottom),
+           };
+         })();
          return out;
        })()`,
     )
@@ -1060,14 +1077,32 @@ try {
       JSON.stringify({ 输入框: graded.inputs, hint: graded.hint }),
     )
     check(
-      graded.struck.length === 2 && graded.struckDecoration === 'line-through',
-      `译错的两条整条划掉，而且是**真的横线**（${graded.struckDecoration}；${JSON.stringify(graded.struck)}）`,
+      graded.struck.length >= 2 && graded.struckDecoration === 'line-through',
+      `写错的地方被划掉，而且是**真的横线**（${graded.struckDecoration}；${JSON.stringify(graded.struck)}）`,
       JSON.stringify({ struck: graded.struck, decoration: graded.struckDecoration }),
     )
+    /*
+     * 第 16 条的画法：**只改不对的字或词**——写错的那截划掉、正确的写法写在**它上方**，
+     * 而不是整条重写成"→ 官方译名"。这一页里那两行正好是两种典型：
+     *   第 5 行整条胡写（"nope"）→ 整条划掉，官方译名**写在它上方**；
+     *   第 3 行只是几个词不对 → 划掉的是**那几处词**，整条答案没有一起被划掉，
+     *   上方那几处更正也都真的是官方译法里的一段（不是自己编的）。
+     */
     check(
-      graded.fixes.join('|') === [graded.官方译名[2], graded.官方译名[4]].join('|'),
-      `译错的两条在同一行右边给出**官方译名**：${graded.fixes.join(' ｜ ')}`,
-      JSON.stringify({ 实际: graded.fixes }),
+      graded.struck.includes('nope') && graded.fixes.includes(graded.官方译名[4]),
+      `完全写错的那一行：整段划掉、官方译名写在它**上方**（${graded.官方译名[4]}）`,
+      JSON.stringify({ struck: graded.struck, fixes: graded.fixes }),
+    )
+    check(
+      !graded.struck.includes(graded.answers[2]) && graded.fixes.length > 0 &&
+        graded.fixes.every((fix) => graded.官方译名.some((official) => official.includes(fix))),
+      `只有几个词不对的那一行**不是整条重写**：划掉的是那几处词（${JSON.stringify(graded.struck)}），上方每一处更正都出自官方译法`,
+      JSON.stringify({ struck: graded.struck, fixes: graded.fixes, 整条答案: graded.answers[2] }),
+    )
+    check(
+      graded.校正几何?.在词的正上方 === true && graded.校正几何?.没压住上一行的字 === true,
+      `那一行正确的写法**真的在词的上面**，而且没有压到上一行的字（离行顶 ${graded.校正几何?.上方离行顶}px、离上一行的字 ${graded.校正几何?.离上一行的字}px）`,
+      JSON.stringify(graded.校正几何),
     )
     check(
       graded.highlights === 8,
@@ -1128,6 +1163,9 @@ try {
          out.请求后 = T.apiCalls().length;
          out.marks = T.texts('.pane-answer .term-mark');
          out.notice = T.text('.pane-answer .hint.notice');
+         /* 第 16 条：没作答的那几行**直接用红色写正确答案**，不再写"（没作答）" */
+         out.补进去的红色答案 = T.texts('.pane-answer .term-added');
+         out.屏幕上有没有没作答三个字 = (T.q('.pane-answer')?.innerText || '').includes('没作答');
          out.hint = T.text('.pane-source .section-nav .hint');
          out.button = T.text('.pane-answer .pane-head .btn-primary');
          out.记录后 = T.recordsFor(exerciseId, 2);
@@ -1166,13 +1204,39 @@ try {
       JSON.stringify(partial.进度),
     )
     check(
+      partial.补进去的红色答案.length === 7 && partial.屏幕上有没有没作答三个字 === false,
+      `没作答的七行**直接用答案补上**、屏幕上再没有"没作答"三个字（补了 ${partial.补进去的红色答案.length} 行；第 1 行「${partial.补进去的红色答案[0]}」）`,
+      JSON.stringify({ 补进去: partial.补进去的红色答案.slice(0, 3), 有没有没作答: partial.屏幕上有没有没作答三个字 }),
+    )
+    const 红 = await cdp.evaluate(
+      `(() => {
+         const T = window.__T;
+         const added = T.q('.pane-answer .term-added');
+         const mark = T.q('.pane-answer .term-mark-bad');
+         return {
+           补进去的颜色: added ? getComputedStyle(added).color : null,
+           错号的红色: mark ? getComputedStyle(mark).color : null,
+         };
+       })()`,
+    )
+    check(
+      红.补进去的颜色 !== null && 红.补进去的颜色 === 红.错号的红色,
+      `补进去的答案是**红色**的（与那枚错号同一个红：${红.补进去的颜色}）`,
+      JSON.stringify(红),
+    )
+    check(
       partial.historyPicker === 0,
       '这一页没有「批改记录」下拉（一次都没落库）',
       String(partial.historyPicker),
     )
+    /*
+     * 第 16 条：**结果栏那句话整条去掉了**（用户点名去掉"这一页 10 条，错 9 条——官方译名就写在
+     * 每一条右边。还有 8 条没写：这一次不留练习记录，写满了才有。"）。
+     * 逐条的判分本来就已经写在那一行里，再概括一句是重复的说明。
+     */
     check(
-      (partial.notice ?? '').includes('不留练习记录'),
-      `结果栏那句话说清了"这一次不算数"（${partial.notice}）`,
+      (partial.notice ?? '') === '',
+      `结果栏**不再有那句话**（第 16 条点名去掉；实际 ${JSON.stringify(partial.notice)}）`,
       partial.notice,
     )
     check(
@@ -1350,7 +1414,7 @@ try {
            T.primary().click();
            for (let i = 0; i < 40 && T.qa('.pane-answer .term-mark').length < 10; i += 1) await T.sleep(100);
            out.marks = T.texts('.pane-answer .term-mark');
-           out.fixes = T.texts('.pane-answer .term-fix');
+           out.fixes = T.texts('.pane-answer .term-above');
          }
          out.请求 = T.apiCalls().length;
          return out;

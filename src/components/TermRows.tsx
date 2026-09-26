@@ -29,8 +29,12 @@
  *
  * 用户要求："术语提交后，需要按照像文章模式一样，进行对比后，颜色批注和修改"。
  * 于是判完之后不用禁用输入框那副样子，而是**用与文章模式同一套勾画语言**画出来：
- *   译错：整条答案加荧光底色 + 一道横线划掉，同一行右边给出官方译名；
- *   译对：米绿底色，不再重复官方译名（本来就一样）。
+ *   写错的**字或词**：荧光底色 + 一道横线划掉，**正确的写法写在它上方**；
+ *   漏写的**字或词**：直接用**红色补进译文**（没有东西可划，就不划）；
+ *   译对的整条：米绿底色（与文章模式的"亮点"同一个记号）。
+ * ⚠️ 第 16 条起**不再整条重写**（早先是"整条划掉 + 右边跟一个「→ 官方译名」"）：
+ * 用户要看的是"我哪个词写错了、应该写成什么"，不是把整条答案再抄一遍。
+ * 没作答的那一条也不再写"（没作答）"——整行就只有红色的正确答案。
  * 点任意一条能**选中**它（对照视图里那一行跟着选中）。
  * ⚠️ 第 14 条第 6 条起，术语模式不再画右下的「批注详情」栏，因此"点一条看说明"这件事
  * 在术语题里没有了——判完的答案与官方译名本来就在同一行上，不必再绕一层卡片；
@@ -40,7 +44,7 @@
 import type { JSX } from 'react'
 import type { Term } from '../domain/terms'
 import { TERMS_PER_PAGE } from '../domain/terms'
-import { termMarkId, type TermVerdict } from '../domain/term-exercise'
+import { answerPieces, termMarkId, type TermAnswerPiece, type TermVerdict } from '../domain/term-exercise'
 import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 
 /**
@@ -105,7 +109,7 @@ export function TermRows({
   )
 }
 
-/** 判完：一行一条，译错的划掉并给出官方译名。 */
+/** 判完：一行一条，**只改不对的字或词**（第 16 条）。 */
 export function TermResults({
   verdicts,
   selectedId,
@@ -137,6 +141,7 @@ export function TermResults({
            * 点到行里的空白处也该算"我要看这一条"（文章模式里点勾画也是同样的意思）。
            */
           const pick = (): void => onSelect(selection)
+          const pieces = verdict.correct ? [] : answerPieces(answer, verdict.accepted)
           return (
             <li key={`${verdict.term.zh}-${row}`} className={`term-row${verdict.correct ? ' term-row-ok' : ' term-row-bad'}`}>
               <div
@@ -153,40 +158,26 @@ export function TermResults({
                   pick()
                 }}
               >
-                {answer.length === 0 ? (
-                  <span className="term-answer-blank">（没作答）</span>
-                ) : verdict.correct ? (
+                {verdict.correct ? (
                   /* 译对的用绿色底色——与文章模式的"亮点"同一个记号 */
                   <span className="term-answer mk mk-highlight" style={{ background: tint }}>
                     {answer}
                   </span>
                 ) : (
                   /*
-                   * 译错的：荧光底色 + 一道横线划掉（与文章模式里"纯删除"同一套记号），
-                   * 横线画在内层，于是横线与文字同色、底色仍是那条完整的带子。
+                   * 译错的：**只把不对的字/词标出来**，其余原样留着（用户第 16 条：
+                   * "只修改不对的字或者词，用颜色标记，然后在上方写正确的词，而不是整条重写"）。
+                   *   - 写错的词：荧光底色 + 一道横线划掉，**正确写法写在它上方**（`.term-above`）；
+                   *   - 漏写的词：**直接用红色补进译文**（`.term-added`，不划横线）——
+                   *     没作答的那一条整行都走这一条路，屏幕上因此**只看到红色正确答案**，
+                   *     不再写"（没作答）"（用户点名）。
+                   * 判分一个字没动：这里画的仍然只是 `judgeTerms` 已经算好的对错。
                    */
-                  <span className="term-answer mk mk-delete" style={{ background: tint }}>
-                    <span className="mk-deleted" style={{ color }}>
-                      {answer}
-                    </span>
+                  <span className="term-answer">
+                    {pieces.map((piece, index) => (
+                      <Piece key={index} piece={piece} color={color} tint={tint} />
+                    ))}
                   </span>
-                )}
-                {/*
-                  官方译名跟在**同一行**（而不是另起一行）。
-                  一行总共只占"等分里的那一份"，另起一行就会把两行字挤进一行的格子里——
-                  术语一长就压到下一行上去。相同的话在下面「对照视图」里是一句一行。
-                  `verdict.standard` 而不是 `term.en`：英译中方向下标准答案可能是**两个中文**
-                  （一英多中，如"直辖市人民政府／设区的市人民政府"），那一串由判分那里拼好。
-                */}
-                {!verdict.correct && (
-                  <>
-                    <span className="term-arrow" aria-hidden="true">
-                      →
-                    </span>
-                    <span className="term-fix" style={{ color }}>
-                      {verdict.standard}
-                    </span>
-                  </>
                 )}
               </div>
               <span className={verdict.correct ? 'term-mark term-mark-ok' : 'term-mark term-mark-bad'}>
@@ -197,5 +188,45 @@ export function TermResults({
         })}
       </ol>
     </div>
+  )
+}
+
+/** 一条作答里的一段：原样、写错（划掉 + 上方写正确的）、漏写（红色补进去）。 */
+function Piece({
+  piece,
+  color,
+  tint,
+}: {
+  piece: TermAnswerPiece
+  color: string
+  tint: string
+}): JSX.Element {
+  if (piece.kind === 'added') {
+    /* 漏写的词：红色直接补在译文里，没有东西可划 */
+    return (
+      <span className="term-added" style={{ color }}>
+        {piece.text}
+      </span>
+    )
+  }
+  if (piece.kind === 'same') return <span>{piece.text}</span>
+  return (
+    /*
+     * 写错的词：划掉它，并在**它上方**写出正确的写法。
+     * 上方那一行的定位交给样式表（`.term-above` 用绝对定位吊在词的上面），
+     * 因此这一行的高度不会因为多了一行字而变——两栏的横线仍对得上。
+     */
+    <span className="term-wrong">
+      {piece.to !== undefined && (
+        <span className="term-above" style={{ color }}>
+          {piece.to}
+        </span>
+      )}
+      <span className="term-wrong-text mk mk-delete" style={{ background: tint }}>
+        <span className="mk-deleted" style={{ color }}>
+          {piece.text}
+        </span>
+      </span>
+    </span>
   )
 }
