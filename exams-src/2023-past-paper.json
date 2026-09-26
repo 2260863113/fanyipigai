@@ -1,0 +1,22 @@
+{
+  "slug": "2023-past-paper",
+  "domain": "past-paper",
+  "label": "2023 国才杯笔译真题",
+  "sourceFile": "【2023】国才杯笔译真题/2023外研社国才杯笔译真题.docx",
+  "answerFile": "【2023】国才杯笔译真题/2023外研社国才杯笔译答案.docx",
+  "notes": "本卷只设汉译英，没有英译汉，因此 articles 中只收 zh-to-en 两篇，未虚构英译汉对象。第一部分“术语翻译”的 10 个词条（如“创新驱动发展战略”“无用之用”）属于词条翻译而非语篇正文，未收入本文件；如需这部分请另行确认。订正一（纯格式）：抽取出的中文正文在每一处换行折叠点都留下了一个多余空格（例如“划龙舟、荡秋千， 在丰富”处）。已按明显排版错字处理全部删除，汉字与标点一字未增改、全篇不保留任何空格，可用去除所有空白后逐字比对校验；因此第 2 篇中数字与拉丁字符两侧的空格也一并去掉了（原文“2023 年前 4 个月”现为“2023年前4个月”；第 2 篇中数字前后附着的这类空格共 9 处，其中 5 处紧跟“，”或“、”之后，可确认是行内折叠残留而非有意排版），如需保留这类排版空格请告知。订正二（分段）：第 2 篇中文原文在“发挥了积极作用。”与“外贸平稳向好”之间原为空行分段，抽取时段落标记丢失、只留下一个多余空格（“……发挥积极作 用。 外贸平稳向好……”中间是双空格，而不是行内折叠那种单空格）。已恢复为一个空行，故该篇正文为 2 段。存疑：原始卷面是 docx，本次只拿到纯文本抽取结果，无法回读原文件，因此“第 2 篇正文分 2 段”是依据上述空格模式推断的，未从原稿直接确认；若原始卷面其实没有分段，则第 2 篇的正文与参考译文都应并回 1 段。存疑（段数对齐）：答案文件把第 2 篇的中文原文与英文译文都各排成 1 段，与正文的 2 段划分不一致。为满足 text 与 reference 段数一致的要求，正文保留卷面分段（2 段），参考译文则在语义对应的“The steady improvement in foreign trade”之前插入一个空行使其成为 2 段；译文文字本身一字未改（含其原有的空格与标点）。说明：参考译文的撇号按答案文件原样保留、未作统一——两篇答案本身的用法就不一致，第 1 篇通篇用直撇号 U+0027，第 2 篇通篇用弯撇号 U+2019；第 1 篇译文中的破折号 U+2014 亦原样保留。",
+  "articles": [
+    {
+      "direction": "zh-to-en",
+      "title": "2023 国才杯笔译真题：汉译英（语篇一，关于端午节习俗与传统节日文化的传承）",
+      "text": "又是一年端阳至，人们吃粽子、饮雄黄、插艾草、戴香囊、划龙舟、荡秋千，在丰富多彩的活动中品读传统文化、过好传统佳节。作为率先入选联合国教科文组织非物质文化遗产名录的中国传统节日，端午节承载着多样且厚重的传统文化，需要进一步挖掘。除了参与体验端午节日的仪式感，更重要的是，要讲好传统节日故事。一些地方通过开展端午诗会、专题展览、读书分享会等活动，借助动漫、情景剧、纪录片等形式，培育天人合一的自然观、除秽驱病的健康观，已成为传承发扬传统节日文化精髓的创新途径。",
+      "reference": "The Dragon Boat Festival has arrived. Eating zongzi, drinking xionghuang wine, hanging mugwort leaves, wearing perfume pouches, enjoying dragon boat races and swings—the Chinese people are celebrating this traditional festival by immersing themselves in various traditional cultural activities. As the first traditional Chinese festival to be inscribed on the List of Intangible Cultural Heritage by UNESCO, the Dragon Boat Festival is representative of China's diverse and profound traditional culture that calls for further promotion. In addition to experiencing the ceremonial aspects of the Dragon Boat Festival, it is also important for us to tell the stories of the traditional festival well. To this end, some cities are holding events such as poetry recitals, theme exhibitions, and book readings; artists are also telling stories by means of animation, sitcoms and documentaries. These efforts advocate harmony between humans and nature and raise awareness for preventing disease and maintaining health. They are creative means to pass on and promote the cultural essence of traditional festivals."
+    },
+    {
+      "direction": "zh-to-en",
+      "title": "2023 国才杯笔译真题：汉译英（语篇二，关于 2023 年前 4 个月我国外贸进出口形势）",
+      "text": "海关总署发布的数据显示，2023年前4个月，我国进出口总值13.32万亿元，同比增长5.8%，进出口延续了向好态势。外贸进出口展现出较强韧性，为全年实现外贸促稳提质打下了基础。值得一提的是，今年前4个月，有进出口实绩的民营企业数量同比增加了8.9%，为拓宽就业渠道、稳定就业大盘发挥了积极作用。\n\n外贸平稳向好，得益于我国产业链水平不断提升。高技术、高附加值、引领绿色转型的产品领跑出口，表明我国外贸新动能不断培育壮大，更折射出供给侧结构性改革下，中国制造业迈向高端化、智能化、绿色化的坚实足迹。依靠科技创新与低碳转型，“中国制造”不断塑造和积累国际竞争新优势，中国经济高质量发展活力强劲。",
+      "reference": "According to data released by the General Administration of Customs, China’s import and export value reached 13.32 trillion yuan in the first four months of 2023, showing a year-on-year increase of 5.8%. This steady growth in imports and exports reflects the resilience of China’s foreign trade and lays a solid foundation for stabilizing and improving its quality throughout the year. Notably, the number of private enterprises with tangible import and export results increased by 8.9% compared to the same period last year, contributing to the expansion of employment opportunities and the stability of the job market.\n\nThe steady improvement in foreign trade can be attributed to the continuous development of China’s industrial chain. Leading the export market with high-tech, high-added-value, and green transformation-driven products signifies the ongoing cultivation and growth of China’s foreign trade. It also reflects the firm steps taken by China’s manufacturing industry towards high-end, smarter, and greener production under the supply-side structural reform. Through scientific and technological innovation and low-carbon transition, “Made in China” is constantly shaping and accumulating new advantages in international competition, thereby providing strong impetus for the high-quality development of China’s economy."
+    }
+  ]
+}

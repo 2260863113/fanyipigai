@@ -34,6 +34,7 @@ import type { Term } from '../domain/terms'
 import { questionSideOf } from '../domain/term-exercise'
 import type { TermScope } from '../domain/term-scopes'
 import { DomainSelect, DirectionSelect, DirectionSwitch, type ArticleSelection } from './DomainSelect'
+import { TOPIC_DOMAINS } from '../domain/articles'
 import { TermScopeSelect } from './TermScopeSelect'
 import { termRowsOf } from './TermRows'
 
@@ -186,7 +187,14 @@ export function SourcePane({
             "将领域下拉栏挪到原文标题栏紧靠『原文』的右边"）。它们决定的是"练哪一格的题"，
             因此排在"换哪一篇"之前——先定范围，再挑篇目。
           */}
-          {range && <DomainSelect selection={range.selection} onChange={range.onChange} />}
+          {range && (
+            <DomainSelect
+              selection={range.selection}
+              onChange={range.onChange}
+              // 句子栏只列五个话题领域：真题/样题是"卷子的来源"，那边没有对应题目（见 ADR 0029）
+              {...(mode === 'sentence' ? { domains: TOPIC_DOMAINS } : {})}
+            />
+          )}
           {range?.withDirection && <DirectionSelect selection={range.selection} onChange={range.onChange} />}
           {/*
             术语栏那两个控件：**范围**（弹窗两屏，见 TermScopeSelect）+ **方向**（中译英／英译中）。

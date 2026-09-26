@@ -22,7 +22,7 @@
  */
 
 import { useEffect, useRef, useState, type JSX } from 'react'
-import { ARTICLE_DOMAINS, hasArticles, labelOfDomain, type ArticleDomain } from '../domain/articles'
+import { ARTICLE_BANK_DOMAINS, hasArticles, labelOfDomain, type ArticleDomain } from '../domain/articles'
 import { DIRECTION_LABEL, type Direction } from '../domain/types'
 
 /** 文章库里选定的一格（「领域 × 方向」）。 */
@@ -34,9 +34,16 @@ export interface ArticleSelection {
 export function DomainSelect({
   selection,
   onChange,
+  domains = ARTICLE_BANK_DOMAINS,
 }: {
   selection: ArticleSelection
   onChange: (next: ArticleSelection) => void
+  /**
+   * 下拉里列哪些领域。**默认是文章栏那张完整的表**（五个话题领域 + 真题 + 样题）；
+   * 句子栏传 `TOPIC_DOMAINS`——它的题目是在文章正文里切句，而"真题/样题"是卷子的来源、
+   * 不是话题，列在那里只会多出两个永远没题目的格子（见 articles.ts 与 ADR 0029）。
+   */
+  domains?: readonly { id: ArticleDomain; label: string }[]
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
@@ -78,7 +85,7 @@ export function DomainSelect({
 
       {open && (
         <ul className="domain-menu" role="listbox" aria-label="领域">
-          {ARTICLE_DOMAINS.map((domain) => {
+          {domains.map((domain) => {
             // 这一格在**当前方向**下有没有文章；没有也允许选（切过去看另一方向），但不做假承诺
             const available = hasArticles(domain.id, selection.direction)
             return (

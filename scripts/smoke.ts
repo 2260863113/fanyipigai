@@ -506,13 +506,27 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     for (const domain of ['社会', '经济', '文化', '生态', '科技']) {
       check(GENERATION_TOPICS.includes(domain), `出题领域预设覆盖五大板块：${domain}`)
     }
-    // 预设与文章库的领域表必须**完全一致**：两处口径不一样，用户会看到两个领域清单
+    // 预设与文章库的**话题领域**表必须**完全一致**：两处口径不一样，用户会看到两个领域清单
     {
-      const { ARTICLE_DOMAINS } = await import('../src/domain/articles')
-      const labels = ARTICLE_DOMAINS.map((item) => item.label)
+      const { ARTICLE_BANK_DOMAINS, EXAM_DOMAINS, TOPIC_DOMAINS } = await import('../src/domain/articles')
+      const labels = TOPIC_DOMAINS.map((item) => item.label)
       check(
         labels.length === GENERATION_TOPICS.length && labels.every((label) => GENERATION_TOPICS.includes(label)),
-        `出题领域预设与文章库的板块表逐个对齐（预设 ${GENERATION_TOPICS.join('/')} ／ 文章库 ${labels.join('/')}）`,
+        `出题领域预设与文章库的话题领域表逐个对齐（预设 ${GENERATION_TOPICS.join('/')} ／ 文章库 ${labels.join('/')}）`,
+      )
+      // 真题/样题是**文章栏独有**的两类：不混进话题领域表，也不进 AI 出题的预设（见 ADR 0029）
+      check(
+        EXAM_DOMAINS.length === 2 && EXAM_DOMAINS.map((item) => item.label).join(',') === '真题,样题',
+        `文章库另有两类卷子领域：${EXAM_DOMAINS.map((item) => item.label).join('/')}`,
+      )
+      check(
+        ARTICLE_BANK_DOMAINS.length === TOPIC_DOMAINS.length + EXAM_DOMAINS.length &&
+          GENERATION_TOPICS.every((topic) => ARTICLE_BANK_DOMAINS.some((domain) => domain.label === topic)),
+        `文章栏的领域表 = 五个话题领域 + 真题 + 样题（共 ${ARTICLE_BANK_DOMAINS.length} 项：${ARTICLE_BANK_DOMAINS.map((item) => item.label).join('/')}）`,
+      )
+      check(
+        !GENERATION_TOPICS.includes('真题') && !GENERATION_TOPICS.includes('样题'),
+        '真题与样题**没有**混进 AI 出题的预设领域',
       )
     }
 

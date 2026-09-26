@@ -10,7 +10,7 @@
  * 另有其存储（`last-view.ts`），因为那件事对句子栏、术语栏同样成立。
  */
 
-import { ARTICLE_DOMAINS, type ArticleDomain } from '../domain/articles'
+import { ARTICLE_BANK_DOMAINS, type ArticleDomain } from '../domain/articles'
 import type { Direction } from '../domain/types'
 
 const STORAGE_KEY = 'translation-practice.article-selection.v2'
@@ -24,11 +24,14 @@ export interface ArticleSelection {
  * 打开页面时的落点。**只作为兜底**：正常路径由 `last-view.ts` 记住的那一格说了算，
  * 这一份管的是"没记过 / 记的那一道已经不在了"时落在哪个格子。
  * 按领域表的第一个板块 + 英译中（用户要求：默认落在第一个领域社会 + 英译中）。
+ *
+ * ⚠️ 这里校验的是**完整表**（含真题/样题）：用户上次选的是"真题"那一格，
+ * 下次打开就该回到真题，不该被当成"记的那一格不在了"而退回社会。
  */
-export const DEFAULT_SELECTION: ArticleSelection = { domain: ARTICLE_DOMAINS[0].id, direction: 'en-to-zh' }
+export const DEFAULT_SELECTION: ArticleSelection = { domain: ARTICLE_BANK_DOMAINS[0].id, direction: 'en-to-zh' }
 
 function isDomain(value: unknown): value is ArticleDomain {
-  return typeof value === 'string' && ARTICLE_DOMAINS.some((domain) => domain.id === value)
+  return typeof value === 'string' && ARTICLE_BANK_DOMAINS.some((domain) => domain.id === value)
 }
 
 function isDirection(value: unknown): value is Direction {

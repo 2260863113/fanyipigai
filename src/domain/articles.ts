@@ -38,9 +38,16 @@
 import type { Direction } from './types'
 import { EN_ARTICLES } from './articles-data/en-to-zh'
 import { ZH_ARTICLES } from './articles-data/zh-to-en'
+import { EXAM_ARTICLES } from './articles-data/exams'
 
-/** 五大板块。顺序即界面下拉里的顺序。 */
-export const ARTICLE_DOMAINS = [
+/**
+ * 五个**话题领域**（社会/经济/文化/生态/科技）。顺序即界面下拉里的顺序。
+ *
+ * ⚠️ 这一张是**全站共用**的那张表：句子栏的领域下拉、术语库的分组、AI 出题的预设领域
+ * 都按它排（见 ADR 0010）。因此**真题与样题不放进这里**——它们是"卷子的来源"，
+ * 不是"文章讲什么话题"，混进来会让句子栏多出两个永远没题目的格子（见 ADR 0029）。
+ */
+export const TOPIC_DOMAINS = [
   { id: 'society', label: '社会' },
   { id: 'economy', label: '经济' },
   { id: 'culture', label: '文化' },
@@ -48,11 +55,42 @@ export const ARTICLE_DOMAINS = [
   { id: 'tech', label: '科技' },
 ] as const
 
-export type ArticleDomain = (typeof ARTICLE_DOMAINS)[number]['id']
+export type TopicDomain = (typeof TOPIC_DOMAINS)[number]['id']
+
+/**
+ * 文章库**额外**的两类"卷子领域"：真题与样题。
+ *
+ * 用户的要求是"将领域添加两类'真题''样题'，题目分别归类，不归入到剩余5类中"——
+ * 因此它们只出现在**文章栏**（那个下拉本来就是"挑材料"的意思），
+ * 句子栏/术语库/AI 出题一律看不到它们。
+ */
+export const EXAM_DOMAINS = [
+  { id: 'past-paper', label: '真题' },
+  { id: 'sample', label: '样题' },
+] as const
+
+export type ExamDomain = (typeof EXAM_DOMAINS)[number]['id']
+
+/** 文章栏用的完整领域表：五个话题领域 + 两类卷子领域。 */
+export const ARTICLE_BANK_DOMAINS = [...TOPIC_DOMAINS, ...EXAM_DOMAINS] as const
+
+/**
+ * 老名字，保留给"只认话题领域"的调用点（句子题按领域切句）。
+ * 新代码请直接用 `TOPIC_DOMAINS` 或 `ARTICLE_BANK_DOMAINS`，别用这个名字——
+ * 它看不出到底含不含真题/样题。
+ */
+export const ARTICLE_DOMAINS = TOPIC_DOMAINS
+
+export type ArticleDomain = (typeof ARTICLE_BANK_DOMAINS)[number]['id']
 
 const DOMAIN_LABEL: Record<ArticleDomain, string> = Object.fromEntries(
-  ARTICLE_DOMAINS.map((domain) => [domain.id, domain.label]),
+  ARTICLE_BANK_DOMAINS.map((domain) => [domain.id, domain.label]),
 ) as Record<ArticleDomain, string>
+
+/** 这个领域是不是"卷子领域"（真题/样题）。界面上它们的卡片说明与别的不同。 */
+export function isExamDomain(domain: ArticleDomain): domain is ExamDomain {
+  return EXAM_DOMAINS.some((item) => item.id === domain)
+}
 
 export function labelOfDomain(domain: ArticleDomain): string {
   return DOMAIN_LABEL[domain]
@@ -85,7 +123,7 @@ export interface Article {
  * ⚠️ 段落之间**留一个空行**——分页时按空行切自然段，别随手删。
  * 数据本身在 articles-data/ 里，由脚本生成。
  */
-export const ARTICLES: readonly Article[] = [...EN_ARTICLES, ...ZH_ARTICLES]
+export const ARTICLES: readonly Article[] = [...EN_ARTICLES, ...ZH_ARTICLES, ...EXAM_ARTICLES]
 
 /** 取某个「领域 × 方向」下的全部文章。没有就是空数组。 */
 export function articlesOf(domain: ArticleDomain, direction: Direction): readonly Article[] {
