@@ -1,0 +1,26 @@
+{
+  "slug": "2025-preliminary-2",
+  "domain": "past-paper",
+  "label": "2025 国才杯笔译初赛（英汉互译）",
+  "year": 2025,
+  "stage": "初赛",
+  "sourceFile": "外研社/2025初赛-英汉互译(2).docx",
+  "answerFile": "",
+  "notes": "1. 与 2025-may 不同卷（已逐字比对）：本 docx 的两篇语篇与 2025-may.json 的两篇（英译汉“贸易政策紧张与关税的作用机制”、汉译英“北京中轴线列入《世界遗产名录》”）完全不同。比对方法：去掉全部空白与标点（Unicode 类别 P/Z/S 全去掉）、把全角字符 NFKC 归一化后逐字比。结果：四组同方向交叉配对无一相同；英译汉对英译汉的相似度仅 0.0095、最长公共子串只有 9 个字符，共享片段全是跨词拼接出来的通用串（economies、ofeconomi、ttheworld）；汉译英对汉译英的相似度 0.0586、最长公共子串只有 5 个字符，就是“2024年”。远低于同一份卷子应有的水平，故判定不是同一场初赛：本文件按正常结构收录两篇，不存在与 2025-may 重复收录的问题。2. 来源与题量：卷内两道语篇翻译题——“Translate the following passage into Chinese.（242字）”（英文 2 段，人口结构变化与银发经济）与“Translate the following passage into English.（283字）”（中文 3 段，免签政策与中国游）。卷首的题面说明行（含字数标注）已剔除，卷内没有非语篇题型。3. 无参考译文：docx 内不含答案，answerFile 为空串，两篇 reference 均为空串，未自行翻译。4. 订正一（英文篇，共 13 处：第 1 段 5 处、第 2 段 8 处）：该 docx 的英文正文丢掉了标点后的空格（系统性损伤：段落被拆成多个 run，w:t 之间只夹着单个空格 run，标点后的空格整体被吃掉），已按英文排版逐处补回一个空格，字母与词序一字未改。第 1 段：navigate.Global、2080-2100.An、economies,with、century.These、economy,\"as；第 2 段：ages,economies、silver economy,\"focusing、markets,the、changes,and、pressures,healthier、participation,extending、aging,increase、strategies,countries。5. 订正二（中文篇，1 处）：第 1 段“同比增长86.2%,有力带动”里的半角逗号→全角“，”（依据：同一句其余标点均为全角）。6. 引号与撇号照录未统一：英文篇用直双引号与直撇号（world's），系原文件如此，未改（沿用 2023-past-paper.json 的先例）。7. 段数：英译汉原文 2 段、汉译英原文 3 段；两篇均无参考译文，不存在段数对齐问题。8. 话题判定：英译汉那篇主题是全球人口结构变化与人口老龄化，“银发经济”是其经济面向，按“这篇材料讲的是什么”归入“社会”（若更看重后半段劳动力市场与财政压力那一半，可改判“经济”）；汉译英那篇讲免签政策扩围带动入境旅游与旅游、交通、餐饮产业，归入“经济”。9. label 按文件名写成“2025 国才杯笔译初赛（英汉互译）”；它与 2025-may（2025 年 5 月笔译真题，同为初赛）是两场不同场次，故 slug 用 2025-preliminary-2 区分。",
+  "articles": [
+    {
+      "direction": "en-to-zh",
+      "topic": "社会",
+      "summary": "全球人口老龄化与银发经济",
+      "text": "Unprecedented demographic changes expected throughout this century are creating increasingly pressing issues for all countries to navigate. Global population growth will slow from 1.1 percent per year before the COVID-19 pandemic to basically zero in 2080-2100. An ongoing decline in fertility and an increase in longevity are expected to bring sharp changes in the age structure of economies, with the average age of the world's population projected to increase by 11 years between 2020 and the end of the century. These forces are driving the rise of the \"silver economy,\" as the share of the older population—ages 65 and older—is increasing rapidly throughout the world, with far-reaching implications for economies and societies.\n\nAs the global population ages, economies worldwide are experiencing significant demographic shifts with profound implications. This report explores the rise of the \"silver economy,\" focusing on the extent of healthy aging and its impact on labor markets, the broader economic implications of demographic changes, and the role of targeted policies in mitigating the adverse effects of aging. The analysis reveals that while population aging poses challenges such as slower growth and increased fiscal pressures, healthier aging trends offer a silver lining by boosting labor force participation, extending working lives, and enhancing productivity. The report underscores the importance of policies that support healthy aging, increase labor force participation among older individuals, and close gender gaps in the workforce. By leveraging these strategies, countries can harness the potential of the silver economy to boost growth and rebuild fiscal buffers amid demographic headwinds.",
+      "reference": ""
+    },
+    {
+      "direction": "zh-to-en",
+      "topic": "经济",
+      "summary": "免签政策扩围与入境游升温",
+      "text": "2024年，我国不断优化政策，进一步扩大单方面免签、互免签证范围，持续提升外籍人员来华、在华便利度。2024年前11个月，全国各口岸入境外国人2921.8万人次，同比增长86.2%，有力带动旅游、交通、餐饮等产业发展。\n\n2024年12月17日，国家移民管理局宣布进一步优化外国人过境免签政策，将其境内停留时间由原72小时和144小时均延长为240小时，政策适用口岸总数从原有的39个增加至60个，适用省份总数从19个增加至24个。\n\n在国际互联网上，以“中国游”为主题的媒体流量突破10亿。与“中国游”词条热起来相对应的，是不断升温的中国旅游市场。2025年，随着免签政策带来更多方便，中国将有更多地方共享旅游资源，提升开放水平，赢得新机遇。",
+      "reference": ""
+    }
+  ]
+}
