@@ -1098,6 +1098,8 @@ scripts/
   live-refine.mjs        用真实 API 跑一次大改档（整篇逐句重写 + 每句原文 + 逐句解释，不打分）
   live-sections.mjs      用真实 API 验证文章题的按段并行与序号换算
   build-articles.mjs     从 文章.docx 生成文章库正文与参考译文（唯一生成入口）
+  build-exams.mjs        从 exams-src/*.json 生成真题与样题的正文（三条硬校验，见 ADR 0029）
+exams-src/               真题/样题的**材料**：人工整理出来的原文与官方参考译文（json，进仓库可复核）
   check-articles.mjs     文章库体检（篇数 / 完整性 / 不雷同 / 译文对齐 / 分页）
   build-terms.mjs        从两份机关名称 docx 生成术语库正文（唯一生成入口，第 13 轮新增）
   check-terms.mjs        术语库体检（条数 / 分页 / 别名与拼写变体 / 不许放宽过头，第 13 轮新增）

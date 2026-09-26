@@ -1,0 +1,16 @@
+{
+  "slug": "2024-school-2",
+  "domain": "past-paper",
+  "label": "2024 国才杯笔译校赛二",
+  "sourceFile": "【2024】国才杯笔译真题（校赛、初赛、省赛）/24年国才杯笔译校赛二.pdf",
+  "answerFile": "",
+  "notes": "整理说明：(1) 本卷未找到官方答案文件。该 PDF 的标题是「2024 年外研社·国才杯“理解当代中国”笔译试题及答案」，但文末「参考答案」只给了词汇选择与完形填空；英译汉每段后附有「翻译 1」「翻译 2」两个版本的译文，既没标注哪一份是参考答案、两份彼此也不同，故 reference 一律留空字符串，没有拿别的材料代填。(2) 原文逐字照录，只做了两类技术性订正：跨页断词「sustain-ability」还原为「sustainability」（PDF 在第 4、5 页交界处断开）；抽取丢掉的词间空格补回——「theChinese」→「the Chinese」、「such asMexico」→「such as Mexico」，以及 2 处句末标点后缺空格（「world.Yet」→「world. Yet」、「markets.Meanwhile」→「markets. Meanwhile」）。(3) 破折号在原文里排印不一致（「principles—— such as」「innovations — — the household」「zones—— that」），照录未改。(4) 卷头（比赛名称）、题号与分值说明行，以及页眉页脚水印（「更多资料请关注bilibili:LAN 浨爱冒险/一只五哈怪」「请勿搬运/二次贩卖」「大学竞赛/考证资料请关注【公众号】一只五哈怪」）均已剔除。(5) 本卷只有英译汉，没有汉译英部分，因此 articles 里没有 zh-to-en 对象，未虚构。(6) 本卷还有 Part 1 词汇选择（25 题）与 Part 2 完形填空（9 空），属非语篇题型，未收录。(7) 段落：英译汉原文 4 段，无参考译文（reference 为空串，故不存在段数对齐问题）。",
+  "articles": [
+    {
+      "direction": "en-to-zh",
+      "title": "2024 国才杯笔译校赛二 英译汉：主流经济学与新自由主义（新自由主义政策的成败）",
+      "text": "In recent decades, mainstream economics has become closely associated with a particular set of policies labeled“neoliberalism.” The neoliberal policy paradigm favors expanding the scope of markets(including global markets) and restricting the role of government action. Today it is widely recognized that this approach failed in a number of important respects. It widened inequality within nations, did little to promote the climate transition, and created blind spots ranging from global public health to supply-chain resilience.\n\nThe neoliberal era did witness a major achievement. Record economic growth in many developing economies, including the most populous, brought a massive reduction in extreme poverty around the world. Yet the countries that did best during this period, such as China, hardly subscribed to neoliberal rules. They relied on industrial policies, state enterprises, and capital controls as much as they did on freer markets. Meanwhile, the performance of countries that adhered most closely to the neoliberal playbook, such as Mexico, was abysmal.\n\nWas economics responsible for neoliberalism? Most of us know that economics is a way of thinking rather than a set of policy recommendations. The tools of contemporary economics yield very few generalizations that offer immediate policy guidance. First-order principles—— such as thinking at the margin, aligning private incentives with social costs and benefits, fiscal sustainability, and sound money—— are essentially abstract ideas that do not map into unique remedies.\n\nChina itself offers the best illustration of the plasticity of economic principles. Few would dispute that the Chinese government took advantage of markets, private incentives, and globalization. Yet it did so through unconventional innovations — — the household responsibility system, dual-track pricing, township-and-village enterprises, special economic zones—— that would be unrecognizable in standard Western policy recommendations.",
+      "reference": ""
+    }
+  ]
+}

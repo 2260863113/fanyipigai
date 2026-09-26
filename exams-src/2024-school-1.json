@@ -1,0 +1,22 @@
+{
+  "slug": "2024-school-1",
+  "domain": "past-paper",
+  "label": "2024 国才杯笔译校赛一",
+  "sourceFile": "【2024】国才杯笔译真题（校赛、初赛、省赛）/24年国才杯笔译校赛一.pdf",
+  "answerFile": "【2024】国才杯笔译真题（校赛、初赛、省赛）/24年国才杯笔译校赛一(答案).pdf",
+  "notes": "整理说明：(1) 本卷 PDF 的文件名是「24年国才杯笔译校赛一」，但卷内首页标题写的是「英语笔译（初赛）试题」；它与「24英语笔译（初赛）真题.pdf」逐字节相同（SHA256 一致、同为 377844 字节），两份答案 PDF 也逐字节相同（481301 字节），两者是同一份卷子——正文只保留在本文件，2024-preliminary.json 的 articles 因此是空数组。(2) 英译汉第二段里的「C20」「NAITO」是抽取造成的错字，已按同句的 G7、联合国安理会常任理事国语境订正为「G20」「NATO」（答案文件的中译也写作「北约(NATO)」）。(3) 抽取在阿拉伯数字与汉字交界处留下空格（如「大运河历经2500 多个春秋」「延绵近3200 公里」），照录未改；句中因两端对齐造成的多余空格（如「discussed the  full spectrum」）已并为单个空格。(4) 答案文件本身有两处笔误，照录未改：把「二十国集团」写成「二十国集团(G7)」；把「The Grand Canal, with its many sails passing by」写成「The Grand Canal. with its many sails passing by」。另外答案文件的汉译英参考译文有 1 处句末标点后缺空格（「foreign civilizations.As an ancient…」），已补回一个空格。(5) 卷头（比赛名称、页数分值、考试时间）、题号与答题要求行，以及页眉页脚水印（「更多资料请关注 bilibili:LAN 浨爱冒险」「更多资料请关注Bilibili UID:1809687647」）均已剔除。(6) 本卷还有 Part I 词汇选择（25 题）与 Part II 完形填空（10 空），属非语篇题型，本 JSON 结构只承载成篇材料，未收录。(7) 段落：英译汉原文 2 段对参考译文 2 段，汉译英原文 2 段对参考译文 2 段。(8) sourceFile 与 answerFile 的目录、文件名都对着磁盘上「【2024】国才杯笔译真题（校赛、初赛、省赛）」里的实际文件核对过。",
+  "articles": [
+    {
+      "direction": "en-to-zh",
+      "title": "2024 国才杯笔译校赛一 英译汉：英法领导人会晤（布伦海姆宫，英法协约 120 周年）",
+      "text": "The Prime Minister of the United Kingdom of Great Britain and Northern Ireland and the President of the French Republic met today at Blenheim Palace. In this, the 120th anniversary year of the Entente Cordiale, the two leaders discussed the full spectrum of the bilateral relationship between the UK and France, the UK's intention to reset its relationship with the EU and wider Europe, as well as international and global issues. 80 years on from the D-Day landings and the Liberation of France the leaders remembered the immense common sacrifices that both countries have made to defend their shared values and to protect their societies. And 30 years on from the opening of the Channel Tunnel they recalled what the UK and France can build together when they do not constrain their ambitions, allowing their economies to flourish and their people to connect.\n\nAs fellow members of the G7, G20, NATO and permanent members of the UN Security Council, the UK and France will continue to work together to provide global leadership in an era of renewed geopolitical instability. They are committed to continuing to invest in the European Political Community format to bring together Europe's democracies and contribute to regional stability and security through political dialogue and concrete cooperation.",
+      "reference": "英国首相与法国总统今天在布伦海姆宫会晤。在英法协约120 周年之际，两位领导人讨论了英法双边关系的各个方面、英国重置与欧盟及更广泛欧洲关系的意图，以及国际问题。在诺曼底登陆和解放法国80 周年之际，两位领导人回顾了两国为捍卫共同价值观和保护社会所作出的巨大牺牲。在英法开通海峡隧道30 周年之际，他们回想起两国曾经怀着远大抱负共同构建美好未来，推动经济繁荣和人民交流。\n\n作为七国集团(G7)、二十国集团(G7)、北约(NATO) 成员以及联合国安理会常任理事国，英法将继续携手在地缘政治不稳定的新时期提供全球领导。双方承诺继续投资欧洲政治共同体，团结欧洲的民主国家，通过政治对话和具体合作促进地区稳定与安全。"
+    },
+    {
+      "direction": "zh-to-en",
+      "title": "2024 国才杯笔译校赛一 中译英：运河文化（大运河与华夏文明、中外文明交流）",
+      "text": "运河文化串联华夏文明源远流长的历史脉络。大运河历经2500 多个春秋，延绵近3200 公里，集聚了多项物质和非物质文化遗产。千百年来，南北文化在大运河上交织融合、奔涌向前，绘就出一幅绵延千里的锦绣画卷。\n\n运河文化书写中外文明美美与共的动人故事。大运河作为古代中国联通世界的文化纽带、历史见证，展现了中华文明的开放包容精神。回溯历史，运河曾承载过中国丝绸、瓷器、茶叶等物产的外运，无数中外文化使者的游历。千帆过尽的大运河不仅是中华民族的瑰宝，更是与世界文化互联互通的桥梁。",
+      "reference": "Canal culture weaves together the long and rich history of Chinese civilization. The Grand Canal, spanning over 2, 500 years and nearly 3, 200 kilometers, embodies numerous tangible and intangible cultural heritages. For centuries, northern and southern cultures have intertwined and surged forward along the Grand Canal, creating a magnificent tapestry that stretches for miles.\n\nCanal culture tells a touching story of the harmonious coexistence of Chinese and foreign civilizations. As an ancient cultural link connecting China to the world, the Grand Canal showcases the open and inclusive spirit of Chinese civilization. Historically, it facilitated the export of silk, porcelain, and tea, along with the journeys of countless cultural ambassadors from both China and abroad. The Grand Canal. with its many sails passing by, is not only a treasure of the Chinese nation but also a bridge for cultural connectivity with the world."
+    }
+  ]
+}
