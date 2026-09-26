@@ -528,6 +528,37 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         !GENERATION_TOPICS.includes('真题') && !GENERATION_TOPICS.includes('样题'),
         '真题与样题**没有**混进 AI 出题的预设领域',
       )
+
+      /*
+       * 生成出来的真题/样题正文再验一遍。
+       * 生成脚本本身有三条硬校验，但 `articles-data/exams.ts` 与其它数据文件一样
+       * 是"自动生成、不要手改"的——这里盯的就是**有人手改过它**：
+       * 段数不再对齐、来源丢了、领域被改成了社会/经济…，都会在这里立刻红。
+       */
+      const { EXAM_ARTICLES } = await import('../src/domain/articles-data/exams')
+      const examIds = new Set<string>(EXAM_DOMAINS.map((item) => item.id))
+      check(
+        EXAM_ARTICLES.length > 0 && EXAM_ARTICLES.every((item) => examIds.has(item.domain)),
+        `真题/样题共 ${EXAM_ARTICLES.length} 篇，领域只有 past-paper / sample`,
+      )
+      check(
+        EXAM_ARTICLES.every((item) => item.title.includes('来源：')),
+        '每一篇的标题末尾都写着来源文件（追得回是哪一份卷子）',
+      )
+      const brokenParity = EXAM_ARTICLES.filter(
+        (item) =>
+          item.reference.length > 0 &&
+          item.reference.split(/\n{2,}/).length !== item.text.split(/\n{2,}/).length,
+      )
+      check(
+        brokenParity.length === 0,
+        '原文与参考译文的段数一致（有译文的那些）',
+        brokenParity.map((item) => item.id).join('、'),
+      )
+      check(
+        EXAM_ARTICLES.every((item) => item.units > 50),
+        '每篇都有真实篇幅（units > 50）',
+      )
     }
 
     for (const direction of ['en-to-zh', 'zh-to-en'] as const) {
