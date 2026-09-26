@@ -50,7 +50,7 @@ import {
   sentenceExerciseId,
   sentenceForExerciseId,
 } from '../domain/sentence-exercise'
-import { articleById, ARTICLES, articlesOf } from '../domain/articles'
+import { articleById, ARTICLES, articlesOf, TOPIC_DOMAINS } from '../domain/articles'
 import { exerciseOfArticle } from '../domain/article-exercise'
 import {
   answeredTermCount,
@@ -2010,6 +2010,14 @@ export function App(): JSX.Element {
                     range: {
                       selection: articleSelection,
                       withDirection: false,
+                      /*
+                       * 句子栏只列**五个话题领域**（ADR 0029）：真题/样题是"卷子的来源"，
+                       * 句子题是在文章正文里切句，那两个领域在这边没有对应题目。
+                       * 由调用方在这里点名，而不是让控件去猜当前是什么题型——
+                       * 一开始我按 `mode === 'sentence'` 猜，实测没命中（句子栏照样列出 7 项），
+                       * 是浏览器验收里那条断言抓出来的。
+                       */
+                      domains: TOPIC_DOMAINS,
                       onChange: (next: ArticleSelection) => {
                         setArticleSelection(next)
                         saveSelection(next)

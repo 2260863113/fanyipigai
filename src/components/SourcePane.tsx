@@ -34,7 +34,7 @@ import type { Term } from '../domain/terms'
 import { questionSideOf } from '../domain/term-exercise'
 import type { TermScope } from '../domain/term-scopes'
 import { DomainSelect, DirectionSelect, DirectionSwitch, type ArticleSelection } from './DomainSelect'
-import { TOPIC_DOMAINS } from '../domain/articles'
+import type { ArticleDomain } from '../domain/articles'
 import { TermScopeSelect } from './TermScopeSelect'
 import { termRowsOf } from './TermRows'
 
@@ -122,7 +122,13 @@ export function SourcePane({
    * 「领域 × 方向」这两个范围控件（第 7 条：挪进原文标题栏、紧挨「原文」）。
    * 传 null 就不画——术语题与"自己贴的题"没有领域可言（见 DomainSelect.tsx）。
    */
-  range?: { selection: ArticleSelection; onChange: (next: ArticleSelection) => void; withDirection: boolean } | null
+  range?: {
+    selection: ArticleSelection
+    onChange: (next: ArticleSelection) => void
+    withDirection: boolean
+    /** 下拉里列哪些领域；不传 = 用文章栏那张完整表（含真题/样题，见 ADR 0029） */
+    domains?: readonly { id: ArticleDomain; label: string }[]
+  } | null
   /**
    * 当前选中那一处批改**对应到原文**的位置与颜色（用户要求：点译文上的某一处，
    * 左边原文栏里对应的那一处也标成同色；收起卡片就消失）。
@@ -191,8 +197,8 @@ export function SourcePane({
             <DomainSelect
               selection={range.selection}
               onChange={range.onChange}
-              // 句子栏只列五个话题领域：真题/样题是"卷子的来源"，那边没有对应题目（见 ADR 0029）
-              {...(mode === 'sentence' ? { domains: TOPIC_DOMAINS } : {})}
+              // 列哪些领域由调用方决定（句子栏传五个话题领域，文章栏不传 = 用完整表，见 ADR 0029）
+              {...(range.domains ? { domains: range.domains } : {})}
             />
           )}
           {range?.withDirection && <DirectionSelect selection={range.selection} onChange={range.onChange} />}

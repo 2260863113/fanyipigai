@@ -273,6 +273,65 @@ try {
   await clickButtonByText('文章')
   await sleep(400)
 
+  /*
+   * 领域表拆成两张（ADR 0029）：**文章栏**那张含真题/样题（共 7 项），
+   * **句子栏**那张只有五个话题领域。这条要求只有真浏览器里读 DOM 才验得准
+   * （数据层那三条断言在冒烟里，这里验的是"下拉里到底列了什么"）。
+   */
+  /**
+   * 切题型栏，并**确认真的切过去了**（不是点完就算）。
+   *
+   * 为什么必须确认：真实鼠标点坐标，遇到重渲染、下拉关合、布局位移都可能"点了但没生效"——
+   * 我踩过一次：切"句子"没生效，于是读到的是文章栏的菜单，看起来像"句子栏也多列了真题/样题"，
+   * 白白怀疑了一遍产品。这里最多重试三次，切不动就返回 false 让调用方报出来。
+   */
+  const switchTab = async (label) => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = await cdp.evaluate("(document.querySelector('.mode-tab-active') || {}).textContent || ''")
+      if (current.trim() === label) return true
+      await cdp.evaluate("document.body.click()")
+      await clickButtonByText(label)
+      await sleep(600)
+    }
+    return (await cdp.evaluate("(document.querySelector('.mode-tab-active') || {}).textContent || ''")).trim() === label
+  }
+
+  await clickButtonByText('文章')
+  await sleep(500)
+  await clickAt("document.querySelector('.domain-trigger')")
+  await sleep(400)
+  const articleDomains = await cdp.evaluate(
+    "[...document.querySelectorAll('.domain-menu .domain-item')].map((b) => b.textContent.trim().replace(/（.*/, ''))",
+  )
+  check(
+    Array.isArray(articleDomains) && articleDomains.length === 7 && articleDomains.includes('真题') && articleDomains.includes('样题'),
+    `文章栏的领域下拉是 7 项、含真题与样题（实际 ${(articleDomains ?? []).join('/')}）`,
+  )
+
+  // 选「真题」：原文栏应当换出这一格的正文，而不是空态
+  await clickButtonByText('真题')
+  await sleep(900)
+  const examSource = await cdp.evaluate("(document.querySelector('.pane-source') || {}).textContent || ''")
+  check(examSource.length > 200, `选了「真题」之后原文栏出现了正文（${examSource.length} 字）`)
+
+  check(await switchTab('句子'), '切到了「句子」栏')
+  await sleep(300)
+  await clickAt("document.querySelector('.domain-trigger')")
+  await sleep(400)
+  const sentenceDomains = await cdp.evaluate(
+    "[...document.querySelectorAll('.domain-menu .domain-item')].map((b) => b.textContent.trim().replace(/（.*/, ''))",
+  )
+  check(
+    Array.isArray(sentenceDomains) &&
+      sentenceDomains.length === 5 &&
+      !sentenceDomains.includes('真题') &&
+      !sentenceDomains.includes('样题'),
+    `句子栏的领域下拉仍然只有五个话题领域（实际 ${(sentenceDomains ?? []).join('/')}）`,
+  )
+  await cdp.evaluate("document.body.click()")
+  await clickButtonByText('文章')
+  await sleep(400)
+
   const ANSWER = 'Because of the heavy rain, the football match was put off until next week. '.repeat(4)
   /*
    * 填作答用"原生 setter + input 事件"这一招（React 的受控组件认它）。
