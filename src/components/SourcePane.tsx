@@ -7,9 +7,14 @@
  *
  * ## 标题栏里现在有什么（用户第 7 条）
  *
- * 从左到右：`原文` → **领域下拉 + 方向切换**（紧挨标题，见 DomainSelect.tsx 的说明）
+ * 从左到右：`原文` → **术语栏的「参考译文」开关**（第 14 条，只术语栏有）
+ * → **领域下拉 + 方向切换**（紧挨标题，见 DomainSelect.tsx 的说明）
  * → 「选择文章」/「换一句」 → 「换一换」「AI 出题」（或「重新贴一篇」）
  * → 「自动判定」这一枚信息芯片。
+ *
+ * ⚠️ 「参考译文」这枚开关**只长在术语栏**（第 14 条第 5 条）：术语题的"参考译文"
+ * 是一页里每一条的标准译法，位置正好在原文栏、可以一条一条对着看（见下面 `termReference`）。
+ * 别的题型早就有自己那份参考译文——正文末尾那个可折叠的块——不需要第二颗开关。
  *
  * 被删掉的有三样（都是用户点名的）：
  *   - 「对照译文」按钮——它把这一页铺成"一段原文、一段参考译文交替"，
@@ -30,7 +35,7 @@ import type { JSX } from 'react'
 import { DIRECTION_LABEL, KIND_LABEL, type Direction, type Exercise, type MarkColor, type Mode } from '../domain/types'
 import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 import type { Section } from '../domain/sections'
-import type { Term } from '../domain/terms'
+import { standardAnswer, type Term, type TermGroup } from '../domain/terms'
 import { questionSideOf } from '../domain/term-exercise'
 import type { TermScope } from '../domain/term-scopes'
 import { DomainSelect, DirectionSelect, DirectionSwitch, type ArticleSelection } from './DomainSelect'
@@ -95,6 +100,7 @@ export function SourcePane({
   onNextSentence,
   terms = [],
   termRange = null,
+  termReference = null,
   editableSource = null,
 }: {
   exercise: Exercise
@@ -147,9 +153,9 @@ export function SourcePane({
   /** 有这一项就显示「换一句」（句子栏用），与「选择文章」同一个位置 */
   onNextSentence?: () => void
   /**
-   * 术语题的条目（**这一页**那几条，末页可能不足五条）。
+   * 术语题的条目（**这一页**那几条，末页可能不足十条）。
    *
-   * 有它就把原文栏画成"五等份、每份一条"（用户要求的术语题版式），
+   * 有它就把原文栏画成"等分、每份一条"（用户要求的术语题版式），
    * 而不是一块整段文本——术语题本来就没有"一整段原文"。
    */
   terms?: readonly Term[]
@@ -163,8 +169,25 @@ export function SourcePane({
   termRange?: {
     scope: TermScope
     direction: Direction
-    onPickScope: (scope: TermScope) => void
+    /** 当前这一页（0 基）：弹窗里那枚「正在练」靠它认组 */
+    page: number
+    onPickGroup: (scope: TermScope, group: TermGroup) => void
     onPickDirection: (direction: Direction) => void
+  } | null
+  /**
+   * 术语栏那枚「参考译文」开关（第 14 条第 5 条）。
+   *
+   * 用户原话（意思）："位置在原文栏标题栏里「原文」两个字的右边。点一下，就在**原文栏**
+   * （**不是**"我的译文"栏）**右对齐**显示这一页每一条术语的**标准译法**；再点一下收起。"
+   *
+   * 两个要点：**标准译法**由 `standardAnswer` 给（英译中方向下可能是「A／B」两个中文，
+   * 一英多中写哪个都算对，见 terms.ts），**没有标准译法的条目不占位**——
+   * 空占位会让人以为"这一条没有答案"，而实际情况是末页那些本来就不存在的行。
+   * 只长在术语栏（别的题型的参考译文是正文末尾那个折叠块，见文件头）。
+   */
+  termReference?: {
+    on: boolean
+    onToggle: () => void
   } | null
   /**
    * 自己贴的那道题：**原文本身就是一个输入框**（第 13 轮用户要求：
@@ -189,6 +212,27 @@ export function SourcePane({
         <h2>原文</h2>
         <div className="head-meta">
           {/*
+            「参考译文」开关摆在**最前面**，即「原文」两个字的右边（用户第 14 条第 5 条点名位置）。
+            它排在「范围」之前是有意的：它是"这一栏怎么显示"的开关，而范围与方向是"练哪一题"，
+            先看栏里的东西、再谈换题——与文章栏把"领域/方向"排在"换哪一篇"之前是同一个顺序。
+          */}
+          {termReference && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              aria-pressed={termReference.on}
+              data-term-reference={termReference.on ? 'on' : 'off'}
+              onClick={termReference.onToggle}
+              title={
+                termReference.on
+                  ? '收起标准译法（它们只长在原文栏右侧，不写到你的作答里）'
+                  : '在原文栏右对齐列出这一页每一条的标准译法；再点一下收起'
+              }
+            >
+              参考译文
+            </button>
+          )}
+          {/*
             **领域下拉与方向切换摆在最前面**，紧挨着「原文」三个字（用户第 7 条原话：
             "将领域下拉栏挪到原文标题栏紧靠『原文』的右边"）。它们决定的是"练哪一格的题"，
             因此排在"换哪一篇"之前——先定范围，再挑篇目。
@@ -203,13 +247,14 @@ export function SourcePane({
           )}
           {range?.withDirection && <DirectionSelect selection={range.selection} onChange={range.onChange} />}
           {/*
-            术语栏那两个控件：**范围**（弹窗两屏，见 TermScopeSelect）+ **方向**（中译英／英译中）。
-            位置与文章栏的「领域 × 方向」完全一致（紧挨「原文」）。术语的两个方向永远可点——
-            每条术语两侧都有（中文名 + 官方英文名），不像文章栏那样要按"这一格有没有材料"禁用。
+            术语栏那两个控件：**范围**（下拉五大板块 → 弹窗选分组，见 TermScopeSelect）
+            + **方向**（中译英／英译中）。位置与文章栏的「领域 × 方向」一样（紧挨「原文」，
+            排在「参考译文」开关之后）。术语的两个方向永远可点——每条术语两侧都有
+            （中文名 + 官方英文名），不像文章栏那样要按"这一格有没有材料"禁用。
           */}
           {termRange && (
             <>
-              <TermScopeSelect scope={termRange.scope} onPick={termRange.onPickScope} />
+              <TermScopeSelect scope={termRange.scope} page={termRange.page} onPick={termRange.onPickGroup} />
               <DirectionSwitch direction={termRange.direction} onChange={termRange.onPickDirection} />
             </>
           )}
@@ -303,11 +348,12 @@ export function SourcePane({
       </header>
       <div className="pane-body">
         {/*
-          术语题：原文栏里把五条术语**一行一条、等分成五份**（用户要求
-          "五个待翻译的术语用分割线隔开，即上下把区域分为五等份"）。
+          术语题：原文栏里把这一页的术语**一行一条、上下等分**（用户要求
+          "五个待翻译的术语用分割线隔开，即上下把区域分为五等份"——第 14 条把每页
+          从五条改成十条，等分这件事本身没变，见 styles.css 的 .term-source-list）。
 
-          术语题没有"一段原文"可言——它一次给五条短语。因此这里不画那一整块文本，
-          而是列成五等份，每份一条；右边的作答栏也用同一套等分与分割线，
+          术语题没有"一段原文"可言——它一次给一页的若干条短语。因此这里不画那一整块文本，
+          而是列成等分的几行，每行一条；右边的作答栏也用同一套等分与分割线，
           两栏的横线因此**对得上**，一眼能看出哪个输入框对应哪条术语。
         */}
         {/*
@@ -320,22 +366,44 @@ export function SourcePane({
         */}
         {mode === 'term' && terms.length > 0 ? (
           /*
-           * 五行**恒定**：真实的术语在前，末页缺的几行留空（用户拍板："末页照旧五等分，
-           * 缺的那两行留空、不可填也不计分"）。行数由 `termRowsOf` 统一给，
+           * 行数**恒定**：真实的术语在前，末页缺的几行留空（用户拍板："末页照旧等分，
+           * 缺的行留空、不可填也不计分"）。行数由 `termRowsOf` 统一给，
            * 与右边作答栏数的是同一个数——两栏的横线才对得上。
            *
            * 条目显示的是**题干那一侧**：中译英给中文名，英译中给官方英文名
            * （术语栏两个方向都能练，见 term-exercise.ts 的 `questionSideOf`）。
+           *
+           * ⚠️ 第 14 条第 5 条：开关打开时，**同一行右侧**（右对齐）给出这一条的标准译法。
+           * 它只加在原文栏里——"我的译文"栏里不重复（用户点名"不是我的译文栏"）：
+           * 作答栏那一行现在是空的或是用户自己写的字，塞进标准答案等于当场把答案摊在他眼前，
+           * 而原文栏这份是"对着题干看答案"，用途与位置都说得通（也正好是原来「范围」弹窗
+           * 那张对照表在做的事，现在移到手边）。
            */
           <ol className="term-source-list">
-            {termRowsOf(terms).map((term, index) => (
-              <li key={term ? `${term.zh}-${index}` : `blank-${index}`} className="term-source-row">
-                <span className="term-source-index">{index + 1}</span>
-                <span className="term-source-text">
-                  {term === null ? '' : questionSideOf(term, exercise.direction)}
-                </span>
-              </li>
-            ))}
+            {termRowsOf(terms).map((term, index) => {
+              // 这一行右侧要显示的标准译法（开关关着、或者这一行本来没有术语时是空串）
+              const reference = term && termReference?.on ? standardAnswer(term, exercise.direction) : ''
+              return (
+                <li key={term ? `${term.zh}-${index}` : `blank-${index}`} className="term-source-row">
+                  <span className="term-source-index">{index + 1}</span>
+                  <span className="term-source-text">
+                    {term === null ? '' : questionSideOf(term, exercise.direction)}
+                  </span>
+                  {/*
+                    没有标准译法的条目**不画占位**（用户点名）：末页缺的几行本来就是 `null`，
+                    而"有这一条却没有答案"在这里不可能出现（标准答案是官方译名，两侧都有）。
+                  */}
+                  {reference.length > 0 && (
+                    <span
+                      className="term-source-ref"
+                      title="官方标准译法（一英多中时两个中文用「／」隔开）"
+                    >
+                      {reference}
+                    </span>
+                  )}
+                </li>
+              )
+            })}
           </ol>
         ) : editableSource ? (
           /*

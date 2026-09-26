@@ -16,7 +16,7 @@
  * 参考译文同理：`pageReferenceOf` 给的是**这一页**的译文。文章库的译文与原文逐段对齐（ADR 0010），
  * 因此一页对应的译文就是同下标的那些译文段。
  *
- * 其它题型没有分页：一条记录就是它自己的那一段（句子题是一句、术语题是那五条）。
+ * 其它题型没有分页：一条记录就是它自己的那一段（句子题是一句、术语题是那一页的十条）。
  */
 
 import type { Direction, Mode } from './types'
@@ -83,8 +83,8 @@ export function exerciseSourceOf(exerciseId: string): ExerciseSource | null {
 /** 把一道题的原文切成页（文章题与术语题会多于 1 页）。 */
 function pagesOf(source: ExerciseSource): ArticlePage[] {
   /*
-   * 术语题传 0：它的页**自己已经切好了**（每页五条、页间空一行，见 `termSourceText`），
-   * 而分页规则默认会把"不足 50 单位"的段并到下一页去——五个机关名的中文字面往往不到 50 字，
+   * 术语题传 0：它的页**自己已经切好了**（每页十条、页间空一行，见 `termSourceText`），
+   * 而分页规则默认会把"不足 50 单位"的段并到下一页去——十个机关名的中文字面往往不到 50 字，
    * 一并就会把两页搅成一页。传 0 之后一段就是一页，切出来的正好是它切好的那些。
    */
   const mergeBelow = source.mode === 'term' ? 0 : PAGE_RULE.mergeBelow

@@ -62,9 +62,11 @@ import {
   splitTermAnswers,
   termAnswerText,
   termExerciseId,
+  termPageComplete,
   termsForPageOfExercise,
 } from '../domain/term-exercise'
-import { TERM_SCOPES, type TermScope } from '../domain/term-scopes'
+import { TERM_SCOPES, labelOfScope, type TermScope } from '../domain/term-scopes'
+import { groupOfPage, hasTermData, type TermGroup } from '../domain/terms'
 import {
   countLegacyTermFavorites,
   countLegacyTermRecords,
@@ -186,19 +188,25 @@ function resolveStoredExercise(id: string, origin: ExerciseOrigin, customId: str
 }
 
 /**
- * 术语栏的落点：**没练完的那个范围优先**（用户拍板照文章栏的规矩：
- * "整篇练完的文章不再被主动打开"——术语范围同理）。
+ * 术语栏的落点：**没练完的那个板块优先**（用户拍板照文章栏的规矩：
+ * "整篇练完的文章不再被主动打开"——术语板块同理）。
  *
- * 两个范围都练完了，才回到 `preferred`（上次那一个）——那与文章栏"整格都练完就回第一篇"是同一个兜底。
- * 术语只有两个范围，因此"换到另一个"这件事比文章栏更明显：国内 17 页练完之后，
- * 下次打开术语栏会直接落在国际机关名称上。
+ * ⚠️ 只数**有材料的**板块（第 14 条）：范围表现在有五个，后三个（当代术语／必背核心术语／
+ * 必背用典）的材料还在整理，它们连一页都没有。把空板块算进来的话，打开术语栏会落到
+ * 一个空白的板块上（"还没练完"对它永远成立，因为它永远一页都没有）。
+ *
+ * 所有有材料的板块都练完了，才回到 `preferred`（上次那一个）——那与文章栏"整格都练完就回第一篇"
+ * 是同一个兜底。术语现在只有两个板块有材料，因此"换到另一个"这件事比文章栏更明显：
+ * 国内 9 页练完之后，下次打开术语栏会直接落在国际机关名称上。
  */
 function unfinishedTermExercise(
   progress: ProgressMap,
   direction: Direction,
   preferred?: string,
 ): string {
-  const ids = TERM_SCOPES.map((scope) => termExerciseId(scope.id, direction))
+  const ids = TERM_SCOPES.filter((scope) => hasTermData(scope.id)).map((scope) =>
+    termExerciseId(scope.id, direction),
+  )
   const unfinished = ids.find((id) => !isCompleted(progress, id, pageCountOf(id)))
   if (unfinished) return unfinished
   if (preferred && ids.includes(preferred)) return preferred
@@ -563,14 +571,22 @@ export function App(): JSX.Element {
   const { drafts, sectionIndex, pages, unlocked } = session
 
   /**
-   * 当前这一页的五条术语（**末页可能不满五条**——用户拍板缺的行留空、不可填也不计分）。
+   * 当前这一页的术语（**末页可能不满十条**——用户拍板缺的行留空、不可填也不计分）。
    *
-   * 它必须等 `sectionIndex` 出来之后才算：这一页是哪五条由页号决定。
+   * 它必须等 `sectionIndex` 出来之后才算：这一页是哪几条由页号决定。
    */
   const activeTerms = useMemo(
     () => (isTermExercise ? termsForPageOfExercise(exerciseId, sectionIndex) : []),
     [isTermExercise, exerciseId, sectionIndex],
   )
+  /**
+   * 术语栏那枚「参考译文」开关（第 14 条第 5 条）：开着就在原文栏右对齐列出这一页每一条的标准译法。
+   *
+   * 为什么不落进设置（`settings`）：设置存的是"做题姿势"（行距、默认视图、是否显示填补文字），
+   * 而这是一个"此刻抬头看一眼答案"的动作——用户下次打开不该发现答案还摊在原文旁边。
+   * 切页、切板块也不清它：同一道题里连着看几页答案，是这个开关的正常用法。
+   */
+  const [termReference, setTermReference] = useState(false)
 
   /*
    * 记下"现在停在哪"（栏 + 题 + 来源 + 页），下次打开落回这里。
@@ -719,8 +735,8 @@ export function App(): JSX.Element {
    */
   const sourceSections: ArticlePage[] = useMemo(
     /*
-     * 术语题传 0：它的页自己已经切好了（每页五条、页间空一行），
-     * 而默认规则会把"不足 50 单位"的段并到下一页去——五个机关名的中文往往不到 50 字，
+     * 术语题传 0：它的页自己已经切好了（每页十条、页间空一行），
+     * 而默认规则会把"不足 50 单位"的段并到下一页去——十个机关名的中文往往不到 50 字，
      * 一并就把两页搅成一页（详见 exercise-source.ts 的 pagesOf）。
      */
     () =>
@@ -1148,13 +1164,17 @@ export function App(): JSX.Element {
   }
 
   /**
-   * 术语栏的两个控件：切「范围」与切「方向」都只是**换一道题**
+   * 术语栏的两个控件：切「范围」（板块 + 分组）与切「方向」都只是**换一道题**
    * （题号 = `term-v3-<范围>-<方向>`），作答、记录、进度各按题号分开存。
-   * 点「确定」时按用户拍板**一律落到第 1 页**。
+   *
+   * ⚠️ 第 14 条：**分组不进题号**（理由见 term-scopes.ts 的文件头——进题号就是换代，
+   * 而用户手里那些 `term-v3-…` 记录会因此失去内容）。因此「确定」做的是两件事：
+   * 换到那个板块，并**落到这一组的第一页**。点「确定」落在这一组第一页而不是"第一个没批过的页"，
+   * 是有意的：用户刚点名要练这一组，把他送到别处才是怪事
+   * （这条与旧版"切范围一律落到第 1 页"是同一条路，只是页号由组算出来）。
    */
-  function pickTermScope(scope: TermScope): void {
-    const id = termExerciseId(scope, termDirection)
-    if (id !== exerciseId) selectExercise(id, 0)
+  function pickTermGroup(scope: TermScope, group: TermGroup): void {
+    selectExercise(termExerciseId(scope, termDirection), group.firstPage)
   }
 
   function pickTermDirection(direction: Direction): void {
@@ -1205,10 +1225,10 @@ export function App(): JSX.Element {
   /**
    * 写术语题的**第几行**。
    *
-   * 存储是"一页一段文字"（一行一条），因此这里把这一页的五条重新拼起来整段写回去——
+   * 存储是"一页一段文字"（一行一条），因此这里把这一页的各条重新拼起来整段写回去——
    * 而不是往 `drafts[行号]` 里塞。⚠️ 早先正是塞进 `drafts[行号]`：`drafts` 是按**页号**
    * 索引的，两者撞在一起，于是落盘的那段文字被当成"第 1 行"读回来，
-   * 五条译文全挤进第一个框（用户报的就是这个）。现在只有一个坑（第几页），行是现拆的。
+   * 各条译文全挤进第一个框（用户报的就是这个）。现在只有一个坑（第几页），行是现拆的。
    */
   function updateTermRow(row: number, value: string): void {
     const next = [...termAnswers]
@@ -1259,13 +1279,31 @@ export function App(): JSX.Element {
    * 这个函数在 `await` 之后才跑，而那时 App 可能已经因为用户翻页/切题而重渲染过：
    * 直接读外层的 `exercise.id` / `session.sectionIndex` 会把结果记到**别人头上**——
    * 批改要十几秒，而这十几秒里用户完全可能已翻到下一页或切去别的题。
+   *
+   * ## `persist`：这一次判分要不要**留下练习记录**（第 14 条第 4 条）
+   *
+   * 用户的口径：术语题**没答完也能提交**，但**只有十条全部答完才产生练习记录**。
+   * 也就是"提交与批改照做（该判分判分、该显示结果显示），**只有写练习记录这一步**
+   * 按是否全答完决定"——因此拦住人的不是提交按钮，而是这里的 `setRecords`。
+   *
+   * ⚠️ **进度照记**（用户拍板，别改回去）：「哪几页批过」与"留不留练习记录"是两件事。
+   * 这一页确实批过了、结果也正显示在屏幕上，界面就该把它标成已批改——
+   * 不记的话用户会以为这次没交上，进条与"从没批完的那一页继续"也会指着同一页反复问。
+   * 没答完只该影响**练习记录**（复盘用的那份存档），因此 `setProgress` **不在** `persist` 里。
+   *
+   * 为什么做成**显式参数**而不是在这里自己判"是不是术语题、答完没有"：这条口径的判据
+   * 是一份纯函数（`termPageComplete`），调用方（`submitTerms`）手里正好有那一页的答案，
+   * 而这里连"这是不是术语题"都不该知道——`commit` 是**所有题型共用**的收尾函数。
+   * 缺省 `true`（文章题、句子题、内置示例走的都是原来的路，一个字都没变）。
    */
   function commit(
     target: { exerciseId: string; sectionIndex: number; topic: string; direction: Direction },
     judging_: JudgeDraft,
     pageAnswer: string,
     attemptLevel: PolishLevel,
+    options?: { persist?: boolean },
   ): void {
+    const persist = options?.persist ?? true
     /*
      * 这一次批改在练习记录里的 id **先算出来**（不再等到写记录那一刻）：
      * 会话里也要存同一个 id（见 PageResult.recordId），否则用户把这条记录删掉时，
@@ -1291,6 +1329,8 @@ export function App(): JSX.Element {
      * 落一份"这一页批完了"到浏览器里（见 article-progress.ts）。
      * 会话状态刷新就没，而"下次打开从没批完的那一段继续""练完的不主动显示"
      * 都要求这件事记得住，因此提交成功就往这里记一笔。
+     * ⚠️ **没答完的那一次也记**（用户拍板）：这一页确实批过了／结果也显示着，
+     * 进度就该认它；"没答完"只影响下面的练习记录（见上面 `persist` 的说明）。
      */
     setProgress((previous) => markGraded(previous, target.exerciseId, target.sectionIndex))
     /*
@@ -1299,12 +1339,20 @@ export function App(): JSX.Element {
      * 不这么做的话，「返回编辑」过的那一页就永远回不到"已批改"这一档：
      * 用户改完、按了「提交批改（手动）」，界面却仍旧停在作答框上、左边还写着"已修改 · 待提交"，
      * 而新结果明明已经存下来了。收回之后显示的就是刚批出来的那一份；想接着改再按「返回编辑」。
+     * 没答完的那一次同样收回只读：屏幕上摆的是"这一页的判分结果"，
+     * 想继续补写就按「返回编辑」（与批过一页再改是同一条路）。
      */
     dispatchSession({ type: 'pageLocked', exerciseId: target.exerciseId, sectionIndex: target.sectionIndex })
     setSelection(null)
     setOpenRecord(null)
     // 刚交完，画面就该显示这一次的结果；不再停在历史视图上（记在**它自己那一页**头上）
     setViewingGrade(target.exerciseId, target.sectionIndex, null)
+    /*
+     * 到这里只剩**练习记录**这一件事了。没答完的那一次到此为止：
+     * 屏幕上摆着判分结果、进条也认了这一页，只是**不留存档**
+     * （用户拍板的口径："没答完也能交，但只有十条全答完才产生练习记录"）。
+     */
+    if (!persist) return
     setRecords((previous) => {
       /*
        * 编号与"第几次"都不能用 previous.length 推：
@@ -1737,9 +1785,9 @@ export function App(): JSX.Element {
    * 既省一份状态，也不会出现"存下来的判分与官方译名不一致"。
    */
   /*
-   * 这一页的五条答案与"整段作答文字"。
+   * 这一页的各条答案与"整段作答文字"。
    *
-   * 术语题在界面上是五个独立的框，但**下游一律按一段文字办事**——
+   * 术语题在界面上是十个独立的框，但**下游一律按一段文字办事**——
    * 练习记录存 answer、收藏要"这一处所在的那一行"、对照视图要逐行对照。
    * 因此这里算一次、两处共用（判分与提交都用它），免得两处的拼法悄悄不一致。
    *
@@ -1752,10 +1800,14 @@ export function App(): JSX.Element {
   )
   const termAnswer = useMemo(() => termAnswerText(termAnswers), [termAnswers])
   /**
-   * 这一页的术语**都写上**才让提交。
-   * 末页不满五条时只要求真实存在的那几条（缺的行既不可填也不计分）。
+   * 这一页的术语**是不是都写上了**。
+   *
+   * ⚠️ 它**不再**决定"能不能提交"（第 14 条第 4 条把那条门槛去掉了），只决定
+   * "这一次判分**要不要留练习记录**"（见 `commit` 的 `persist`）。
+   * 注意它**不管**进度——批过的页照旧进进度，那是用户后来拍板的一条（别合并这两件事）。
+   * 末页不满十条时只数真实存在的那几条（缺的行既不可填也不计分）。
    */
-  const allTermsAnswered = activeTerms.length > 0 && answeredTermCount(termAnswers) === activeTerms.length
+  const allTermsAnswered = termPageComplete(activeTerms.length, termAnswers)
 
   const termVerdicts = useMemo(() => {
     if (!isTermExercise) return null
@@ -1778,7 +1830,18 @@ export function App(): JSX.Element {
    * 术语有唯一正确译法（官方固定表述），交给模型判会有两个坏处：
    * 同一份答案两次可能不同、用户无法自己核对分数怎么来的。
    * 因此这里直接对照 domain/terms.ts 里的标准译法判，结果映射成
-   * Correction + ValidatedCorrection 的形状，好让评分、练习记录、收藏原样复用。
+   * Correction + ValidatedCorrection 的形状，好让练习记录、收藏、对照视图原样复用。
+   *
+   * ## 没答完也能交，但**只有全答完才落库**（第 14 条第 4 条）
+   *
+   * 用户的口径："某一页 10 个里没答完也能提交（现在应该是不允许的）。但**只有 10 个全部答完
+   * 才产生练习记录**——提交与批改照做（该判分判分、该显示结果显示），**落库那一步**
+   * 按'是否全答完'决定"。追问里他还补了一句"**不要用『提交被拦下』来实现**"，因此：
+   *   - 提交这一侧：按钮不再因为"没写满"而禁用（只在一页正在判的那一拍禁用），
+   *     点下去照常判分、照常把结果显示出来；
+   *   - 落库那一侧：`commit(..., { persist: allTermsAnswered })`——不满十条就**不写练习记录**。
+   *     ⚠️ 只扣练习记录：进度照记（用户后来拍板），别顺手把它也扣掉（见 `commit` 的说明）。
+   * 判据只有一份（`termPageComplete`），写在这里、由 commit 执行。
    */
   function submitTerms(): void {
     if (!isTermExercise) return
@@ -1786,8 +1849,14 @@ export function App(): JSX.Element {
     const verdicts = judgeTerms(activeTerms, answers, termDirection)
     const { correction, validated } = correctionFromVerdicts(verdicts)
     const wrong = verdicts.filter((verdict) => !verdict.correct).length
-    // 术语题的一页就是这五条，合起来当作被批的那段文字（与练习记录、收藏、对照视图一致）
+    const missing = activeTerms.length - answeredTermCount(answers)
+    // 术语题的一页就是这几条，合起来当作被批的那段文字（与练习记录、收藏、对照视图一致）
     const pageAnswer = termAnswer
+    /*
+     * 术语判分是**纯函数**（对照官方译名），因此它没有"批改中"这一档：
+     * 点下去同一拍就出结果，"结果"与"落库"在这里是同一段同步代码里的两件事。
+     */
+    const complete = allTermsAnswered
     commit(
       { exerciseId: exercise.id, sectionIndex, topic: exercise.topic, direction: exercise.direction },
       {
@@ -1817,11 +1886,19 @@ export function App(): JSX.Element {
       },
       pageAnswer,
       level,
+      // 第 14 条第 4 条：落库与否只看"这一页是不是十条都写了"
+      { persist: complete },
     )
+    /*
+     * 结果栏那一句话要把两件事都说到：判成什么样（错几条），以及**这一次算不算数**
+     * （没写满的那一次不落练习记录）。不说的话用户会以为记录已经存下来了——
+     * 而"记录里没有"这件事在界面上完全看不出来（这一页照样显示着判分结果）。
+     */
     setNotice(
       wrong === 0
-        ? `这一页 ${verdicts.length} 条都译对了。`
-        : `这一页 ${verdicts.length} 条，错 ${wrong} 条——官方译名见右下角逐条说明。`,
+        ? `这一页 ${verdicts.length} 条都译对了${complete ? '' : '（这一页还没写满）'}。`
+        : `这一页 ${verdicts.length} 条，错 ${wrong} 条——官方译名就写在每一条右边。` +
+          (complete ? '' : `还有 ${missing} 条没写：这一次不留练习记录，写满了才有。`),
     )
   }
 
@@ -1845,6 +1922,8 @@ export function App(): JSX.Element {
   /**
    * 当前选中那一处的**收藏**内容（没选中、或选中项已经不在结果里时是 null）。
    * 有了它，右下角那颗「收藏」才知道该存什么；上下文（哪道题、什么方向、什么话题）只有这里知道。
+   * ⚠️ 术语模式下右下栏整块不画（第 14 条第 6 条），因此那边没有「收藏」入口——
+   * 这里照旧算它，是因为这一份值同时也给别处用（练习记录页），而且多算一次不花钱。
    */
   const practiceFavorite =
     shownValidated && shownAnswer !== undefined
@@ -1940,16 +2019,24 @@ export function App(): JSX.Element {
           */}
 
           {/*
-            版式：**大改档另有一套**（第 4 条）。
-            用户对那一档的答复是："相当于分成左右两个部分，左边部分再分成上下两个部分，
+            版式：**大改档与术语栏各有一套**（第 4 条 / 第 14 条第 6 条）。
+            用户对第 4 条的答复是："相当于分成左右两个部分，左边部分再分成上下两个部分，
             左上角为原文，左下角为总评，右边整个为批改界面。"
             实现上只加一个类（`.split-refine`），DOM 一个字都不动——
             样式表里把那两个 `.split-row` 设成 `display: contents`，
             它们里面的三块就直接参与外层网格的排布（见 styles.css 的说明）。
             精修档（批改视图）因此**一行都没改**——用户特意交代过"批改视图不受影响"。
+
+            ⚠️ 第 14 条第 6 条：**术语模式去掉左下与右下那两栏**（总体评分 / 批注详情），
+            腾出来的地方并给原文栏与译文栏——因此这里不是"藏起来"而是**整个不画**：
+            少画一排的 DOM 与少画两条分隔条，语义上才是"这一模式下只有两栏"，
+            也不会给可拖动的分隔条留一个拖不动的空位（`split-term` 那套样式因此只处理两栏）。
+            别的题型一个字都不许动：那个 `{!isTermExercise && …}` 就是这条界线。
           */}
           <main
-            className={`split${split ? ' split-manual' : ''}${shown?.refine ? ' split-refine' : ''}`}
+            className={`split${split ? ' split-manual' : ''}${shown?.refine ? ' split-refine' : ''}${
+              isTermExercise ? ' split-term' : ''
+            }`}
             ref={splitRef}
             style={splitStyle}
           >
@@ -2046,9 +2133,13 @@ export function App(): JSX.Element {
                     termRange: {
                       scope: termScope,
                       direction: termDirection,
-                      onPickScope: pickTermScope,
+                      // 弹窗里那枚「正在练」认的是**当前这一组**，因此要把页号一起给它
+                      page: sectionIndex,
+                      onPickGroup: pickTermGroup,
                       onPickDirection: pickTermDirection,
                     },
+                    // 「参考译文」开关（第 14 条第 5 条）：只长在术语栏，位置在「原文」右边
+                    termReference: { on: termReference, onToggle: () => setTermReference((on) => !on) },
                   }
                 : null)}
               {...(isCustom && custom
@@ -2066,15 +2157,17 @@ export function App(): JSX.Element {
             />
 
             {/*
-              术语题走**另一条渲染路径**：一页五条术语、逐条作答、由程序本地对照判分
+              术语题走**另一条渲染路径**：一页十条术语、逐条作答、由程序本地对照判分
               （见 term-exercise.ts）。它的批注语言与文章模式**同一套**（荧光底色、划线、
-              「→ 官方译名」、点一条看右下角），但作答是五个框而不是一个整段文本框，
+              「→ 官方译名」），但作答是十个框而不是一个整段文本框，
               因此刻意分开渲染，而不是往 AnswerPane 里塞一堆 if。
 
               ⚠️ 第 13 轮起它与文章模式**处处对齐**（用户要求"像文章模式一样一页一页翻"）：
               同一颗按钮两个名字（批改后写「返回编辑」）、批过的页只读、翻页不提交、
               左侧页脚同一个翻页控件。因此这里显示"输入框还是结果"也由**页状态**决定
               （`pageState`），不再由"这一页有没有结果"决定。
+              ⚠️ 第 14 条第 6 条起它**不画**左下与右下那两栏（见那条 `{!isTermExercise && …}`），
+              因此这里没有了"点一条看右下角卡片"那一路：判完的官方译名就写在每一条右边。
             */}
             {isTermExercise ? (
               <section className="pane pane-answer">
@@ -2098,10 +2191,16 @@ export function App(): JSX.Element {
                       />
                     )}
                     {/*
-                      这一页有几条由**这一页**算，不是整个范围：
-                      末页只有三条时如实写"3 条"，用户才不会以为界面上丢了两个框。
+                      这一页有几条由**这一页**算，不是整个板块：
+                      末页只有三条时如实写"3 条"，用户才不会以为界面上丢了几个框。
+                      ⚠️ 第 14 条起这一页属于**哪一组**也一起写出来：题号里没有组号
+                      （见 term-scopes.ts 的文件头），而用户刚才是"点名选了某一组"才进来的，
+                      屏幕上总得有一样东西对上他刚才那一下（不然"我选的第 3 组，现在这是哪儿"）。
                     */}
-                    <span className="chip">术语翻译 · 第 {sectionIndex + 1} 页 · {activeTerms.length} 条</span>
+                    <span className="chip">
+                      术语翻译 · {groupOfPage(termScope, sectionIndex)?.label ?? labelOfScope(termScope)} · 第{' '}
+                      {sectionIndex + 1} 页 · {activeTerms.length} 条
+                    </span>
                     <span className="chip" title="术语题按官方译名由程序本地对照判分，不交给 AI、不用等、不花钱">
                       本地判分
                     </span>
@@ -2137,15 +2236,24 @@ export function App(): JSX.Element {
                         </button>
                       </>
                     ) : (
+                      /*
+                       * ⚠️ 第 14 条第 4 条：**没答完也能提交**，因此这颗按钮**不再**因为
+                       * "这一页没写满"而禁用——拦住用户这件事被整个去掉了（用户点名要求），
+                       * 取而代之的是"没写满的那一次不落库"（见 submitTerms 与 commit 的说明）。
+                       * 现在唯一禁用的场合是"这一页正在判"（术语判分是同步的，这一档其实一闪而过，
+                       * 留着是为了与文章模式那颗按钮的形状一致）。
+                       */
                       <button
                         type="button"
                         className="btn btn-primary"
                         onClick={submitTerms}
-                        disabled={!allTermsAnswered || judgingThisPage}
+                        disabled={judgingThisPage}
                         title={
                           allTermsAnswered
-                            ? undefined
-                            : `请先把这一页的 ${activeTerms.length} 条都写上`
+                            ? `这一页 ${activeTerms.length} 条都写上了：判完会留下一条练习记录`
+                            : `没写满也能提交（还有 ${
+                                activeTerms.length - answeredTermCount(termAnswers)
+                              } 条空着）；但只有 ${activeTerms.length} 条都答完才会留下练习记录`
                         }
                       >
                         提交批改
@@ -2266,40 +2374,56 @@ export function App(): JSX.Element {
 
             </div>
 
-            <div
-              className="splitter splitter-h"
-              role="separator"
-              aria-orientation="horizontal"
-              title="拖动调整上下高度；双击恢复自动"
-              onPointerDown={(event) => beginDrag('h', event)}
-              onDoubleClick={resetSplit}
-            />
+            {/*
+              ⚠️ 第 14 条第 6 条：**术语模式下这一整排不画**——横线、左下「总体评分」、
+              竖线、右下「批注详情」全都不画。用户的原话："术语模式下不再画左下（分数/错误归类）
+              与右下（批注详情）那两栏，把腾出来的空间分别并给题目区（原文栏）与答题区（译文栏）"。
 
-            <div className="split-row split-row-bottom">
-            <ScorePane shown={shown} />
+              为什么是"不画"而不是"用样式藏起来"：藏起来的话，那一排 DOM 还在、
+              两条分隔条也还在（上面那条横的能拖、拖完什么都不变），
+              用户拖到一条"没有效果的分隔条"上只会以为界面坏了。
+              术语题确实也不需要它们：译错的官方译名就写在每一条右边，
+              分数与错误归类对"十条对错"没有更多信息（`/api/judge` 那套统计本来也不适用）。
+              代价写在报告里：右下那条「收藏」入口跟着没了（它原先长在批注详情栏里）。
+            */}
+            {!isTermExercise && (
+              <>
+                <div
+                  className="splitter splitter-h"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  title="拖动调整上下高度；双击恢复自动"
+                  onPointerDown={(event) => beginDrag('h', event)}
+                  onDoubleClick={resetSplit}
+                />
 
-            <div
-              className="splitter splitter-v"
-              role="separator"
-              aria-orientation="vertical"
-              title="拖动调整左右宽度；双击恢复自动"
-              onPointerDown={(event) => beginDrag('v', event)}
-              onDoubleClick={resetSplit}
-            />
+                <div className="split-row split-row-bottom">
+                <ScorePane shown={shown} />
 
-            <NotesPane
-              shown={shown}
-              selection={selection}
-              onSelect={setSelection}
-              favorite={practiceFavorite}
-              favorited={practiceFavorite !== null && favorites.some((item) => item.id === practiceFavorite.id)}
-              onToggleFavorite={() => {
-                if (practiceFavorite) {
-                  setFavorites((previous) => toggleFavorite(previous, practiceFavorite))
-                }
-              }}
-            />
-            </div>
+                <div
+                  className="splitter splitter-v"
+                  role="separator"
+                  aria-orientation="vertical"
+                  title="拖动调整左右宽度；双击恢复自动"
+                  onPointerDown={(event) => beginDrag('v', event)}
+                  onDoubleClick={resetSplit}
+                />
+
+                <NotesPane
+                  shown={shown}
+                  selection={selection}
+                  onSelect={setSelection}
+                  favorite={practiceFavorite}
+                  favorited={practiceFavorite !== null && favorites.some((item) => item.id === practiceFavorite.id)}
+                  onToggleFavorite={() => {
+                    if (practiceFavorite) {
+                      setFavorites((previous) => toggleFavorite(previous, practiceFavorite))
+                    }
+                  }}
+                />
+                </div>
+              </>
+            )}
           </main>
         </>
       )}
@@ -2395,7 +2519,7 @@ export function App(): JSX.Element {
       {/*
         AI 出题：选领域（也可自己输入）+ 文体 + 方向，现出一篇同规格的题。
         生成结果按题目留存，之后「换一换」还能翻回来接着练。
-        ⚠️ 术语栏没有这颗按钮（术语题只来自两个范围，见 SourcePane 里的说明）。
+        ⚠️ 术语栏没有这颗按钮（术语题只来自那几个板块，见 SourcePane 里的说明）。
       */}
       {genOpen && (
         <GenerateModal

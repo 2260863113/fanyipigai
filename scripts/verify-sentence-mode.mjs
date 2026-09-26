@@ -148,8 +148,8 @@ try {
   const tabs = await cdp.evaluate("[...document.querySelectorAll('.mode-tab')].map((b) => b.textContent.trim())")
   check(!tabs.includes('段落'), `导航里没有「段落」（实际：${tabs.join(' / ')}）`)
   check(
-    tabs.join(',') === '文章,句子,术语,自定义,收藏,练习记录',
-    '其余六栏都在，顺序不变',
+    tabs.join(',') === '文章,句子,术语,自定义,收藏,练习记录,留言板',
+    '其余七栏都在，顺序不变',
     tabs.join(' / '),
   )
 

@@ -1,13 +1,19 @@
 /**
- * 术语题：一个**范围**按每页 5 条切好，用户一页一页译，**由程序本地对照判分**。
+ * 术语题：一个**范围**按每页 10 条切好，用户一页一页译，**由程序本地对照判分**。
  *
- * ## 一道术语题 = 一整个范围（不是一个五条的小组）
+ * ## 一道术语题 = 一整个范围（不是一个十条的小组，也不是一个 20 条的分组）
  *
- * 用户第 13 轮拍板要"像文章模式一样一页一页翻，每页五个术语"。因此题号的粒度与文章题对齐：
- * **一道术语题 = 一个范围**（国内机关名称 17 页 / 国际机关名称 12 页），页号就是 `sectionIndex`。
- * 这么定的直接好处是**下游一行都不用改**：作答、批改结果、练习记录、收藏、页状态、
- * 文章进度、翻页控件全都按「题 + 页」办事，术语题于是白拿了整套逐页批改的规则
- * （翻页不提交、批过的页只读、返回编辑、批改记录下拉、从没批完的那一页继续）。
+ * 用户第 13 轮拍板要"像文章模式一样一页一页翻，每页五个术语"（第 14 条把每页改成 10 条）。
+ * 因此题号的粒度与文章题对齐：**一道术语题 = 一个范围**（国内机关名称 9 页 / 国际机关名称 6 页），
+ * 页号就是 `sectionIndex`。这么定的直接好处是**下游一行都不用改**：作答、批改结果、
+ * 练习记录、收藏、页状态、文章进度、翻页控件全都按「题 + 页」办事，术语题于是白拿了
+ * 整套逐页批改的规则（翻页不提交、批过的页只读、返回编辑、批改记录下拉、从没批完的那一页继续）。
+ *
+ * ⚠️ 第 14 条新增的**分组**（每 20 条一组）因此**不进题号**，只是弹窗里的入口与落点
+ * （点「确定」落到这一组的第一页）。为什么不进题号：进题号就是一次换代，
+ * 而记录与收藏不存题干、只存题号，换代等于让用户手里的 `term-v3-…` 记录全部失去内容
+ * （用户当初为 v2 换代拍板"清掉旧记录"，同时要的是"以后永不再删"）。理由写在
+ * `term-scopes.ts` 的文件头，那里也写着"组与页是两件事"。
  *
  * 早先术语题的粒度是"一组 5 条"，题号里带着组号；现在同一个题号下有多页，
  * 于是题号形如 `term-v3-<范围>-<方向>`（见 `termExerciseId`）。
@@ -25,24 +31,27 @@
  * 中译英时题干是中文、标准答案是官方英文；英译中时反过来，且标准答案可能是**两个中文**
  * （一英多中，见 terms.ts 的 `zhAlt`）。
  *
- * ## 作答怎么存：**一页一段文字**（这正是"五条全塞进第一个框"的修法）
+ * ## 作答怎么存：**一页一段文字**（这正是"各条全塞进第一个框"的修法）
  *
- * 界面上是五个独立输入框，但存储一律是**一页一段文字**（`termAnswerText` 把五条用换行拼起来）：
+ * 界面上是十个独立输入框，但存储一律是**一页一段文字**（`termAnswerText` 把各条用换行拼起来）：
  * 练习记录存 `answer`、收藏要"这一处所在的整行"、对照视图要逐行对照，下游全都按一段文字办事。
- * 反过来，**回到编辑态时按行拆回五个框**（`splitTermAnswers`）。
+ * 反过来，**回到编辑态时按行拆回十个框**（`splitTermAnswers`）。
  * ⚠️ 早先这里按"行号 0..4"直接占用了 `drafts` 的下标——而 `drafts` 是**按页号**索引的，
- * 两者撞在一起，于是落盘的整段文字被当成"第 1 行"塞回去，五条全挤进第一个框（用户报的正是这个）。
+ * 两者撞在一起，于是落盘的整段文字被当成"第 1 行"塞回去，各条全挤进第一个框（用户报的正是这个）。
  * 现在只有一个存储位（第几页），行是按需拆出来的，撞车不可能再发生。
  *
  * ## 为什么判分结果复用 Correction 的形状
  *
- * 界面右下的「总体评分 / 逐处批注」是按 Correction + ValidatedCorrection 渲染的。
- * 术语题虽然一次给五条独立短语，但**仍然是一组可逐条展示的对错**，因此这里把它映射过去：
+ * 全站的批改结果（练习记录、收藏、对照视图、分数）都是按 Correction + ValidatedCorrection 渲染的。
+ * 术语题虽然一次给若干条独立短语，但**仍然是一组可逐条展示的对错**，因此这里把它映射过去：
  * 每译错一条 → 一个 errors 项；每译对一条 → 一个 highlights 项。
- * 复用同一形状的好处是评分、练习记录、收藏、对照视图这些下游功能一行都不用改。
+ * 复用同一形状的好处是练习记录、收藏、对照视图这些下游功能一行都不用改。
+ * （⚠️ 第 14 条第 6 条起，术语模式**不再画**左下「总体评分」与右下「批注详情」那两栏——
+ * 译错的官方译名就在那一条右边，两条信息本来就在同一行上。形状照旧复用，
+ * 只是术语模式下少了两块消费它的界面。）
  *
- * 位置也不是占位：五条答案按行拼成一段文字，每一条在其中的起止位置都是真的，
- * 因此"点这一条 → 右下角说清这一条"、"收藏这一条"、"在对照视图里给这一条一行对照"
+ * 位置也不是占位：各条答案按行拼成一段文字，每一条在其中的起止位置都是真的，
+ * 因此"点这一条 → 看这一条"、"收藏这一条"、"在对照视图里给这一条一行对照"
  * 全都走既有的那套代码。
  */
 
@@ -53,7 +62,7 @@ import {
   acceptedAnswers,
   isTermCorrect,
   normalizeAnswer,
-  standardAnswer,
+  standardWriting,
   termPageCount,
   termsOfPage,
   type Term,
@@ -61,7 +70,7 @@ import {
 import { isTermScope, labelOfScope, type TermScope } from './term-scopes'
 import type { ValidatedCorrection, ValidatedError, ValidatedHighlight } from './validate'
 
-/** 一页几条（用户要的是「五栏」）。真实的条数在 `terms.ts` 里定义，这里只是转出来给界面用。 */
+/** 一页几条（用户第 14 条要的是「10 个术语」）。真实的条数在 `terms.ts` 里定义，这里只是转出来给界面用。 */
 export const TERMS_PER_EXERCISE = TERMS_PER_PAGE
 
 /**
@@ -108,7 +117,7 @@ export function termsForExerciseId(id: string): readonly Term[] {
   return Array.from({ length: pages }, (_, page) => termsOfPage(parsed.scope, page)).flat()
 }
 
-/** 某一道术语题**第 `page` 页**的那几条（界面上就是这五行）。 */
+/** 某一道术语题**第 `page` 页**的那几条（界面上就是这十行）。 */
 export function termsForPageOfExercise(id: string, page: number): readonly Term[] {
   const parsed = parseTermExerciseId(id)
   if (!parsed) return []
@@ -147,7 +156,7 @@ export function termSourceText(scope: TermScope, direction: Direction): string {
  * 把一组术语变成本站通用的**题目**对象。
  *
  * `source` 是整道题的原文（见 `termSourceText`）；界面在术语模式下把它按页显示、
- * 页内再拆成五行来渲染，而不是当一段散文显示。
+ * 页内再拆成一行一条来渲染，而不是当一段散文显示。
  */
 export function exerciseOfTerms(id: string): Exercise {
   const parsed = parseTermExerciseId(id)
@@ -178,6 +187,7 @@ export interface TermVerdict {
    * `standard` 是屏幕上显示的那一个（英译中可能用「／」连着两个中文）。
    */
   accepted: readonly string[]
+  /** 屏幕上显示的**标准译法**（去掉"只差句末标点"的重复项，见 terms.ts 的 `standardWriting`） */
   standard: string
 }
 
@@ -194,7 +204,11 @@ export function judgeTerms(
       answer,
       correct: isTermCorrect(term, answer, direction),
       accepted: acceptedAnswers(term, direction),
-      standard: standardAnswer(term, direction),
+      /*
+       * 屏幕上显示用 `standardWriting` 而不是 `standardAnswer`：两者的差别只有"只差句末标点"
+       * 的那种重复项（手册的整句条目 45 条都带），显示时并掉、判分时照旧都算对。
+       */
+      standard: standardWriting(term, direction),
     }
   })
 }
@@ -202,7 +216,7 @@ export function judgeTerms(
 /**
  * 一页答案拼成的**一整段文字**（一行一条，用换行分隔）。
  *
- * 界面上五个框是分开的，但本站别处一律按"一段作答文字"办事，因此这里定义清楚
+ * 界面上十个框是分开的，但本站别处一律按"一段作答文字"办事，因此这里定义清楚
  * "术语题的作答文字长什么样"，让下游原样复用。
  */
 export function termAnswerText(answers: readonly string[]): string {
@@ -210,7 +224,7 @@ export function termAnswerText(answers: readonly string[]): string {
 }
 
 /**
- * 一段作答文字**拆回各个框**——「返回编辑」与刷新之后靠它把五条各就各位。
+ * 一段作答文字**拆回各个框**——「返回编辑」与刷新之后靠它把十条各就各位。
  *
  * 输入框是单行的，因此我们自己写下去的每一行都不可能含换行，按 `\n` 拆是无损的。
  * 但对**别处来的**文字（旧记录、用户真粘了多行）要留一手：
@@ -228,16 +242,33 @@ export function splitTermAnswers(text: string, count: number): string[] {
 /**
  * 单个框的输入值：**换行一律折成空格**。
  *
- * 存储是"一行一条"，框里若真出现换行，五条与行的对应关系就断了。
+ * 存储是"一行一条"，框里若真出现换行，各条与行的对应关系就断了。
  * 用户粘贴一长串带换行的东西时，这里悄悄折平比事后报错好。
  */
 export function sanitizeTermRow(value: string): string {
   return value.replace(/[\r\n]+/g, ' ')
 }
 
-/** 这一组写了几条（提交按钮够不够格点下去，就看它等不等于这一页的真实条数）。 */
+/** 这一页写了几条。 */
 export function answeredTermCount(answers: readonly string[]): number {
   return answers.filter((answer) => answer.trim().length > 0).length
+}
+
+/**
+ * 这一页是不是**全都写上了**——第 14 条第 4 条那两个判断的唯一判据。
+ *
+ * 用户的原话（意思）：**没答完也能提交**，但**只有 10 个全部答完才产生练习记录**。
+ * 也就是"提交与批改照做（该判分判分、该显示结果显示），**落库那一步**按是否全答完决定"。
+ *
+ * ⚠️ 为什么把它写成一个纯函数而不是在界面里判：这条口径要在**两处**成立——
+ * 提交那一下（不拦人）与落库那一下（写不写练习记录 + 记不记进度），
+ * 而且它是验收脚本要断言的对象。写成 `answered === total` 散在 JSX 里，
+ * 两处迟早会漂（本项目在"哪些东西要清"上已经踩过一次，见 session.ts 的说明）。
+ *
+ * `total <= 0` 一律算没答完：一页连题目都没有的时候，没有"答完"这回事。
+ */
+export function termPageComplete(total: number, answers: readonly string[]): boolean {
+  return total > 0 && answeredTermCount(answers) === total
 }
 
 /**

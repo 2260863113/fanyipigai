@@ -1,0 +1,9 @@
+{
+  "part": "core",
+  "pages": "p109-p110",
+  "sourceFile": "笔译参考书1-《理解当代中国 核心术语学习手册》.pdf",
+  "notes": "来源为扫描件 Windows OCR（仅中文引擎）。本块是第二部分「术语解读」的最后一块（p109–p110）：p110 页眉仍是「第 二 部 分」，p111 起才是第三部分「用典阐释」（已比对下一块 classics-p111-118.txt 起始为「用 典 阐 释」+「仁爱」条），故本块两页全部属于第二部分，未越界，也没有出现用典内容。\n抽取范围：本块只有 p109 页首 1 条术语（中文术语行 + 紧随其下的英文译法），p110 无术语条。p109 第 7–10 行中文段（「起，才有前途，才有希望…」）是上一页 p108「铸牢中华民族共同体意识」解读的续段；p109 第 11–30 行英文段、第 31–43 行「总体国家安全观」的中文解读与英文解读；p110 第 46–63 行英文解读（含十个项目符号列举）——全部为解读，一律未收。\n[订正登记：页码 原样 → 订正（依据）]\n（0 处）本块唯一英文译法在 OCR 中原样分两行为「a holistic approach to」/「national security」，拼写与大小写均正确，无错字、无需订正。\n存疑（非配对）：p109 术语行上方单独一行「0」，既不是术语也不是译法。该页依版式页码在页脚（后一页页脚识别为 94），故判为页码残片/噪点，已丢弃；若原件此处实为英文译法前的项目符号，也不影响译文内容。\n存疑（配对）：无。p109「总体国家安全观」↔「a holistic approach to national security」语义一致，且与同页英文解读第 40–43 行「Xi Jinping proposed a holistic approach to national security」为同一表述，配对可靠。\n未收内容提示（请勿当成漏收）：p110 第 49–63 行以「。·．」起头的十条英文（upholding the Party's absolute leadership over national security; / following a national security path with Chinese characteristics; / … / strengthening our national security teams.）是英文解读中「There are ten points on how to implement the holistic approach to national security:」的列举，对应中文解读里的「十个坚持」，不是任何中文术语的译法，按规则 2、3 不予收录（其内部的 continuingto、riSkS、hOW、tO 等 OCR 错误因属解读文本，不计入订正登记）。",
+  "entries": [
+    { "cn": "总体国家安全观", "en": ["a holistic approach to national security"], "page": 109 }
+  ]
+}

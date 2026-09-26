@@ -1,0 +1,21 @@
+{
+  "part": "core",
+  "pages": "p093-p100",
+  "sourceFile": "笔译参考书1-《理解当代中国 核心术语学习手册》.pdf",
+  "notes": "来源为扫描件 Windows OCR（仅中文引擎），必然有识别错误。本块属第二部分「术语解读」（页眉「第 二 部 分」「术 语 解 读」，p094 页首、p096 页首、p098 页首、p100 页首均可见「第 二 部 分」，故整块仍在第二部分内，未越界）。\n版式说明：本部分每页（或半页）先出「中文术语行」，其后 1-3 行以项目符号（。．·）或直接起头的英文译法；译文常被 OCR 按版面折成 2-4 行。其后整段中文解读与整段英文解读（正文释义）一律未收。p093-p100 共舍弃解读段落 17 段（中文 8 段、英文 9 段）。\n[订正登记：页码 原样 → 订正（依据）]\np093 英文跨行「Xi Jinping Thought on」＋「Diplomacy」→「Xi Jinping Thought on Diplomacy」（版式折行，以单个空格合并，非文字错误；下同）。\np095「Cultu re」→「Culture」（单词被 OCR 拆开，Culture 为一个词；依据该术语固定译法 Xi Jinping Thought on Culture）。\np096 英文跨行「Xi Jinping Thought on」＋「SociaIism with Chinese」＋「Characteristics for a」＋「New Era」→「Xi Jinping Thought on Socialism with Chinese Characteristics for a New Era」（跨行合并；SociaIism 中的大写 I 系字母 l 的误识，依据 Socialism 词形）。\np097「the ru ral revitalization strategy」→「the rural revitalization strategy」（rural 被拆成 ru+ral，依据 rural revitalization strategy 固定译法）。\np098「a new pattern Of development」→「a new pattern of development」（句中 Of→of，大写 O 系 OCR 将字母 o 识成大写；依据英文句中虚词小写）。\np098「the new development Stage」→「the new development stage」（句中 Stage→stage，同上）。\np099「the principal challenge facing Chinese society in new era」为跨 3 行合并（the principal challenge / facing Chinese society / in new era），仅合并折行，未改词。\np100「the new urbanization strategy」为跨 2 行合并（the new urbanization / strategy），未改词。\np093、p100 页内孤立出现的「0」按版面位置判定为页码/扫描噪声，未收；各页末尾的阿拉伯数字（77、78、79、80、82、84）为书页页码，未收。\n[存疑登记]\n存疑（已由上游按证据补齐第二种写法）：p099「新时代中国社会主要矛盾」的译法行 OCR 作「in new era」，疑为「in the new era」（OCR 可能漏掉冠词 the）。按硬性要求英文只能取自 OCR 原文，故**不改这一条**；但**同页 p099 的英文解读段（原书正文）逐字写作「the principal challenge facing Chinese society in the new era」**（见 OCR p099 第 322 行），且本书第一部分同一条（contemporary-p049-056.json）给的正是带 the 的那一版。因此上游把**带 the 的写法补成了第二条译法**（`en` 数组第 2 项）——依据是书里自己的原文，不是自译；两种写法都算对，两个板块对同一条术语的判分从此一致。\n存疑（配对）：无。p093-p100 共 9 条术语的中英均可一一对应（习近平外交思想／习近平文化思想／习近平新时代中国特色社会主义思想／乡村振兴战略／新发展格局／新发展阶段／新发展理念／新时代中国社会主要矛盾／新型城镇化战略），未发现错配。\n丢弃说明：p093 顶部至 p094 的大段英文（The 10 Upholds…／The Five Major Relationships…，内容讲生态文明「十个坚持」与「五大关系」）与 p093 术语行「习近平外交思想」无关，属相邻术语（习近平生态文明思想，位于本块之前的页面）的英文释义在扫描跨栏时串行残留，已整体丢弃；同理 p095 页首英文「embodies a major theoretical progress…」实为 p093-p094「习近平外交思想」英文释义的续行（该页另起「习近平文化思想」），亦已丢弃。p094 整页为解读正文，无术语行，故本块 p094 条数为 0。",
+  "entries": [
+    { "cn": "习近平外交思想", "en": ["Xi Jinping Thought on Diplomacy"], "page": 93 },
+    { "cn": "习近平文化思想", "en": ["Xi Jinping Thought on Culture"], "page": 95 },
+    { "cn": "习近平新时代中国特色社会主义思想", "en": ["Xi Jinping Thought on Socialism with Chinese Characteristics for a New Era"], "page": 96 },
+    { "cn": "乡村振兴战略", "en": ["the rural revitalization strategy"], "page": 97 },
+    { "cn": "新发展格局", "en": ["a new development dynamic", "a new pattern of development"], "page": 98 },
+    { "cn": "新发展阶段", "en": ["the new development stage"], "page": 98 },
+    { "cn": "新发展理念", "en": ["the new development philosophy"], "page": 99 },
+    {
+      "cn": "新时代中国社会主要矛盾",
+      "en": ["the principal challenge facing Chinese society in new era", "the principal challenge facing Chinese society in the new era"],
+      "page": 99
+    },
+    { "cn": "新型城镇化战略", "en": ["the new urbanization strategy"], "page": 100 }
+  ]
+}

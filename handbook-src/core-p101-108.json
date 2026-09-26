@@ -1,0 +1,26 @@
+{
+  "part": "core",
+  "pages": "p101-p108",
+  "sourceFile": "笔译参考书1-《理解当代中国 核心术语学习手册》.pdf",
+  "notes": "[收口补记（上游，收口时加）] p108「中华民族共同体意识」补了第三条译法：本条印的是带 the 的「the sense of the Chinese nation as one community」，而**同书第一部分**（contemporary-p057-059.json，PDF p058）同一条印的是不带 the 的「the sense of Chinese nation as one community」。为了让两个板块对同一条术语的判分一致、也不冤枉照另一部分写的人，这里把不带 the 的那一版也登记进 en（依据是书里自己的原文，不是自译）；两种写法都算对。\n来源为扫描件 Windows OCR（仅中文引擎）。本块是第二部分「术语解读」的 p101–p108，只收「中文术语 + 英文译法」：整段的中文解读、整段的英文解释、页眉「第 二 部 分 / 术 语 解 读」、页码（印刷 85–92）一律未收。中文侧删除字间空格、原标点保留（唯一例外是 p102 补回一个被 OCR 丢掉的左引号）。各页条数：p101 1、p102 1、p103 1、p104 1、p105 1、p106 1、p107 2、p108 2，共 10 条；无「英文认不出」的条目。\n[页码口径] 各页页脚印的 85/86/87/88/89/90/91/92 是书内印刷页码，与 PDF 页序相差 16；JSON 的 page 按 PDF 页序（依据指令样例：p080 的人才强国战略记 page 80）。八页页眉均为「第 二 部 分 / 术 语 解 读」，未见越过第二部分边界。\n[版式说明] p101 页首「新 型 国 际 关 系」的英文排在页内正文之前；页末长段英文（to this process. A people-centered approach…）是英文解读，未收；p102 页首英文（2017，the report to the 19th NationaI Congress…）是同一段解读的续页，同样未收。p107 版面中英严重交错：「中国特色社会主义法治道路」的术语行与它自己的解读首行被 OCR 并成一行（中 国 特 色 社 会 主 义 法 治 道 路 中 国 特 色 社 会 主 义 法 治 道 路 ， 就 是 在 中 国 共 产 党 领 导 下 ， 紧 紧），它的两条英文也被挤进解读行内（。 the path ofsocialist / rule of law with / Chinese characteristics / 。 Chinese path of / socialist rule of law），按语义合并，绝不按行号对齐。\n[订正登记：页码 原样 → 订正（依据）]\np101 英文「a new form/model/type Of international relations」→「a new form/model/type of international relations」（句中 Of→of；依据：句中小写 o 被 OCR 识成大写 O，同页解读英文亦作 the new form of international relations）。该条原件在同一行内以斜杠并列 form/model/type 三种说法（OCR 为 form/model/ 换行 type），照原文合并为一条、未拆成三条，与 p082「a new model for human advancement/progress」的处理一致。\np102 中文原样「一 带 一 路 ” 倡 议」→「“一带一路”倡议」（OCR 丢失左引号；依据：行内保留的右引号可证引号成对，术语即“一带一路”倡议，仅补标点、未改字）。\np102 英文「the Belt and Road ln itiative」→「the Belt and Road Initiative」（ln→In：大写 I 被识成小写 l；In itiative 词中被插空格 → Initiative）。\np103 英文「a people-centered philosophy Of development」→「a people-centered philosophy of development」（句中 Of→of）。\np104 英文「a commitment tO the greater good and shared interests」→「a commitment to the greater good and shared interests」（tO→to：字母 o 被识成数字 0）。\np105 英文「the system Of multiparty cooperation and political consultation under the leadership Of the CPC」→ 两处 Of→of（同上，句中 Of 应为 of）。\np105 术语行前有一行孤立的「0」，按版面位置判定为页码/项目符号噪声，非术语内容，未收（同类噪声见 p067 登记）。\np107 英文「the path ofsocialist rule of law with Chinese characteristics」→「the path of socialist rule of law with Chinese characteristics」（of 与 socialist 之间漏空格，两词粘连）。\np108 英文「the sense Of the Chinese nation aS one community」→「the sense of the Chinese nation as one community」（Of→of；aS→as：aS 句中不应大写，系 s 被识成大写 S）。\np108 英文「a sense Of community for the Chinese nation」→「a sense of community for the Chinese nation」（句中 Of→of）。\n订正合计 8 行（p101 1、p102 1、p103 1、p104 1、p105 1、p107 1、p108 2，其中 Of→of 共 6 处），另 1 处中文引号补全（p102）；p106 无需订正（Chinese Dream 原样正确）。\n[配对自检]\n10 条「中文 ↔ 英文」逐条核对，均说得上是一件事，未发现错配：p101 新型国际关系 / a new form/model/type of international relations（同页解读首句 The new form Of international relations 可佐证）、p102 “一带一路”倡议 / the Belt and Road Initiative、p103 以人民为中心的发展思想 / a people-centered development philosophy 与 a people-centered philosophy of development、p104 正确义利观 / a commitment to the greater good and shared interests（同页解读 Upholding the greater good…pursuing shared interests 可佐证）、p105 中国共产党领导的多党合作和政治协商制度 / the system of multiparty cooperation and political consultation under the leadership of the CPC、p106 中国梦 / Chinese Dream、p107 中国式现代化 / Chinese (path to) modernization、p107 中国特色社会主义法治道路 / the path of socialist rule of law with Chinese characteristics 与 Chinese path of socialist rule of law、p108 中国特色社会主义制度 / the socialist system with Chinese characteristics、p108 中华民族共同体意识 / the sense of the Chinese nation as one community 与 a sense of community for the Chinese nation。\n[存疑登记]\n存疑（非 OCR 错误，1 处）：p107「中国式现代化」的原书译法写作「Chinese (path to) modernization」，括号是原书体例（表示 Chinese modernization 亦可读作 China's path to modernization），非 OCR 误加，按原样保留、未改写。\n存疑（配对）：0 处。\n存疑（格式判断，1 处）：p101「a new form/model/type of international relations」以斜杠并列三说，是否拆成三条 en 由合并方决定；本文件按原书一行保留为一条（不代为择定某一说法为“官方译法”）。",
+  "entries": [
+    { "cn": "新型国际关系", "en": ["a new form/model/type of international relations"], "page": 101 },
+    { "cn": "“一带一路”倡议", "en": ["the Belt and Road Initiative"], "page": 102 },
+    { "cn": "以人民为中心的发展思想", "en": ["a people-centered development philosophy", "a people-centered philosophy of development"], "page": 103 },
+    { "cn": "正确义利观", "en": ["a commitment to the greater good and shared interests"], "page": 104 },
+    { "cn": "中国共产党领导的多党合作和政治协商制度", "en": ["the system of multiparty cooperation and political consultation under the leadership of the CPC"], "page": 105 },
+    { "cn": "中国梦", "en": ["Chinese Dream"], "page": 106 },
+    { "cn": "中国式现代化", "en": ["Chinese (path to) modernization"], "page": 107 },
+    { "cn": "中国特色社会主义法治道路", "en": ["the path of socialist rule of law with Chinese characteristics", "Chinese path of socialist rule of law"], "page": 107 },
+    { "cn": "中国特色社会主义制度", "en": ["the socialist system with Chinese characteristics"], "page": 108 },
+    {
+      "cn": "中华民族共同体意识",
+      "en": [
+        "the sense of the Chinese nation as one community",
+        "a sense of community for the Chinese nation",
+        "the sense of Chinese nation as one community"
+      ],
+      "page": 108
+    }
+  ]
+}

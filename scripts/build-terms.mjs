@@ -56,11 +56,28 @@ const OUT = {
   'intl-org': resolve(ROOT, 'src/domain/terms-data/intl-org.ts'),
 }
 
-/** 两个范围，顺序即界面上两张卡片的顺序（用户定的）。 */
+/** 这两份 docx 覆盖的板块，顺序与范围表（term-scopes.ts）里的前两行一致（用户定的）。 */
 const SCOPES = [
   { id: 'cn-org', label: '国内机关名称', const: 'CN_ORG_TERMS', zh: '国内机构.docx' },
   { id: 'intl-org', label: '国际机关名称', const: 'INTL_ORG_TERMS', zh: '国际机构.docx' },
 ]
+
+/**
+ * 一页几条：**从领域代码里读**，不在这里再写一个数。
+ *
+ * 报告里那句"多少条 · 几页"原先把 5 写死（第 14 条已改成 10 条一页），于是报告与界面
+ * 各说各的页数。生成器与界面**只能是同一份口径**，而这个脚本跑在裸 Node 上
+ * （领域代码是 .ts、彼此用无扩展名相对导入，直接 import 会 ERR_MODULE_NOT_FOUND，
+ * 为此再拉一套 esbuild 打包不值得），因此就地读出那一行常量：读不到就**直接抛**，
+ * 宁可报错也不要悄悄退回一个写死的数——那正是"两处口径漂开"的老路。
+ */
+function termsPerPage() {
+  const source = readFileSync(resolve(ROOT, 'src/domain/terms.ts'), 'utf8')
+  const matched = /export const TERMS_PER_PAGE\s*=\s*(\d+)/.exec(source)
+  if (!matched) throw new Error('src/domain/terms.ts 里找不到 TERMS_PER_PAGE，报告算不出页数')
+  return Number(matched[1])
+}
+const TERMS_PER_PAGE = termsPerPage()
 
 /**
  * 英美拼写对照表：**照词给出，不写通则**。
@@ -431,7 +448,7 @@ function renderFile(scope, terms) {
 /* ── 报告 ──────────────────────────────────────────────────────── */
 
 function perPage(count) {
-  return Math.ceil(count / 5)
+  return Math.ceil(count / TERMS_PER_PAGE)
 }
 
 function main() {
@@ -444,8 +461,12 @@ function main() {
     const extra = parsed.splitRows ? `，其中 ${parsed.splitRows} 行拆成了两条` : ''
     const notes = parsed.dropped.notes ? `，丢掉中文括注 ${parsed.dropped.notes} 处` : ''
     const table = parsed.dropped.headerRows ? `，丢掉表头 ${parsed.dropped.headerRows} 行` : ''
+    /*
+     * 页数按 `termPageCount` 的口径现算（每页 10 条，第 14 条改的）——这里原先把 5 写死，
+     * 而生成器不该另有一份页长：那正是"报告里 17 页、界面上 9 页"这类漂移的来源。
+     */
     console.log(
-      `  ${scope.label}（${scope.zh}）：${terms.length} 条 · ${perPage(terms.length)} 页（每页 5 条，末页 ${terms.length % 5 || 5} 条）`,
+      `  ${scope.label}（${scope.zh}）：${terms.length} 条 · ${perPage(terms.length)} 页（每页 ${TERMS_PER_PAGE} 条，末页 ${terms.length % TERMS_PER_PAGE || TERMS_PER_PAGE} 条）`,
     )
     console.log(
       `    自然段 ${paragraphs} 个；丢掉小标题 ${parsed.dropped.headings} 个、说明段 ${parsed.dropped.prose} 段${table}${extra}${notes}`,

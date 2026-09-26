@@ -1,11 +1,15 @@
 /**
- * 术语库：两个**术语范围**下的机关名称，以及每一条**一并算对的写法**。
+ * 术语库：五个**板块**（术语范围）下的官方译名，以及每一条**一并算对的写法**。
  *
  * ## 数据从哪来
  *
- * 用户给的两份材料（仓库根目录的 `国内机构.docx` / `国际机构.docx`），
- * 由 `scripts/build-terms.mjs` 现算成 `terms-data/*.ts`——**不要手写那两个文件**。
- * 143 条：国内机关名称 83 条（17 页）、国际机关名称 60 条（12 页）。
+ * 材料进仓库的路子有两条，都由脚本现算成 `terms-data/*.ts`——**不要手写那些文件**：
+ *   - 机关名称：仓库根目录的两份 docx（`国内机构.docx` / `国际机构.docx`），
+ *     83 条（每页 10 条 → 9 页）与 60 条（6 页），生成器是 `scripts/build-terms.mjs`；
+ *   - 手册那三块（当代术语／必背核心术语／必背用典）：`handbook-src/` 里整理好的
+ *     《理解当代中国 核心术语学习手册》条目，生成器是 `scripts/build-handbook-terms.mjs`。
+ * ⚠️ 五个板块现在**都有材料**；`hasTermData` 与界面上那句「暂无分组」是留给**下一个**
+ * 还没材料的板块的（表仍然写成"每个范围都必须有一项"的形状，加板块时先给个空数组）。
  * 在这个文件里只有类型、范围查询与判分口径；数据一律在生成文件里。
  *
  * ## 为什么答案写死在这里，而不是让 AI 判
@@ -38,9 +42,12 @@
  */
 
 import type { Direction } from './types'
-import { TERM_SCOPES, type TermScope } from './term-scopes'
+import { TERM_SCOPES, groupLabel, perGroupOfScope, type TermScope } from './term-scopes'
 import { CN_ORG_TERMS } from './terms-data/cn-org'
 import { INTL_ORG_TERMS } from './terms-data/intl-org'
+import { MODERN_TERM_TERMS } from './terms-data/modern-term'
+import { CORE_TERM_TERMS } from './terms-data/core-term'
+import { CLASSICS_TERMS } from './terms-data/classics'
 
 /** 一条术语：中文名 + 官方英文名 + 两侧各自"一并算对"的其它写法。 */
 export interface Term {
@@ -60,39 +67,70 @@ export interface Term {
   zhAlt: readonly string[]
 }
 
-/** 术语库按**范围**分组。范围表在 `term-scopes.ts`（与话题领域平行的另一张表）。 */
+/**
+ * 术语库按**范围**分组。范围表在 `term-scopes.ts`（与话题领域平行的另一张表）。
+ *
+ * ⚠️ 第 14 条起这张表有**五个板块**，而**第 15 条之后五个都有材料了**：
+ * 后三个（当代术语／必背核心术语／必背用典）来自《理解当代中国 核心术语学习手册》，
+ * 材料在 `handbook-src/`、由 `scripts/build-handbook-terms.mjs` 生成
+ * （那份手册是扫描件，最上游是 OCR；整理经过见 `terms-data/modern-term.ts` 的文件头）。
+ * 全库此刻 1001 条：国内 83 ＋ 国际 60 ＋ 当代 718 ＋ 核心 60 ＋ 用典 80。
+ *
+ * 表仍然写成 `Record<TermScope, …>`：**每个范围都必须有一项**，
+ * 哪天再添一个还没材料的板块，就按老办法给一个空数组，界面照样列出那一行、
+ * 明说「暂无分组」（见 `hasTermData` 与 `groupsOfScope`）——不藏起来，也不假装有内容。
+ */
 export const TERMS_BY_SCOPE: Record<TermScope, readonly Term[]> = {
   'cn-org': CN_ORG_TERMS,
   'intl-org': INTL_ORG_TERMS,
+  'modern-term': MODERN_TERM_TERMS,
+  'core-term': CORE_TERM_TERMS,
+  'classics': CLASSICS_TERMS,
 }
 
-/** 术语题一页几条。用户要的是「五栏」，所以是 5。 */
-export const TERMS_PER_PAGE = 5
+/**
+ * 术语题**一页**几条（用户第 14 条：一页显示 10 个术语，早先是 5 个）。
+ *
+ * ⚠️ 它与"一组几条"是**两个数**，而且后者**逐板块不同**（见 `term-scopes.ts` 的 `perGroup`）：
+ * 国内／国际机关名称每 20 条一组（正好两页），当代术语每 50 条一组（正好五页）。
+ * 判分、末页不满的行数、题号里的分页全都只认**这一个**页长。
+ */
+export const TERMS_PER_PAGE = 10
 
-/** 某个范围下的全部术语（顺序即材料里的顺序）。 */
+/** 这个板块现在有没有材料。没有的话界面上只能显示「暂无分组」（见 term-scopes.ts 的文件头）。 */
+export function hasTermData(scope: TermScope): boolean {
+  return termsOfScope(scope).length > 0
+}
+
+/** 某个范围下的全部术语（顺序即材料里的顺序）；没有材料的板块是空数组。 */
 export function termsOfScope(scope: TermScope): readonly Term[] {
-  return TERMS_BY_SCOPE[scope]
+  return TERMS_BY_SCOPE[scope] ?? []
 }
 
-/** 全部术语（跨范围）。 */
+/** 全部术语（跨范围）。没有材料的板块不贡献任何一条。 */
 export function allTerms(): readonly Term[] {
-  return TERM_SCOPES.flatMap((scope) => TERMS_BY_SCOPE[scope.id])
+  return TERM_SCOPES.flatMap((scope) => termsOfScope(scope.id))
 }
 
-/** 某个范围一共几页（每页 5 条，末页可能不满）。 */
+/**
+ * 某个范围一共几页（每页 10 条，末页可能不满）。
+ *
+ * 没有材料的板块是 **0 页**（而不是"1 页空页"）：界面上"共 1 页"是句假话，
+ * 而 0 正好让调用方一眼看出"这个板块还没法练"。
+ */
 export function termPageCount(scope: TermScope): number {
-  return Math.max(1, Math.ceil(TERMS_BY_SCOPE[scope].length / TERMS_PER_PAGE))
+  return Math.ceil(termsOfScope(scope).length / TERMS_PER_PAGE)
 }
 
 /**
  * 某个范围第 `page` 页的那几条（0 基）。
  *
- * ⚠️ **末页可能不满 5 条**（用户拍板："末页照旧五等分，缺的那两行留空、不可填也不计分"）。
+ * ⚠️ **末页可能不满 10 条**（用户拍板："末页照旧十等分，缺的那几行留空、不可填也不计分"）。
  * 因此这里**不补齐**——补齐会让同一个范围里出现重复的题目，也会把那一行算进判分。
  * 界面负责把不足的行画成空框（见 `TermRows`）。
  */
 export function termsOfPage(scope: TermScope, page: number): readonly Term[] {
-  const pool = TERMS_BY_SCOPE[scope]
+  const pool = termsOfScope(scope)
   const start = page * TERMS_PER_PAGE
   if (start < 0 || start >= pool.length) return []
   return pool.slice(start, start + TERMS_PER_PAGE)
@@ -100,8 +138,87 @@ export function termsOfPage(scope: TermScope, page: number): readonly Term[] {
 
 /** 某一条术语属于第几页（记录、收藏要按页对回去）。 */
 export function pageOfTerm(scope: TermScope, term: Term): number {
-  const index = TERMS_BY_SCOPE[scope].indexOf(term)
+  const index = termsOfScope(scope).indexOf(term)
   return index < 0 ? 0 : Math.floor(index / TERMS_PER_PAGE)
+}
+
+/**
+ * 一个**分组**在界面上要用的全部事实。
+ *
+ * 用户第 14 条要的是"在这个板块里选分组"，因此弹窗里每一组都得说清
+ * "第几条到第几条、共几页"，而"点确定之后落到哪一页"（`firstPage`）也由这里算，
+ * 免得界面自己去推"每条一组 / 每页几条"这套除法。
+ */
+export interface TermGroup {
+  /** 组号，0 基（与页号同一套口径） */
+  index: number
+  /** 屏幕上的名字：`国内机关名称|第1组（1-20）`（命名风格见 term-scopes.ts） */
+  label: string
+  /** 这一组的第一条在整库里的序号（**1 基**，与材料里的序号一致） */
+  from: number
+  /** 最后一条的序号（1 基，所以 from > to 是不可能的） */
+  to: number
+  count: number
+  /** 这一组占几页（按**这个板块**的组大小与全站的页长算出来，不写死） */
+  pages: number
+  /** 这一组的第一页（0 基）——点「确定」就落到它 */
+  firstPage: number
+}
+
+/**
+ * 按**条数**切分组：`total` 条、每"这个板块自己的 perGroup"条一组（末组可能不满）。
+ *
+ * ⚠️ 组大小**逐板块**取（`perGroupOfScope`），因此当代术语是每 50 条一组、
+ * 其余四个板块是每 20 条一组——**不要**在这里读全局的 `TERMS_PER_GROUP`，
+ * 那会把当代术语切成 36 个小碎块（用户对它的口径是 15 组）。
+ *
+ * ⚠️ 分组是按**条数**切的，不是按页切的：一组 20 条正好两页、一组 50 条正好五页，
+ * 但那只是因为 20 与 50 都能被 10 整除。因此 `firstPage` / `pages` 一律按页算术算出来，
+ * 不写死"一组两页"——末组不满时页数自然少。
+ *
+ * ⚠️ 为什么把条数做成**显式参数**（而不是只留 `groupsOfScope`）：有两类边界必须能断言，
+ * 而它们在真实数据上不一定碰得到——"这个板块一条都没有"（界面上要显示「暂无分组」）
+ * 与"一组 50 条怎么落到页上、末组只有 18 条时算几页"。验收脚本直接喂这两个数即可，
+ * 于是**不必**为了可测在生产代码里塞一个 `if (import.meta.env.TEST)` 之类的分支。
+ */
+export function groupsOfCount(scope: TermScope, total: number): TermGroup[] {
+  const perGroup = perGroupOfScope(scope)
+  const groups: TermGroup[] = []
+  if (perGroup <= 0 || total <= 0) return groups
+  for (let start = 0; start < total; start += perGroup) {
+    const count = Math.min(perGroup, total - start)
+    const firstPage = Math.floor(start / TERMS_PER_PAGE)
+    const lastPage = Math.floor((start + count - 1) / TERMS_PER_PAGE)
+    groups.push({
+      index: groups.length,
+      label: groupLabel(scope, groups.length, start + 1, start + count),
+      from: start + 1,
+      to: start + count,
+      count,
+      pages: lastPage - firstPage + 1,
+      firstPage,
+    })
+  }
+  return groups
+}
+
+/** 某个板块的全部**分组**（条数取自真实数据；切法与边界一律见 `groupsOfCount`）。 */
+export function groupsOfScope(scope: TermScope): TermGroup[] {
+  return groupsOfCount(scope, termsOfScope(scope).length)
+}
+
+/**
+ * 某一页**属于哪一组**（界面上用它标出"正在练的那一组"）。
+ *
+ * 越界的页返回 null（0 基页号，末页之后就是没有）。没有材料的板块自然也返回 null。
+ */
+export function groupOfPage(scope: TermScope, page: number): TermGroup | null {
+  if (page < 0 || page >= termPageCount(scope)) return null
+  return (
+    groupsOfScope(scope).find(
+      (group) => page >= group.firstPage && page < group.firstPage + group.pages,
+    ) ?? null
+  )
 }
 
 /**
@@ -143,6 +260,34 @@ export function standardAnswer(term: Term, direction: Direction): string {
   const accepted = acceptedAnswers(term, direction)
   if (direction === 'zh-to-en') return accepted[0] ?? term.en
   return accepted.join('／')
+}
+
+/**
+ * 屏幕上显示的**标准译法**：把"只差句末标点"的那几条并掉之后的 `standardAnswer`。
+ *
+ * 手册那三块的条目多是整句，而**句末句号写不写都算对**（口径见文件头），
+ * 生成器因此把"去掉句号的那一版"登记进了 `zhAlt`（必背用典里 45 条都有这一项）。
+ * 那是判分口径没错，但**摆在屏幕上很难看**：`标准答案` 会变成
+ * 「不困在于早虑，不穷在于早豫。／不困在于早虑，不穷在于早豫」——
+ * 读起来像两个不同的答案，而它其实只是在说"句号可以省"。
+ *
+ * 因此显示时把这类"只差末尾标点"的重复项去掉，**真正的**一英多中照旧用「／」全列出来
+ * （`直辖市人民政府／设区的市人民政府` 那种：两条中文名是两个不同的机关级别）。
+ * ⚠️ 判分**一个字都没放宽也没收紧**：`acceptedAnswers` 照旧把两种写法都算对，
+ * 这里动的是"写在屏幕上的那一串"。
+ */
+export function standardWriting(term: Term, direction: Direction): string {
+  const accepted = acceptedAnswers(term, direction)
+  if (direction === 'zh-to-en') return accepted[0] ?? term.en
+  const trimmed = (text: string): string => normalizeAnswer(text.replace(/[。．.]+$/u, '').trim())
+  const distinct: string[] = []
+  for (const answer of accepted) {
+    if (distinct.some((kept) => normalizeAnswer(kept) !== normalizeAnswer(answer) && trimmed(kept) === trimmed(answer))) {
+      continue
+    }
+    distinct.push(answer)
+  }
+  return distinct.join('／')
 }
 
 /**

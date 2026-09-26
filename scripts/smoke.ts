@@ -778,42 +778,78 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
    */
   console.log('\n[术语题] 本地判分映射出的区间是真的（说明 / 收藏 / 对照视图都靠它）')
   try {
-    const { answeredTermCount, correctionFromVerdicts, judgeTerms, termAnswerText, termMarkId } = await import(
-      '../src/domain/term-exercise'
-    )
-    const { termsOfScope } = await import('../src/domain/terms')
+    const {
+      answeredTermCount,
+      correctionFromVerdicts,
+      judgeTerms,
+      termAnswerText,
+      termMarkId,
+      termPageComplete,
+    } = await import('../src/domain/term-exercise')
+    const { TERMS_PER_PAGE, termsOfPage } = await import('../src/domain/terms')
     const { sentencePair } = await import('../src/domain/favorites')
-    const terms = termsOfScope('cn-org').slice(0, 5)
-    check(terms.length === 5, `术语库能取到一组 5 条（实际 ${terms.length}）`)
+    /*
+     * 取**第 1 页**（不是"前 5 条"）：一页十条是第 14 条的硬口径，
+     * 而下面这一组断言量的正是"判分结果按行映射回位置"——行数必须与真实的一页一致，
+     * 拿 5 条来验就等于绕开了新页长（那才是这一轮改掉的东西）。
+     */
+    const terms = termsOfPage('cn-org', 0)
+    check(terms.length === TERMS_PER_PAGE, `第 1 页取满一页${TERMS_PER_PAGE}条（实际 ${terms.length}）`)
     const first = terms[0]
     const fourth = terms[3]
     const fifth = terms[4]
     // 取不到就没什么可验的：直接抛出去，让上面那个 catch 报出来（不静悄悄地跳过）
-    if (!first || !fourth || !fifth) throw new Error(`术语库里只取到 ${terms.length} 条，验不了这一组`)
-    const answers = [first.en, 'definitely wrong here', '', fourth.en, `${fifth.en} xyz`]
+    if (!first || !fourth || !fifth) throw new Error(`术语库里只取到 ${terms.length} 条，验不了这一页`)
+    /*
+     * 十条里故意安排三种情形：写对（照官方译名）、写错、没作答。
+     * 前三条定死了下标（1 写错、2 空着、4 写错），其余照官方译名写——
+     * 于是"错的编号""对的编号""空着那条不给改动项"三件事都有确定的期望值。
+     */
+    const answers = terms.map((term, index) => {
+      if (index === 1) return 'definitely wrong here'
+      if (index === 2) return ''
+      if (index === 4) return `${term.en} xyz`
+      return term.en
+    })
     const verdicts = judgeTerms(terms, answers, 'zh-to-en')
     check(
-      verdicts.map((verdict) => verdict.correct).join(',') === 'true,false,false,true,false',
+      verdicts.map((verdict) => verdict.correct).join(',') ===
+        terms.map((_, index) => index !== 1 && index !== 2 && index !== 4).join(','),
       `判分口径：照标准写的对、胡写与漏写的错（实际 ${verdicts.map((v) => (v.correct ? '✓' : '✗')).join('')}）`,
     )
-    check(answeredTermCount(answers) === 4, '写了几条由 answeredTermCount 数出来（提交按钮够不够格看它）')
+    check(
+      answeredTermCount(answers) === TERMS_PER_PAGE - 1,
+      `写了几条由 answeredTermCount 数出来（十条里空了一条 → ${answeredTermCount(answers)}）`,
+    )
+    /*
+     * 第 14 条第 4 条的判据：**没答完也能提交，但只有全答完才落库**。
+     * 这三条把判据本身钉住（界面上的两处调用都读它，见 App 的 submitTerms 与 commit）。
+     */
+    check(
+      !termPageComplete(TERMS_PER_PAGE, answers) && termPageComplete(TERMS_PER_PAGE, terms.map((term) => term.en)),
+      '「十条都写上了」由 termPageComplete 判：空着一条就是 false，十条都写才是 true',
+    )
+    check(
+      termPageComplete(3, ['a', 'b', 'c']) && !termPageComplete(3, ['a', 'b', '']) && !termPageComplete(0, []),
+      '末页只按**真实存在的那几条**判（三条就是三条），而"一页没有题"永远不算答完',
+    )
     check(
       termAnswerText(answers) === answers.join('\n'),
-      '五条答案拼成的"整段作答文字"就是逐行用换行连接（下游一律按它办事）',
+      '各条答案拼成的"整段作答文字"就是逐行用换行连接（下游一律按它办事）',
     )
 
     const { correction, validated } = correctionFromVerdicts(verdicts)
     check(
-      correction.errors.length === 3 && correction.highlights.length === 2,
-      `三条错、两条对（实际 ${correction.errors.length} 错 / ${correction.highlights.length} 对）`,
+      correction.errors.length === 3 && correction.highlights.length === TERMS_PER_PAGE - 3,
+      `三条错、七条对（实际 ${correction.errors.length} 错 / ${correction.highlights.length} 对）`,
     )
     check(
       correction.errors.map((error) => error.id).join(',') === 't2,t3,t5',
       `编号由 termMarkId 统一给（实际 ${correction.errors.map((error) => error.id).join(',')}）`,
     )
     check(
-      correction.highlights.map((highlight) => highlight.id).join(',') === 'h1,h4',
-      `译对的那两条编号也成对（实际 ${correction.highlights.map((h) => h.id).join(',')}）`,
+      correction.highlights.map((highlight) => highlight.id).join(',') === 'h1,h4,h6,h7,h8,h9,h10',
+      `译对的那几条编号也成对（实际 ${correction.highlights.map((h) => h.id).join(',')}）`,
     )
     const text = termAnswerText(answers)
     let spansReal = true
@@ -853,7 +889,7 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     // 对照视图：每一条各占一行（没作答那条是空行，按规矩不出行）
     const termLines = buildCompareLines(validated, text)
     check(
-      termLines.length === 4,
+      termLines.length === TERMS_PER_PAGE - 1,
       `对照视图里每一条各占一行（空的那条不出行，实际 ${termLines.length}）`,
       JSON.stringify(termLines.map((line) => line.original)),
     )
@@ -871,18 +907,24 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
   }
 
   /*
-   * 第 13 轮：术语库整批换成两份机关名称材料，判分口径放宽了四处，题号换代，
-   * 一个范围按每页五条分页。这一组盯的就是那几件事——它们全是**口径**，
-   * 一旦漂掉，用户看到的是"我答对了却被判错"或者"五条译文挤进一个框"。
+   * 第 13 轮：术语库整批换成两份机关名称材料，判分口径放宽了四处，题号换代；
+   * 第 14 轮再把分页改成每页 10 条、范围改成五个板块、每个板块每 20 条一组。
+   * 这一组盯的就是那几件事——它们全是**口径**，
+   * 一旦漂掉，用户看到的是"我答对了却被判错"或者"十条译文挤进一个框"。
    */
-  console.log('\n[术语库换代] 两个范围、每页五条、官方别名与英美拼写都算对')
+  console.log('\n[术语板块与分组] 五个板块、每 20 条一组、每页 10 条、官方别名与英美拼写都算对')
   try {
     const {
       TERMS_PER_PAGE,
       acceptedAnswers,
+      groupOfPage,
+      groupsOfCount,
+      groupsOfScope,
+      hasTermData,
       isTermCorrect,
       normalizeAnswer,
       standardAnswer,
+      standardWriting,
       termPageCount,
       termsOfPage,
       termsOfScope,
@@ -896,26 +938,73 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       termExerciseId,
       termSourceText,
     } = await import('../src/domain/term-exercise')
-    const { TERM_SCOPES } = await import('../src/domain/term-scopes')
+    const { TERM_SCOPES, TERMS_PER_GROUP, perGroupOfScope } = await import('../src/domain/term-scopes')
     const { pageCountOf, pageSourceOf } = await import('../src/domain/exercise-source')
+    /** 现在有材料的板块（第 15 条之后是全部五个；判据仍然按数据现算，不写死）。 */
+    const SCOPES_WITH_DATA = TERM_SCOPES.filter((scope) => hasTermData(scope.id)).map((scope) => scope.id)
 
-    check(TERM_SCOPES.length === 2, `术语范围就两张表（实际 ${TERM_SCOPES.length}）`)
+    /*
+     * 第 14 条第 1 条：下拉栏里是**五大板块**（顺序就是用户点名的那个顺序）。
+     * ⚠️ 最初后三个板块的材料还没到（那时这一条断的是"它们确实是空的、界面上显示暂无分组"）；
+     * 材料到位之后五个板块都有内容了，因此这里改成断**每个板块的真实条数**，
+     * 而"没有材料的板块怎么办"改用 `groupsOfCount(…, 0)` 这条纯函数断言（见下面）。
+     */
+    check(TERM_SCOPES.length === 5, `术语范围是五个板块（实际 ${TERM_SCOPES.length}）`)
     check(
-      TERM_SCOPES.map((scope) => scope.label).join(',') === '国内机关名称,国际机关名称',
-      `两张表的名字与顺序（实际 ${TERM_SCOPES.map((scope) => scope.label).join(',')}）`,
+      TERM_SCOPES.map((scope) => scope.label).join('/') ===
+        '国内机关名称/国际机关名称/当代术语/必背核心术语/必背用典',
+      `五个板块的名字与顺序（实际 ${TERM_SCOPES.map((scope) => scope.label).join('/')}）`,
+    )
+    check(
+      SCOPES_WITH_DATA.join(',') === 'cn-org,intl-org,modern-term,core-term,classics' &&
+        TERM_SCOPES.every((scope) => hasTermData(scope.id)),
+      `五个板块都有材料（有条数的：${SCOPES_WITH_DATA.join('、')}）`,
+      TERM_SCOPES.map((scope) => `${scope.id}=${termsOfScope(scope.id).length}`).join('、'),
+    )
+    /*
+     * "这个板块还没有材料"这条降级路径仍然要守（将来再加板块就是空数组，界面显示「暂无分组」）。
+     * 现在真实数据里没有空板块了，因此判据做成**显式参数的纯函数**来断言——
+     * 而不是为了可测在生产代码里留一个测试专用分支（那正是这一轮明确不许做的事）。
+     */
+    check(
+      groupsOfCount('modern-term', 0).length === 0 &&
+        groupsOfCount('core-term', 0).length === 0 &&
+        groupsOfCount('classics', 0).length === 0,
+      '一个板块一条都没有时切出 0 组（界面上显示「暂无分组」，不会推出一个空弹窗）',
+    )
+    check(
+      TERM_SCOPES.every((scope) => groupsOfCount(scope.id, 0).length === 0),
+      '五个板块共用同一条降级判据：0 条 → 0 组（无论它的组大小是 20 还是 50）',
     )
 
     const cn = termsOfScope('cn-org')
     const intl = termsOfScope('intl-org')
     check(cn.length === 83, `国内机关名称 83 条（实际 ${cn.length}）`)
     check(intl.length === 60, `国际机关名称 60 条（实际 ${intl.length}）`)
-    check(termPageCount('cn-org') === 17, `国内 17 页（实际 ${termPageCount('cn-org')}）`)
-    check(termPageCount('intl-org') === 12, `国际 12 页（实际 ${termPageCount('intl-org')}）`)
     check(
-      termsOfPage('cn-org', 16).length === 3 && termsOfPage('intl-org', 11).length === 5,
-      `末页真实的条数：国内剩 3 条、国际正好 5 条（实际 ${termsOfPage('cn-org', 16).length} / ${termsOfPage('intl-org', 11).length}）`,
+      TERMS_PER_GROUP === 20 &&
+        (['cn-org', 'intl-org', 'core-term', 'classics'] as const).every(
+          (scope) => perGroupOfScope(scope) === 20,
+        ),
+      `四 个板块每 20 条一组（国内/国际机关名称、必背核心术语、必背用典）——默认值 ${TERMS_PER_GROUP}`,
     )
-    check(termsOfPage('intl-org', 12).length === 0, '越界的页取不到术语（不补齐、不报错）')
+    /*
+     * 当代术语是**另一个数**（用户按材料体量定的：718 条 → 每 50 条一组 → 15 组）。
+     * ⚠️ 这一条现在只能断"那个数是 50"：它那份材料还没进仓库（`terms.ts` 里是空数组），
+     * 因此"15 组""末组 18 条"这类断言要等数据到位——但**判据本身已经是逐板块的**
+     * （`groupsOfScope` 走 `perGroupOfScope`），数据一到就自动是对的。
+     */
+    check(
+      perGroupOfScope('modern-term') === 50,
+      `当代术语每 50 条一组（实际 ${perGroupOfScope('modern-term')}）——它与其他四个板块不同`,
+    )
+    check(termPageCount('cn-org') === 9, `国内 9 页（每页 10 条：83 → 9；实际 ${termPageCount('cn-org')}）`)
+    check(termPageCount('intl-org') === 6, `国际 6 页（每页 10 条：60 → 6；实际 ${termPageCount('intl-org')}）`)
+    check(
+      termsOfPage('cn-org', 8).length === 3 && termsOfPage('intl-org', 5).length === TERMS_PER_PAGE,
+      `末页真实的条数：国内剩 3 条、国际正好 ${TERMS_PER_PAGE} 条（实际 ${termsOfPage('cn-org', 8).length} / ${termsOfPage('intl-org', 5).length}）`,
+    )
+    check(termsOfPage('intl-org', 6).length === 0, '越界的页取不到术语（不补齐、不报错）')
 
     // 判分口径放宽的四件事：官方缩写、英美拼写、重音、开头的 The
     const npc = cn.find((term) => term.zh === '全国人民代表大会')
@@ -984,6 +1073,72 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     )
     check(primaryEnglish(npc) === "National People's Congress", `主译法去掉了尾部括号（实际 ${primaryEnglish(npc)}）`)
 
+    /*
+     * 手册那三块（第 15 条数据到位）：条数、页数、组数、组名与落到哪一页。
+     * 当代术语是**唯一一个组大小不同**的板块（每 50 条一组），因此它也是"别把一组两页写死"的现场：
+     * 前 14 组各 50 条 = 5 页，末组 18 条 = 2 页、第一页是第 71 页（0 基 70）。
+     */
+    check(
+      termsOfScope('modern-term').length === 718 && termPageCount('modern-term') === 72,
+      `当代术语 718 条 / 72 页（实际 ${termsOfScope('modern-term').length} 条 / ${termPageCount('modern-term')} 页）`,
+    )
+    const modernGroups = groupsOfScope('modern-term')
+    check(
+      modernGroups.length === 15 &&
+        modernGroups[0]?.label === '当代术语|第1组（1-50）' &&
+        modernGroups[14]?.label === '当代术语|第15组（701-718）',
+      `当代术语每 50 条一组 → 15 组，名字形如「当代术语|第1组（1-50）」…「当代术语|第15组（701-718）」（实际 ${modernGroups.length} 组：${modernGroups[0]?.label} … ${modernGroups[modernGroups.length - 1]?.label}）`,
+    )
+    check(
+      modernGroups.slice(0, 14).every((group) => group.count === 50 && group.pages === 5) &&
+        modernGroups[14]?.count === 18 &&
+        modernGroups[14]?.pages === 2 &&
+        modernGroups[14]?.firstPage === 70,
+      `一组 50 条 = 5 页，末组 18 条 = 2 页、第一页是第 71 页（实际 ${JSON.stringify(modernGroups[14])}）`,
+      JSON.stringify(modernGroups[14]),
+    )
+    check(
+      groupsOfScope('core-term').length === 3 && groupsOfScope('classics').length === 4,
+      `必背核心术语 3 组、必背用典 4 组（每 20 条一组；实际 ${groupsOfScope('core-term').length} / ${groupsOfScope('classics').length}）`,
+    )
+    /*
+     * 每一页都必须正好属于一组——界面弹窗里那枚「正在练」按页号认组，
+     * 认错的表现是"我明明在第 71 页（第 15 组），弹窗却说我在第 14 组"。
+     * 这里对 72 页的当代术语逐页验一遍（组大小 50 与页长 10 不成倍数时最容易错）。
+     */
+    const badOwner = []
+    for (let page = 0; page < termPageCount('modern-term'); page += 1) {
+      const owner = groupOfPage('modern-term', page)
+      const covering = modernGroups.filter((group) => page >= group.firstPage && page < group.firstPage + group.pages)
+      // 比的是**组号**不是对象：groupOfPage 每次现切一份数组，引用当然不同（拿引用比会永远不相等）
+      if (!owner || covering.length !== 1 || covering[0]?.index !== owner.index) {
+        badOwner.push(`第 ${page + 1} 页 → ${owner?.label ?? 'null'}（覆盖它的有 ${covering.length} 组）`)
+      }
+    }
+    check(
+      badOwner.length === 0,
+      `当代术语的 72 页每一页都正好属于一组（groupOfPage 与分组的覆盖区间一致）`,
+      badOwner.slice(0, 4).join('；'),
+    )
+    /*
+     * 屏幕上那一串"标准译法"要把**只差句末标点**的重复项并掉。
+     * 必背用典的整句条目把"去掉句号的那一版"登在 zhAlt 里（判分时两种都算对），
+     * 直接 join 出来会显示成「甲。／甲」——像两个不同的答案。
+     */
+    const dottedTerm = termsOfScope('classics').find(
+      (term) => term.zh.endsWith('。') && term.zhAlt.some((alt) => !alt.endsWith('。')),
+    )
+    check(
+      dottedTerm !== undefined &&
+        standardAnswer(dottedTerm, 'en-to-zh').includes('／') &&
+        !standardWriting(dottedTerm, 'en-to-zh').includes('／'),
+      `只差句末标点的写法在屏幕上并成一条：standardAnswer 给「${dottedTerm ? standardAnswer(dottedTerm, 'en-to-zh') : '—'}」，standardWriting 给「${dottedTerm ? standardWriting(dottedTerm, 'en-to-zh') : '—'}」`,
+    )
+    check(
+      standardWriting(municipal, 'en-to-zh') === '直辖市人民政府／设区的市人民政府',
+      `真正的"一英多中"照旧两个中文都列出来（${standardWriting(municipal, 'en-to-zh')}）`,
+    )
+
     // 题号换代：旧代次认得出、新代次解析得出，且新代次不会被"旧代次"判据命中
     const id = termExerciseId('cn-org', 'en-to-zh')
     check(id === 'term-v3-cn-org-en-to-zh', `题号形如 term-v3-<范围>-<方向>（实际 ${id}）`)
@@ -996,18 +1151,70 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
     check(parseTermExerciseId('term-v2-society-1') === null, '旧代次题号解析不出内容')
     check(parseTermExerciseId('term-v3-society-zh-to-en') === null, '不存在的范围解析失败')
 
-    // 分页：题干在源文里就是"每页五行、页间空一行"，页数与每页条数与术语表对得上
-    check(pageCountOf(id) === 17, `整道题 17 页（实际 ${pageCountOf(id)}）`)
-    const page16 = pageSourceOf(id, 16)
-    check(page16.split('\n').length === 3, `末页的题干就是 3 行（实际 ${page16.split('\n').length}）`)
+    /*
+     * 分组（第 14 条第 2 条）：国内 83 条 → 5 组（最后一组 3 条），国际 60 条 → 3 组。
+     *
+     * ⚠️ 这几条同时守着两件事：**组号从 1 起、名字里的区间是 1 基**（材料里的序号），
+     * 而**页号从 0 起**（本站的页号一律 0 基）。两者混起来是这类代码最经典的错，
+     * 而界面上只会表现成"点第 3 组落到了第 2 组的第一页"——不报错、只是错。
+     */
+    const cnGroups = groupsOfScope('cn-org')
+    check(
+      cnGroups.length === 5,
+      `国内 83 条按每 20 条一组 → 5 组（实际 ${cnGroups.length}）`,
+      JSON.stringify(cnGroups.map((group) => group.label)),
+    )
+    check(
+      cnGroups.map((group) => `${group.from}-${group.to}`).join(',') === '1-20,21-40,41-60,61-80,81-83',
+      `每组的起止序号（最后一组只有 3 条）实际：${cnGroups.map((group) => `${group.from}-${group.to}`).join(',')}`,
+    )
+    check(
+      cnGroups.map((group) => group.label).join(' | ') ===
+        '国内机关名称|第1组（1-20） | 国内机关名称|第2组（21-40） | 国内机关名称|第3组（41-60） | ' +
+          '国内机关名称|第4组（61-80） | 国内机关名称|第5组（81-83）',
+      `分组的命名风格（用户给的例子就是「国内机关名称|第1组（1-20）」这种）：${cnGroups[0]?.label}`,
+      JSON.stringify(cnGroups.map((group) => group.label)),
+    )
+    check(
+      cnGroups.map((group) => `${group.firstPage}/${group.pages}`).join(',') === '0/2,2/2,4/2,6/2,8/1',
+      `每组落到第几页、占几页（一组 20 条 = 两页；末组 3 条 = 一页）实际：${cnGroups
+        .map((group) => `${group.firstPage}/${group.pages}`)
+        .join(',')}`,
+    )
+    const intlGroups = groupsOfScope('intl-org')
+    check(
+      intlGroups.length === 3 && intlGroups.every((group) => group.count === 20) &&
+        intlGroups.every((group) => group.pages === 2),
+      `国际 60 条 → 3 组、每组正好 20 条两页（实际 ${intlGroups.length} 组：${intlGroups
+        .map((group) => group.count)
+        .join('/')}）`,
+      JSON.stringify(intlGroups.map((group) => group.label)),
+    )
+    check(
+      groupOfPage('cn-org', 0)?.label === '国内机关名称|第1组（1-20）' &&
+        groupOfPage('cn-org', 1)?.label === '国内机关名称|第1组（1-20）' &&
+        groupOfPage('cn-org', 2)?.label === '国内机关名称|第2组（21-40）' &&
+        groupOfPage('cn-org', 8)?.label === '国内机关名称|第5组（81-83）',
+      `某一页属于哪一组（界面上的「正在练」靠它）：第 1、2 页都是第 1 组，第 3 页起是第 2 组，末页是第 5 组`,
+      JSON.stringify([0, 1, 2, 8].map((page) => groupOfPage('cn-org', page)?.label)),
+    )
+    check(groupOfPage('cn-org', 9) === null, '越界的页不属于任何一组（末页之后就是没有）')
+
+    // 分页：题干在源文里就是"每页若干行、页间空一行"，页数与每页条数与术语表对得上
+    check(pageCountOf(id) === 9, `整道题 9 页（实际 ${pageCountOf(id)}）`)
+    const lastPageSource = pageSourceOf(id, 8)
+    check(
+      lastPageSource.split('\n').length === 3,
+      `末页的题干就是 3 行（实际 ${lastPageSource.split('\n').length}）`,
+    )
     const source = termSourceText('cn-org', 'zh-to-en')
-    check(source.split('\n\n').length === 17, `题干按页切成 17 段（实际 ${source.split('\n\n').length}）`)
+    check(source.split('\n\n').length === 9, `题干按页切成 9 段（实际 ${source.split('\n\n').length}）`)
     check(
       source.split('\n\n')[1]?.split('\n').length === TERMS_PER_PAGE,
-      `中间那一页正好 5 行（实际 ${source.split('\n\n')[1]?.split('\n').length}）`,
+      `中间那一页正好 ${TERMS_PER_PAGE} 行（实际 ${source.split('\n\n')[1]?.split('\n').length}）`,
     )
 
-    // 五条答案"拆得回去"——这正是"五条全塞进第一个框"那个 bug 的修法
+    // 各条答案"拆得回去"——这正是"五条全塞进第一个框"那个 bug 的修法
     const rows = ['A', 'B', 'C', '', '']
     check(splitTermAnswers(termAnswerText(rows), 5).join('|') === 'A|B|C||', '整段文字按行拆回五个框')
     check(

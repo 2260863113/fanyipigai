@@ -1,0 +1,18 @@
+{
+  "part": "core",
+  "pages": "p061-p068",
+  "sourceFile": "笔译参考书1-《理解当代中国 核心术语学习手册》.pdf",
+  "notes": "来源为扫描件 Windows OCR（仅中文引擎）。本块属于第二部分「术语解读」（页眉「第 二 部 分 / 术 语 解 读」），每页版式是「中文术语 + 项目符号起头的英文译法」若干行，后面整段的中文解读与英文解读一律未收（p061-p068 共舍弃解读段落 16 段）。\n版式与配对说明：本部分英文释义换行极多，一条术语的英文常被 OCR 拆成 2-5 行且行序与相邻术语交错，因此按语义配对，绝不按行号对齐。p061「创新驱动发展战略」的英文位于正文之后（i n novation-driven / development strategy），属同一部分延续；p063「多层次社会保障体系」、p065「供给侧结构性改革」的英文亦排在页内正文之后。p066「共同但有区别的责任原则」页内出现中英交错（中文术语行 → 英文首行 → 中文解读 → 英文第 2-3 行），已按语义合并为一条。p067 页首孤立的「0」按版面位置判定为页码噪声，未收；该页同时排有「共同富裕」（英文 1 条）与「国内国际双循环」（英文 2 条，原件以 · 起头分列）。p068 英文以「。 」起头者与以「· 」起头者均为项目符号，非句读。\n[订正登记：页码 原样 → 订正（依据）]\np061 「i n novation-driven development strategy」→「innovation-driven development strategy」（innovation 被拆成 i+n+novation，首字母小写 i 系字母 l 的误识，依据 innovation 为独立单词且句首应为小写 i 开头）。\np062 「a country Of innovators」→「a country of innovators」（句中 Of→of，大写 O 系 OCR 将字母 o 识成大写；依据英文固定译法 a country of innovators）。\np062 「the Party's goal Of building a strong military in the new era」→「the Party's goal of building a strong military in the new era」（句中 Of→of，同上）。\np062 中文「进 人 创 新 型 国 家 行 列」→「进入创新型国家行列」（『人』为『入』的误识，依据惯用语「进入…行列」）。\np063 「a multi-tiered socia 《 security system」→「a multi-tiered social security system」（socia《 的《 为 OCR 噪声，social 被截断；依据 official 译法 multi-tiered social security system 与同行 security system）。\np063 中文「缓 沖 器」→「缓冲器」（『沖』为『冲』的误识，依据简体词「缓冲」）。\np064 「high-quality development」无误；p063-p064 该条英文因跨页被正文隔开，未作文字改动（本处为跨页登记，非订正）。\np065 中文「供 给 侧 结 构 性 改 革」→「供给侧结构性改革」（『供』的字形在 OCR 中被识成「供」，字符本身正确，但该页版面把英文第 1 行「supply-side structural」挤在中文解读行内，术语行本身完整，未作改动；本处为存疑登记，非订正）。\np067 中文「消 火 贫 穷」→「消灭贫穷」（『火』为『灭』的误识，依据并列固定表达「消灭贫穷」）。\np067 「econom iC flOWS」→「economic flows」（econom 与 iC 之间多出空格；iC→ic 句中不应大写；flOWS→flows 句中不应大写）。\np068 「matters Of national Sign ificance」→「matters of national significance」（句中 Of→of；Sign ificance→significance，单词被拆且句中不应大写）。\np068 「the country's most fundamental interests」无误（行内折行属版式，非错误）。\n[存疑登记]\n存疑（版本差异，非 OCR 错误）：p062「创新型国家」给出「a country of innovators」，系该手册对本条的既定译法，与官方英文中常见的「an innovative country」不同；本文件按 OCR 原样收录，不代为改写。\n存疑（配对）：p062-p063「党在新时代的强军目标」中文可确证，但该条英文跨界排在 p063 页首正文之后（loosely 与「人民军队」建设段落相邻），虽经语义核对为「the Party's goal of building a strong military in the new era」，仍建议人工复核是否与该中文术语同属一条。\n存疑（配对）：p066「共同但有区别的责任原则」与英文「the principle of common but differentiated responsibilities」配对成立（CBDR），但页内中英严重交错，若原件英文实为两条译法，OCR 已把第 2 条吞掉，无法判定。\n存疑（OCR / 版面）：p065 页内中文解读行混入了英文行「supply-side structural」，属 OCR 行序错乱；术语行与译法行均已单独识别，未见缺失。\n存疑（OCR）：p067 页首孤立字符「0」按页码噪声处理（该页页码本应为 51，OCR 仅留下「0」）；若原件为「51」以外的记号，需人工确认。\n存疑（OCR）：p068 末行「economic f ] 0 、 ¥ &」为英文解读段的残损结尾，已随解读段整体丢弃，未计入任何条目。",
+  "entries": [
+    { "cn": "创新驱动发展战略", "en": ["innovation-driven development strategy"], "page": 61 },
+    { "cn": "创新型国家", "en": ["a country of innovators"], "page": 62 },
+    { "cn": "党在新时代的强军目标", "en": ["the Party's goal of building a strong military in the new era"], "page": 62 },
+    { "cn": "多层次社会保障体系", "en": ["a multi-tiered social security system"], "page": 63 },
+    { "cn": "高质量发展", "en": ["high-quality development"], "page": 64 },
+    { "cn": "供给侧结构性改革", "en": ["supply-side structural reform"], "page": 65 },
+    { "cn": "共同但有区别的责任原则", "en": ["the principle of common but differentiated responsibilities"], "page": 66 },
+    { "cn": "共同富裕", "en": ["common prosperity"], "page": 67 },
+    { "cn": "国内国际双循环", "en": ["positive interplay between domestic and international economic flows", "the domestic economy and international engagement providing mutual reinforcement"], "page": 67 },
+    { "cn": "国之大者", "en": ["matters of national significance", "the country's most fundamental interests"], "page": 68 }
+  ]
+}

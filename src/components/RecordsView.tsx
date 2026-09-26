@@ -36,7 +36,7 @@ export interface RecordView {
   direction: Direction
   topic: string
   attempt: number
-  /** 这一页在这一篇原文里的页号（从 0 开始）。术语题也是逐页的（一页五条） */
+  /** 这一页在这一篇原文里的页号（从 0 开始）。术语题也是逐页的（一页十条） */
   sectionIndex: number
   level: PolishLevel
   answer: string

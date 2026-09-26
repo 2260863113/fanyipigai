@@ -1,0 +1,18 @@
+{
+  "part": "core",
+  "pages": "p085-p092",
+  "sourceFile": "笔译参考书1-《理解当代中国 核心术语学习手册》.pdf",
+  "notes": "来源为扫描件 Windows OCR（仅中文引擎），本块是第二部分「术语解读」的 p085–p092。本部分版式与第一部分双栏不同：页首为「中文术语 + 以项目符号起头的英文译法（常被 OCR 断成 2–3 行）」+ 页码，其后是中/英解读段落；页眉作「第 二 部 分」「术 语 解 读」。本块只收「中文术语 ↔ 英文译法」，中文解读段落、英文解释段落（含「四个意识」「十一个坚持」「十一个明确」等长列表）、页眉、页码（p085 的 0、p086 的 70、p088 的 72、p089 的 73、p091 的 75、p092 的 76）全部未收。中文一律去字间空格，中文标点保留原样。p085–p092 共 10 条术语，按页序、页内自上而下排列，无重复。\n[订正登记：页码 原样 → 订正（依据）]\np085 Four-pronged / Comprehensive / Strategy → Four-pronged Comprehensive Strategy（OCR 把一条短语强制断成三行，按一条短语合并）。\np086 Consciousnesses → Four Consciousnesses（首词 Four 丢失；依据同页英文解读段两处 the Four Consciousnesses，以及本手册第一部分同一条「“四个意识”」的译法 Four Consciousnesses——上游复核后补回，详见下面 [存疑] 第一条）。\np087 Four Matters Of Confidence → Four Matters of Confidence（句中小写 of 被识成大写 Of；依据同页英文解读段 Four-sphere Confidence 及该书大写惯例）。\np087 · Four-sphere / Confidence → Four-sphere Confidence（跨行合并为一条译法，保留原书连字符）。\np088 peak carbon dioxide / emissions and carbon / neutrality → peak carbon dioxide emissions and carbon neutrality（跨行合并）。\np088 the great founding / spirit of the Party → the great founding spirit of the Party（跨行合并）。\np089 Five-sphere lntegrated Plan → Five-sphere Integrated Plan（lntegrated：小写 l 被识成大写 I；依据同页英文解读段 The Five-sphere Integrated Plan）。\np089 Xi Jinping Thoug ht on / the Rule of Law → Xi Jinping Thought on the Rule of Law（Thoug ht 被空格拆开；跨行合并）。\np091 Xi Jinping Thoug ht / on Strengthen ing the / MiIitary → Xi Jinping Thought on Strengthening the Military（Thoug ht→Thought、Strengthen ing→Strengthening 被空格拆开；MiIitary→Military，大写 I 误代小写 l；跨行合并）。\np091 木 语 解 读 → 术 语 解 读（页眉 OCR 错字，该行已作为页眉丢弃）。\np090、p092 译法行无 OCR 错误（Xi Jinping Thought on the Economy / Xi Jinping Thought on Eco-civilization 原样即正确，仅跨行合并）。\n[存疑]\n存疑（已由上游补全，见下）：p086「“四个意识”」的译法行 OCR 只剩 Consciousnesses，首词 Four 丢失或被扫描裁切。整理时按硬性要求 1「英文只能来自 OCR 文本」未擅自补全，保留 OCR 原样并登记在此。**上游据此复核后补回为 Four Consciousnesses**——依据是书里自己的两处原文，不是自译：① 同一页 p086 的英文解读段两次写作 the Four Consciousnesses；② 本书第一部分（contemporary-p041-048.json）同一条「“四个意识”」给的译法就是 Four Consciousnesses。\n存疑（配对）：p088 中文行 OCR 作「碳 达 峰 碳 中 和」（连写无分隔），对应英文为合并表述 peak carbon dioxide emissions and carbon neutrality。原书疑为「碳达峰」「碳中和」两条独立术语，被 OCR 并成一行/一条合并译法；本块按一条合并术语收录，无法在 OCR 文本内切分中英对应关系，读者勿据此认为官方把二者合并为一条术语。\n其余 8 条中英配对逐条核对一致（中文术语含义与英文译法指向同一事项），未发现错配。",
+  "entries": [
+    { "cn": "“四个全面”战略布局", "en": ["Four-pronged Comprehensive Strategy"], "page": 85 },
+    { "cn": "“四个意识”", "en": ["Four Consciousnesses"], "page": 86 },
+    { "cn": "“四个自信”", "en": ["Four-sphere Confidence", "Four Matters of Confidence"], "page": 87 },
+    { "cn": "碳达峰碳中和", "en": ["peak carbon dioxide emissions and carbon neutrality"], "page": 88 },
+    { "cn": "伟大建党精神", "en": ["the great founding spirit of the Party"], "page": 88 },
+    { "cn": "“五位一体”总体布局", "en": ["Five-sphere Integrated Plan"], "page": 89 },
+    { "cn": "习近平法治思想", "en": ["Xi Jinping Thought on the Rule of Law"], "page": 89 },
+    { "cn": "习近平经济思想", "en": ["Xi Jinping Thought on the Economy"], "page": 90 },
+    { "cn": "习近平强军思想", "en": ["Xi Jinping Thought on Strengthening the Military"], "page": 91 },
+    { "cn": "习近平生态文明思想", "en": ["Xi Jinping Thought on Eco-civilization"], "page": 92 }
+  ]
+}
