@@ -541,9 +541,19 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
         EXAM_ARTICLES.length > 0 && EXAM_ARTICLES.every((item) => examIds.has(item.domain)),
         `真题/样题共 ${EXAM_ARTICLES.length} 篇，领域只有 past-paper / sample`,
       )
+      // 标题格式（用户指定）：真题 2025 省赛 经济领域 | 简要概括的内容
+      const titlePattern = /^(真题|样题) \d{4}( [^ ]+)? (社会|经济|文化|生态|科技)领域 \| .+$/
+      const badTitles = EXAM_ARTICLES.filter((item) => !titlePattern.test(item.title))
       check(
-        EXAM_ARTICLES.every((item) => item.title.includes('来源：')),
-        '每一篇的标题末尾都写着来源文件（追得回是哪一份卷子）',
+        badTitles.length === 0,
+        '每篇的标题都是「真题/样题 年份 场次 话题领域 | 概括」这个形状',
+        badTitles.map((item) => item.title).join(' ／ '),
+      )
+      check(
+        EXAM_ARTICLES.every((item) =>
+          item.domain === 'past-paper' ? item.title.startsWith('真题 ') : item.title.startsWith('样题 '),
+        ),
+        '标题开头的「真题/样题」与它所在的领域一致',
       )
       const brokenParity = EXAM_ARTICLES.filter(
         (item) =>

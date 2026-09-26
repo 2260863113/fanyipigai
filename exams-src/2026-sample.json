@@ -2,19 +2,23 @@
   "slug": "2026-sample",
   "domain": "sample",
   "label": "2026 官方笔译样题（校赛、省赛）",
+  "year": 2026,
+  "stage": "",
   "sourceFile": "【2026】英语组笔译赛项校赛、省赛样题/【2026】英语组笔译赛项校赛、省赛样题.docx",
   "answerFile": "",
   "notes": "整理说明：(1) 这份是 docx 抽取，卷里只给了选词填空、完形填空、术语翻译及阐释的参考答案，英译汉与汉译英都没有答案，因此两篇的 reference 都是空字符串，没有拿别的材料代填。(2) 这两篇材料与 2024 年样题的英译汉、汉译英几乎相同：去掉空白后逐字比对，英译汉只差结尾（2024 版末句停在「social inclusion」，本版作「social inclusion objectives.」），汉译英文字完全相同（只差数字两侧的空格）。2024 样题自带官方解析译文（已整理在 exams-src/2024-sample.json 的两篇 reference 里），若要给本卷补 reference 可参照它，但那不是 2026 卷自己的官方答案，故未填入。(3) 卷里的选词填空、完形填空（两个选项框是远程图片，抽取只剩 HYPERLINK 域代码）、术语翻译及阐释都不是语篇正文，未收录；卷首「赛题样例及评分标准」标题与各题型说明也未收录。(4) 抽取文本里没有卷名与年份标题行，label、sourceFile 的年份按抽取文件名（2026英语组笔译赛项校赛_省赛样题.txt）推定，入库前宜与实际 docx 文件名核对。",
   "articles": [
     {
       "direction": "en-to-zh",
-      "title": "2026 年官方样题 · 英译汉：国际体育促进发展与和平日（联合国，校赛难度样题）",
+      "topic": "社会",
+      "summary": "国际体育促进发展与和平日",
       "text": "The International Day of Sport for Development and Peace (IDSDP), which takes place annually on April 6, presents an opportunity to recognize the positive role sport and physical activity play in communities and in people’s lives across the globe.\n\nThe global theme for 2024 is “Sport for the Promotion of Peaceful and Inclusive Societies”.\n\nIn observance of the International Day, on April 4 an event at UN Headquarters in New York will focus on how prominent sporting bodies engage in partnerships to make positive impacts for people and the environments in which they operate. It will bring together members of the international sporting community—including members of the United Nations Football for the Goals initiative—to share best practices, discuss challenges, and explore collaborative opportunities to drive positive social change and contribute to global efforts towards sustainable development and peace.\n\nThe United Nations has long recognized the power and universality of sport, using it to unite individuals and groups through supporting sport for development efforts, participating in events from the global to the grassroots level, and developing its own sports-related campaigns and initiatives.\n\nSport has proven to be a cost-effective and flexible tool in promoting peace and development objectives. In the 2030 Agenda for Sustainable Development sport’s role for social progress is further acknowledged. Sport is also an important enabler of sustainable development. We recognize the growing contribution of sport to the realization of development and peace in its promotion of tolerance and respect and the contributions it makes to the empowerment of women and of young people, individuals and communities as well as to health, education and social inclusion objectives.",
       "reference": ""
     },
     {
       "direction": "zh-to-en",
-      "title": "2026 年官方样题 · 汉译英：海关总署 2023 年前 4 个月外贸数据（校赛难度样题）",
+      "topic": "经济",
+      "summary": "海关总署外贸数据",
       "text": "海关总署发布的数据显示，2023年前4个月，我国进出口总值13.32万亿元，同比增长5.8%，进出口延续了向好态势。外贸进出口展现出较强韧性，为全年实现外贸促稳提质打下了基础。值得一提的是，今年前4个月，有进出口实绩的民营企业数量同比增加了8.9%，为拓宽就业渠道、稳定就业大盘发挥了积极作用。\n\n外贸平稳向好，得益于我国产业链水平不断提升。高技术、高附加值、引领绿色转型的产品领跑出口，表明我国外贸新动能不断培育壮大，更折射出供给侧结构性改革下，中国制造业迈向高端化、智能化、绿色化的坚实足迹。依靠科技创新与低碳转型，“中国制造”不断塑造和积累国际竞争新优势，中国经济高质量发展活力强劲。",
       "reference": ""
     }

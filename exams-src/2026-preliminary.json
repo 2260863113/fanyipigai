@@ -2,13 +2,16 @@
   "slug": "2026-preliminary",
   "domain": "past-paper",
   "label": "2026 年笔译初赛 5.13 公开赛第一场真题",
+  "year": 2026,
+  "stage": "公开赛",
   "sourceFile": "【2026】国才杯笔译真题（初赛）/2026笔译初赛5.13公开赛第一场真题.docx",
   "answerFile": "【2026】国才杯笔译真题（初赛）/2026外研社国才杯全国英语笔译大赛5.13答案解析.docx",
   "notes": "真题与答案解析分别取自该公开赛资料包中的两个 docx，文本抽取完整，除删去卷头（比赛名称、题号、分值、答题要求）与“TRANSLATION”“Cloze Test”等版式行外未作任何改动。该卷翻译部分只有一篇英译汉，没有汉译英，故只收录一篇。原文“the consequences are far reaching”中的 far reaching 未见连字符，系原卷写法，照录未改。答案文档未标注是否官方定稿。",
   "articles": [
     {
       "direction": "en-to-zh",
-      "title": "2026 年 5.13 公开赛第一场英译汉：全球固体垃圾管理与循环经济（Waste management and the circular economy）",
+      "topic": "生态",
+      "summary": "固体垃圾管理与循环经济",
       "text": "The world is at a critical juncture in managing its growing waste. Rapid population growth, accelerating urbanization, rising incomes, and increased consumption are driving a surge in municipal solid waste generation that is outpacing the capacity of local systems and municipal budgets. As a result, cities and communities worldwide are struggling to keep up with mounting quantities of waste. When waste is not managed well, the consequences are far reaching: environmental pollution intensifies, greenhouse gas emissions rise, and valuable natural resources are wasted. These threaten public health and the environment and undermine economic development and the livability of cities.\n\nYet, within the crises lies an opportunity. By investing in more efficient, inclusive, and sustainable waste management systems, countries can unlock new avenues for economic growth, job creation, and innovation. Improved waste management systems that embrace circular economy principles, where materials are reused and value is retained, can transform waste from a burden into a driver of sustainable development, benefiting both local communities and the global environment.\n\nSolid waste management lies at the nexus of local service delivery, livability, and economic development, and is increasingly central to global environmental sustainability. At the local level, it is essential to public health, environmental quality, climate resilience, and the functioning of cities. Effective, reliable, and inclusive waste services reduce the spread of disease, prevent contamination of water, soil, and air, mitigate flooding caused by blocked drainage, and support a safe, dignified urban environment.\n\nClean cities contribute to local economic development by enhancing competitiveness and strengthening the overall business environment. As cities transition toward more circular economies, where waste-derived materials are reintegrated into productive use, solid waste management is firmly established as a driver of investment, private sector participation, and job creation.",
       "reference": "世界正处于应对日益增长的垃圾问题的关键时刻。人口快速增长、城市化加速、收入水平上升以及消费增加，正在推动城市固体垃圾产生量的急剧上升，这一增长速度已经超过了地方系统和市政预算的承载能力。因此，全球各地的城市和社区都在努力应对不断增加的垃圾数量。如果垃圾管理不当，其后果将十分严重：环境污染加剧、温室气体排放上升、宝贵的自然资源被浪费。这些问题威胁着公共健康和环境安全，同时破坏经济发展和城市宜居性。\n\n然而，危机之中也蕴含机遇。通过投资建设更高效、包容且可持续的垃圾管理系统，各国可以开辟新的经济增长、就业创造和创新途径。改进后的垃圾管理系统如果遵循循环经济原则，使材料得到重复利用并保留价值，就能够将垃圾从负担转变为可持续发展的推动力，从而惠及地方社区和全球环境。\n\n固体垃圾管理处于地方服务提供、城市宜居性和经济发展交汇的关键位置，并日益成为全球环境可持续性的核心。在地方层面，它对于公共健康、环境质量、气候韧性以及城市运作至关重要。有效、可靠且包容的垃圾管理服务可以减少疾病传播、防止水体、土壤和空气污染、缓解因排水堵塞引起的洪涝，并支持一个安全、有尊严的城市环境。\n\n清洁的城市有助于地方经济发展，通过提升竞争力和增强整体营商环境实现。随着城市向更加循环的经济模式转型，将垃圾衍生材料重新纳入生产性使用，固体垃圾管理已经牢固确立为吸引投资、促进私营部门参与和创造就业的重要驱动力。"
     }

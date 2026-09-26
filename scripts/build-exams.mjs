@@ -42,6 +42,32 @@ const OUT_FILE = path.join(ROOT, 'src', 'domain', 'articles-data', 'exams.ts')
 const EXAM_DOMAINS = new Set(['past-paper', 'sample'])
 const DIRECTIONS = new Set(['en-to-zh', 'zh-to-en'])
 
+/** 领域名（拼标题用）。与 articles.ts 的 EXAM_DOMAINS 标签一致。 */
+const DOMAIN_LABEL = { 'past-paper': '真题', sample: '样题' }
+
+/**
+ * 篇目的话题领域，**只能**从这五个里挑（用户要求标题里带话题）。
+ * 注意它是"这篇材料讲的是什么"，与它被归到"真题/样题"那一格是两件事：
+ * 后者是**卷子的来源**，前者是**内容的话题**（见 ADR 0029）。
+ */
+const TOPICS = ['社会', '经济', '文化', '生态', '科技']
+
+/**
+ * 标题格式（用户指定）：
+ *
+ *   真题 2025 省赛 经济领域 | 简要概括的内容
+ *
+ * 也就是「卷子来源（真题/样题）+ 年份 + 场次（有才写）+ 话题领域 | 一句话概括」。
+ * 场次与话题是**材料里的零件**（json 的 stage 与 topic），标题由这里拼——
+ * 拼标题是机械活，不该由整理的人手写（手写必然长短不一）。
+ */
+function composeTitle({ domain, year, stage, topic, summary }) {
+  const parts = [DOMAIN_LABEL[domain], String(year)]
+  if (stage) parts.push(stage)
+  parts.push(`${topic}领域`)
+  return `${parts.join(' ')} | ${summary}`
+}
+
 /** 与 build-articles.mjs 同一套口径（英译中数词、中译英数非空白字符）。 */
 function countUnits(direction, text) {
   if (direction === 'en-to-zh') {
@@ -90,6 +116,10 @@ function main() {
     if (typeof doc.slug !== 'string' || !doc.slug) problems.push(`${file} 缺 slug`)
     if (!EXAM_DOMAINS.has(doc.domain)) problems.push(`${file} 的 domain 只能是 past-paper 或 sample，实际是 ${doc.domain}`)
     if (typeof doc.label !== 'string' || !doc.label.trim()) problems.push(`${file} 缺 label`)
+    if (!Number.isInteger(doc.year) || doc.year < 2020 || doc.year > 2100) {
+      problems.push(`${file} 的 year 必须是 2020–2100 的整数，实际是 ${JSON.stringify(doc.year)}`)
+    }
+    if (doc.stage !== undefined && typeof doc.stage !== 'string') problems.push(`${file} 的 stage 必须是字符串（没有就写空串）`)
     if (typeof doc.sourceFile !== 'string' || !doc.sourceFile.trim()) problems.push(`${file} 缺 sourceFile（要能追回是哪一份卷子）`)
     if (!Array.isArray(doc.articles)) {
       problems.push(`${file} 缺 articles 数组`)
@@ -103,7 +133,14 @@ function main() {
         problems.push(`${where} 的 direction 不合法：${item.direction}`)
         continue
       }
-      if (typeof item.title !== 'string' || !item.title.trim()) problems.push(`${where} 缺 title`)
+      if (!TOPICS.includes(item.topic)) {
+        problems.push(`${where} 的 topic 必须是 ${TOPICS.join('/')} 之一，实际是 ${JSON.stringify(item.topic)}`)
+      }
+      if (typeof item.summary !== 'string' || !item.summary.trim()) {
+        problems.push(`${where} 缺 summary（标题里"|"后面那句概括）`)
+      } else if (Array.from(item.summary).length > 40 || /[\n\r]/.test(item.summary)) {
+        problems.push(`${where} 的 summary 太长（限 40 字）或带了换行：${item.summary}`)
+      }
       if (typeof item.text !== 'string' || !item.text.trim()) {
         problems.push(`${where} 缺 text`)
         continue
@@ -120,7 +157,8 @@ function main() {
       if (refParas.length === 0) missingReference.push(`${doc.label} · ${item.direction}`)
       articles.push({
         direction: item.direction,
-        title: item.title.trim(),
+        topic: item.topic,
+        summary: typeof item.summary === 'string' ? item.summary.trim() : '',
         text: textParas.join('\n\n'),
         reference: refParas.join('\n\n'),
       })
@@ -128,12 +166,12 @@ function main() {
 
     /*
      * ⚠️ 一个方向**可以有多篇**：2023 那份卷子就只设汉译英、而且给了两篇语篇。
-     * 因此这里不限制"每方向一篇"，只挡真正的重复（同一份卷子里出现两个完全一样的标题）。
+     * 因此这里不限制"每方向一篇"，只挡真正的重复（同一份卷子里出现两个完全一样的概括）。
      */
     const seenTitles = new Set()
     for (const article of articles) {
-      const key = `${article.direction}｜${article.title}`
-      if (seenTitles.has(key)) problems.push(`${file} 里出现了重复的篇目：${article.title}`)
+      const key = `${article.direction}｜${article.summary}`
+      if (seenTitles.has(key)) problems.push(`${file} 里出现了重复的篇目：${article.summary}`)
       seenTitles.add(key)
     }
 
@@ -166,7 +204,14 @@ function main() {
         domain: paper.domain,
         direction: article.direction,
         batch: next,
-        title: `${article.title}｜来源：${paper.sourceFile}`,
+        // 标题由零件拼出来（见 composeTitle）：真题 2025 省赛 经济领域 | 简要概括的内容
+        title: composeTitle({
+          domain: paper.domain,
+          year: paper.year,
+          stage: paper.stage ?? '',
+          topic: article.topic,
+          summary: article.summary,
+        }),
         units: countUnits(article.direction, article.text),
         text: article.text,
         reference: article.reference,
@@ -185,7 +230,7 @@ function main() {
     const label = papers.find((paper) => paper.domain === domain)?.label ?? domain
     console.log(`  ${domain}：${mine.length} 篇（${mine.filter((row) => row.direction === 'en-to-zh').length} 英译中 / ${mine.filter((row) => row.direction === 'zh-to-en').length} 中译英）`)
     for (const row of mine) {
-      console.log(`    ${row.id}  ${row.units} ${row.direction === 'en-to-zh' ? '词' : '字'}  ${paragraphsOf(row.text).length} 段  ${row.reference ? '有译文' : '无译文'}  ${row.title.split('｜')[0]}`)
+      console.log(`    ${row.id}  ${row.units} ${row.direction === 'en-to-zh' ? '词' : '字'}  ${paragraphsOf(row.text).length} 段  ${row.reference ? '有译文' : '无译文'}  ${row.title}`)
     }
     void label
   }
@@ -204,12 +249,14 @@ function main() {
  *      原始文件来自：桌面\\下载\\【2026】外研社（国才杯）笔译赛项\\【2023-2026】笔译历年真题（校赛、初赛、省赛）
  *      与同级的\\【2023-2026】笔译（官方）样题，每篇的 \`title\` 末尾都写着它的来源文件。
  *
- * 每篇的字段见 domain/articles.ts 的 Article。四条约定与文章库一致：
+ * 每篇的字段见 domain/articles.ts 的 Article。五条约定与文章库一致：
  *   1. 正文与参考译文都是**全文**，段落之间留一个空行；两边段数**完全一致**（脚本强校验）。
  *   2. **原文逐字照录**，不改写不润色；抽取造成的错字订正记在 exams-src 的 notes 里。
  *   3. **参考译文只来自官方答案**，没有答案的篇目 reference 是空串——绝不自己翻译。
  *   4. \`units\` 与文章库同一套口径：英译中数词，中译英数非空白字符。
- */`
+ *   5. \`title\` 由零件拼出来，格式是「真题 2025 省赛 经济领域 | 简要概括的内容」：
+ *      卷子层给 year / stage，篇目层给 topic（社会/经济/文化/生态/科技）与 summary。
+ *      想改标题就改那两个字段，别改这个生成文件。*/`
 
   const body = rows
     .map((row) =>
