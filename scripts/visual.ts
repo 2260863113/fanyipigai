@@ -277,9 +277,22 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
         })
         await cdp.send('Page.navigate', { url: pageUrl })
 
+        /*
+         * 「界面挂载了没有」这个判据**手机端与桌面端不是同一个**（第 18 轮）。
+         *
+         * 桌面端一直是拿 `.mode-tabs` 当旗子。手机端（≤600px）那一条题型导航
+         * **长在侧边栏里**，而侧边栏一进来是收起的——那一刻 `.mode-tabs` 根本不在 DOM 里，
+         * 拿它当判据会一直等到超时（实测：`04-mobile` 报"界面没有挂载"）。
+         * 手机上该看的是最上面那条「三条横线 + 标题」（`.topbar-mobile`）。
+         *
+         * 阈值与别处一致：`Emulation.setDeviceMetricsOverride` 的 `mobile` 也是按
+         * `shot.width < 700` 开的（见上面那一行），因此这里用同一个 700 分界。
+         */
+        const mobile = shot.width < 700
+        const readySelector = mobile ? '.topbar-mobile' : '.mode-tabs'
         let mounted = false
         for (let i = 0; i < 60 && !mounted; i += 1) {
-          mounted = Boolean(await cdp.evaluate("!!document.querySelector('.mode-tabs')"))
+          mounted = Boolean(await cdp.evaluate(`!!document.querySelector(${JSON.stringify(readySelector)})`))
           if (!mounted) await sleep(250)
         }
         if (!mounted) return { ok: false, files, note: `${shot.name}：界面没有挂载` }
@@ -292,12 +305,31 @@ export async function captureScreens(shots: readonly ShotSpec[]): Promise<Screen
                const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
                const tab = ${JSON.stringify(shot.clickTab ?? '')};
                const caseName = ${JSON.stringify(shot.clickCase ?? '')};
+               const mobile = ${mobile ? 'true' : 'false'};
                if (tab) {
+                 /*
+                  * 手机端：题型标签在**收起的侧边栏**里，先点三条横线把它打开
+                  * （第 18 轮）。不打开的话下面那个 find 必然找不到，截图就会以
+                  * "找不到题型标签"这条看似是脚本的错、其实是版式变化的原因失败。
+                  */
+                 if (mobile && !document.querySelector('.mode-tabs')) {
+                   document.querySelector('.hamburger')?.click();
+                   await sleep(500);
+                 }
                  const btn = [...document.querySelectorAll('.mode-tab')]
                    .find((b) => b.textContent.trim() === tab);
                  if (!btn) return '找不到题型标签：' + tab;
                  btn.click();
                  await sleep(400);
+                 /*
+                  * 手机端点完标签，侧边栏**会自己收起**（用户要求"点任意一项就自动收起"），
+                  * 因此这里不用手动关；万一它还开着（比如以后改了那条行为），
+                  * 手动收一下，免得截出来半屏是侧边栏。
+                  */
+                 if (document.querySelector('.drawer')) {
+                   document.querySelector('.drawer-close')?.click();
+                   await sleep(400);
+                 }
                }
                if (caseName) {
                  /*

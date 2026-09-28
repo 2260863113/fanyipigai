@@ -20,6 +20,8 @@ import { GENERATION_TOPICS, type GeneratedExercise } from '../domain/generate'
 import type { JudgeFailureKind } from '../domain/ai'
 import { useSplitDrag } from './split-drag'
 import { useEqualPaneHeadHeights } from './pane-heads'
+import { useIsMobile } from './useIsMobile'
+import { MobileSidebar } from './MobileSidebar'
 import { resolveTheme, useSettings } from './settings'
 import { RecordsView, type RecordView } from './RecordsView'
 import { exerciseOf, loadCustom, newCustom, openCustom, saveCustomSource, type CustomExercise } from '../domain/custom'
@@ -40,7 +42,7 @@ import { INITIAL_SESSIONS, sessionOf, sessionReducer, type JudgeDraft } from './
 import { SettingsModal } from './SettingsModal'
 import { GenerateModal } from './GenerateModal'
 import { SourcePane } from './SourcePane'
-import { AnswerPane, PAGE_STATE_HINT, nextPageHint, type PageState } from './AnswerPane'
+import { AnswerPane, MobileSectionNav, PAGE_STATE_HINT, nextPageHint, type PageState } from './AnswerPane'
 import { AnswerViewSwitch } from './AnswerViewSwitch'
 import { CompareView } from './CompareView'
 import { ScorePane } from './ScorePane'
@@ -331,6 +333,32 @@ export function App(): JSX.Element {
    * 因此这里量一遍再拉平（见 pane-heads.ts）。
    */
   useEqualPaneHeadHeights(splitRef)
+  /**
+   * 手机端判据（第 18 轮）：见 `useIsMobile.ts`。
+   *
+   * 它同时管两件事：**界面结构**（顶栏换成三条横线、侧边栏、两栏在手机上不是"藏起来"
+   * 而是不渲染）与**原文栏那颗「选择」弹窗**。样式那一半落在 styles.css 末尾
+   * `@media (max-width: 600px)` 里；两处必须用同一个条件（那个文件里写着为什么）。
+   *
+   * ⚠️ 桌面端（>600px）走的仍是原来那条路，`isMobile` 为假时下面所有手机端分支
+   * 一个都不渲染——那正是"电脑端不要产生任何改变"这条要求落地的位置。
+   */
+  const isMobile = useIsMobile()
+  /** 侧边栏开着没有（只有手机端才有侧边栏，见 MobileSidebar） */
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  /** 原文栏那颗「选择」弹窗开着没有（手机端才有这一颗） */
+  const [mobileSelectOpen, setMobileSelectOpen] = useState(false)
+  /**
+   * 手机上换了题型/页面就把两个浮层收起来。
+   *
+   * 侧边栏自己会在点某一项时收起（`pick`），但还有一条来路：**切栏目的不是侧边栏**
+   * （比如登录门、错误提示把用户带到别处）。留一条兜底比逐个入口去补更省事。
+   * 同时把「选择」弹窗也收掉——它属于上一道题，切了栏目还挂着会让人以为没切成功。
+   */
+  useEffect(() => {
+    setDrawerOpen(false)
+    setMobileSelectOpen(false)
+  }, [tab, panel])
   /** 界面偏好：行距、是否显示填补的文字、译文看哪种视图、明暗主题（存 localStorage） */
   const { settings, update: updateSettings } = useSettings()
   /**
@@ -2005,26 +2033,59 @@ export function App(): JSX.Element {
         示例批改那句提醒搬进**结果栏**（见 AnswerPane 的那枚「示例批改」芯片）。
         删掉之后右上角最右边的就是「暗夜 · 设置」——`.topbar-right` 本来就是 `margin-left: auto`，
         因此不需要动布局。
+
+        ## 第 18 轮：手机上换成「三条横线 + 标题」
+
+        用户要求"导航栏的所有东西挪到侧边栏，最上方只保留『翻译批改』这个标题和
+        它左边的三条横线，点击三条横线可以打开侧边栏，然后进行选择"。
+        因此手机上**不渲染顶栏**（那六颗题型标签、留言板、账号下拉栏、暗夜、设置
+        全在 `MobileSidebar` 里）；桌面端仍是原来那一颗顶栏，**DOM 一个字都没动**
+        （验收脚本盯着 `.topbar-right .btn` 的顺序与 `.user-center` / `.user-menu`，
+        见 `verify-term-mode.mjs` 与 `verify-admin-ui.mjs`）。
       */}
-      <TopBar
-        tab={tab}
-        panel={panel}
-        user={auth.user}
-        isAdmin={auth.isAdmin}
-        onSelectTab={selectTab}
-        onSelectPanel={setPanel}
-        onOpenAuth={() => openAuth()}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onToggleTheme={() => updateSettings({ theme: theme === 'dark' ? 'light' : 'dark' })}
-        /* 下拉栏里那三项（第 17 条第 9 条）：改密码、管理三屏、退出登录 */
-        onChangePassword={() => setPasswordOpen(true)}
-        onOpenAdminView={(view: AdminTab) => {
-          setAdminTab(view)
-          setPanel('admin')
-        }}
-        onLogout={() => auth.logout()}
-        theme={theme}
-      />
+      {isMobile ? (
+        <MobileSidebar
+          open={drawerOpen}
+          onToggle={() => setDrawerOpen((open) => !open)}
+          onClose={() => setDrawerOpen(false)}
+          tab={tab}
+          panel={panel}
+          user={auth.user}
+          isAdmin={auth.isAdmin}
+          onSelectTab={selectTab}
+          onSelectPanel={setPanel}
+          onOpenAuth={() => openAuth()}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onToggleTheme={() => updateSettings({ theme: theme === 'dark' ? 'light' : 'dark' })}
+          onChangePassword={() => setPasswordOpen(true)}
+          onOpenAdminView={(view: AdminTab) => {
+            setAdminTab(view)
+            setPanel('admin')
+          }}
+          onLogout={() => auth.logout()}
+          theme={theme}
+        />
+      ) : (
+        <TopBar
+          tab={tab}
+          panel={panel}
+          user={auth.user}
+          isAdmin={auth.isAdmin}
+          onSelectTab={selectTab}
+          onSelectPanel={setPanel}
+          onOpenAuth={() => openAuth()}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onToggleTheme={() => updateSettings({ theme: theme === 'dark' ? 'light' : 'dark' })}
+          /* 下拉栏里那三项（第 17 条第 9 条）：改密码、管理三屏、退出登录 */
+          onChangePassword={() => setPasswordOpen(true)}
+          onOpenAdminView={(view: AdminTab) => {
+            setAdminTab(view)
+            setPanel('admin')
+          }}
+          onLogout={() => auth.logout()}
+          theme={theme}
+        />
+      )}
 
       {/*
         账号那三页（留言板 / 个人中心 / 管理）外面包一层 `.panel-page`：**整页滚动容器**。
@@ -2089,11 +2150,25 @@ export function App(): JSX.Element {
             少画一排的 DOM 与少画两条分隔条，语义上才是"这一模式下只有两栏"，
             也不会给可拖动的分隔条留一个拖不动的空位（`split-term` 那套样式因此只处理两栏）。
             别的题型一个字都不许动：那个 `{!isTermExercise && …}` 就是这条界线。
+
+            ⚠️ **第 18 轮：手机端在手机上再加一个类 `split-mobile`**（见 styles.css 末尾）。
+            那一段媒体查询里的东西**不用这一类也能选中**（媒体查询本身就够），
+            加它只是为了给"手机端专用"的规则一个明确的挂点，也便于验收脚本一眼认出
+            "现在走的是手机端那套版式"。
+
+            ⚠️ 还有一个 `data-result`：**屏幕上是批改结果**时写上（第 18 轮）。
+            手机端靠它切两套版式——编辑模式是"原文 1/4 · 我的译文 1/4 · 底部两行操作栏"
+            （整页锁死不许滚），批改视图是"两栏完全展开、有多长就多长"（整页可以滚）。
+            用户原话（意思）："批改视图下，我的译文和原文完全展开，有多长，就展开多长，
+            返回编辑模式时，才四分之一。"
+            判据与 `AnswerPane` 里那颗按钮写「提交批改」还是「返回编辑」**同一个**
+            （`shown !== null && !editing`：在看结果就展开），免得两处各判一次、判出两种结果。
           */}
           <main
             className={`split${split ? ' split-manual' : ''}${shown?.refine ? ' split-refine' : ''}${
               isTermExercise ? ' split-term' : ''
-            }`}
+            }${isMobile ? ' split-mobile' : ''}`}
+            {...(isMobile && shown !== null && !editing ? { 'data-result': 'on' } : null)}
             ref={splitRef}
             style={splitStyle}
           >
@@ -2183,6 +2258,20 @@ export function App(): JSX.Element {
                     },
                   }
                 : null)}
+              /*
+               * 手机端：原文栏标题栏里只剩一颗「选择」，其余控件整块收进它的弹窗
+               * （第 18 轮，用户点名"将原文标题栏的各个选项和下拉栏放到『选择』按钮"）。
+               * ⚠️ **桌面端不传**——标题栏那些控件照旧一条线排开，一个字都没动。
+               */
+              {...(isMobile
+                ? {
+                    mobileSelect: {
+                      on: mobileSelectOpen,
+                      onToggle: () => setMobileSelectOpen((open) => !open),
+                      onClose: () => setMobileSelectOpen(false),
+                    },
+                  }
+                : null)}
               onRotate={rotateSource}
               onOpenGenerator={openGenerator}
               {...(isTermExercise
@@ -2227,7 +2316,8 @@ export function App(): JSX.Element {
               因此这里没有了"点一条看右下角卡片"那一路：判完的官方译名就写在每一条右边。
             */}
             {isTermExercise ? (
-              <section className="pane pane-answer">
+              /* 手机端加一个 `pane-mobile`：标题栏那一行在手机上要整个让位给正文与底部操作栏 */
+              <section className={`pane pane-answer${isMobile ? ' pane-mobile' : ''}`}>
                 <header className="pane-head">
                   <h2>我的译文</h2>
                   <div className="head-meta">
@@ -2266,7 +2356,12 @@ export function App(): JSX.Element {
                     <span className="chip" title="术语题按官方译名由程序本地对照判分，不交给 AI、不用等、不花钱">
                       本地判分
                     </span>
-                    {termShowingResult ? (
+                    {/*
+                      ⚠️ 第 18 轮：手机上这几颗**标题栏里不画**，整组挪到下面那条
+                      底部的两行操作栏里（`.pane-foot.answer-foot`，与文章模式同一套）。
+                      判据是 `!isMobile`——桌面端的标题栏因此一个字都没动。
+                    */}
+                    {!isMobile && (termShowingResult ? (
                       <>
                         {/* 判完之后也能切视图（用户要求：术语提交后，像文章模式一样对比、批注） */}
                         {shown && <AnswerViewSwitch view={settings.answerView} onChange={updateSettings} />}
@@ -2320,10 +2415,29 @@ export function App(): JSX.Element {
                       >
                         提交批改
                       </button>
-                    )}
+                    ))}
                   </div>
                 </header>
                 <div className="pane-body">
+                  {/*
+                    第 18 轮：术语栏在手机上也要"批改视图下把翻页那一行钉在译文栏顶部"。
+                    它与文章模式那一条（见 AnswerPane）是同一件东西、同一个组件
+                    （`MobileSectionNav`）——术语题一页十条、同样是分页的，
+                    点击某一条也没有"翻页"以外的路可走。
+                  */}
+                  {isMobile && multiSection && termShowingResult && (
+                    <div className="pane-foot section-nav result-nav-sticky">
+                      <MobileSectionNav
+                        nav={{
+                          onSectionChange: (next: number) => void goToSection(next),
+                          sectionCount: sourceSections.length,
+                          nextHint: nextPageHint({ hasAnswer: currentAnswer.trim().length > 0, pageState }),
+                        }}
+                        sectionIndex={sectionIndex}
+                        pageState={pageState}
+                      />
+                    </div>
+                  )}
                   {notice && <p className="hint notice">{notice}</p>}
                   {termShowingResult && termVerdicts !== null ? (
                     settings.answerView === 'compare' && shown ? (
@@ -2355,6 +2469,78 @@ export function App(): JSX.Element {
                     />
                   )}
                 </div>
+                {/*
+                  第 18 轮：术语栏在手机上的底部操作栏（与文章模式那一套同构）。
+                  第一行是翻页（术语题一页十条、真的分页），第二行是「批改记录」与
+                  「提交批改 / 返回编辑」——它们在这条栏里出现，正是为了让标题栏那一行
+                  在手机上可以整个不画（用户要"屏幕上只有原文、输入框与输入法"）。
+                */}
+                {isMobile && (
+                  <footer className="pane-foot answer-foot" data-mobile-bar="answer">
+                    {multiSection && !termShowingResult && (
+                      <div className="section-nav">
+                        <MobileSectionNav
+                          nav={{
+                            onSectionChange: (next: number) => void goToSection(next),
+                            sectionCount: sourceSections.length,
+                            nextHint: nextPageHint({ hasAnswer: currentAnswer.trim().length > 0, pageState }),
+                          }}
+                          sectionIndex={sectionIndex}
+                          pageState={pageState}
+                        />
+                      </div>
+                    )}
+                    <div className="answer-actions">
+                      {gradeHistory.length > 0 && (
+                        <GradeHistoryPicker
+                          history={gradeHistory}
+                          viewingId={viewingGrade?.id ?? null}
+                          onView={(id) => {
+                            const record = gradeHistory.find((entry) => entry.id === id)
+                            setViewingGrade(exercise.id, sectionIndex, record?.id ?? null)
+                            setSelection(null)
+                            setNotice(null)
+                          }}
+                          onDelete={(id) => {
+                            const record = records.find((item) => item.id === id)
+                            if (record) deleteRecord(record)
+                          }}
+                        />
+                      )}
+                      {termShowingResult ? (
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => {
+                            setViewingGrade(exercise.id, sectionIndex, null)
+                            dispatchSession({ type: 'pageUnlocked', exerciseId: exercise.id })
+                            setOpenRecord(null)
+                            setSelection(null)
+                            setNotice(null)
+                          }}
+                        >
+                          返回编辑
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={submitTerms}
+                          disabled={judgingThisPage}
+                          title={
+                            allTermsAnswered
+                              ? `这一页 ${activeTerms.length} 条都写上了：判完会留下一条练习记录`
+                              : `没写满也能提交（还有 ${
+                                  activeTerms.length - answeredTermCount(termAnswers)
+                                } 条空着）；但只有 ${activeTerms.length} 条都答完才会留下练习记录`
+                          }
+                        >
+                          提交批改
+                        </button>
+                      )}
+                    </div>
+                  </footer>
+                )}
               </section>
             ) : (
             <AnswerPane
@@ -2424,6 +2610,29 @@ export function App(): JSX.Element {
               onSubmit={() => void submitPage(sectionIndex)}
               onSubmitFixture={submitFixture}
               onAnswerChange={updateAnswer}
+              /*
+               * 手机端那两行操作栏（第 18 轮）。
+               *
+               * `mobileNav` 只在手机端且这一题**真的分页**（`multiSection`）时才传——
+               * 手机上的下一组 `[data-nav]` 按钮就靠它画出来（原文栏那条页脚在手机上不渲染，
+               * 见 SourcePane 的说明）。单页题没有翻页可言，那一行整个不出现。
+               *
+               * ⚠️ 桌面端**两个都不传**：标题栏与底部那一行一个字都不变。
+               */
+              {...(isMobile
+                ? {
+                    mobile: true,
+                    ...(multiSection
+                      ? {
+                          mobileNav: {
+                            onSectionChange: (next: number) => void goToSection(next),
+                            sectionCount: sourceSections.length,
+                            nextHint: nextPageHint({ hasAnswer: currentAnswer.trim().length > 0, pageState }),
+                          },
+                        }
+                      : null),
+                  }
+                : null)}
               {...(practiceFavorite
                 ? {
                     favorite: favorites.some((item) => item.id === practiceFavorite.id),
@@ -2448,8 +2657,18 @@ export function App(): JSX.Element {
               术语题确实也不需要它们：译错的官方译名就写在每一条右边，
               分数与错误归类对"十条对错"没有更多信息（`/api/judge` 那套统计本来也不适用）。
               代价写在报告里：右下那条「收藏」入口跟着没了（它原先长在批注详情栏里）。
+
+              ⚠️ **第 18 轮：手机端也不画这一排**（判据 `isMobile`）。
+              用户原话："对于手机端，不显示总体评分栏和批注详情栏。"
+              与术语题同一条道理：在**结构上**就不渲染，而不是画出来再用 CSS 藏——
+              藏起来的话那一排 DOM 与两条分隔条都还在（`.splitter` 在手机上本来就被
+              `display: none` 掉了，但"拖不动的空抓手"仍然占位），
+              而用户要的是"手机上只有原文、输入框、输入法"这三样东西。
+              代价（用户确认过）：手机上**看不到分数与弱项统计**，
+              批注详情也看不到——点某处批注只弹那张小卡片（写"这是什么问题、为什么"），
+              点卡片外收起（见 CONTEXT.md 的「批注卡片」）。
             */}
-            {!isTermExercise && (
+            {!isTermExercise && !isMobile && (
               <>
                 <div
                   className="splitter splitter-h"

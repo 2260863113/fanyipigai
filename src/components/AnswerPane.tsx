@@ -122,6 +122,8 @@ export function AnswerPane({
   favorite,
   onToggleFavorite,
   sentenceFavorite,
+  mobile = false,
+  mobileNav = null,
 }: {
   shown: ShownCorrection | null
   layout: AnnotatedLayout
@@ -178,6 +180,30 @@ export function AnswerPane({
     favorited: (line: CompareLine) => boolean
     onToggle: (line: CompareLine) => void
   }
+  /**
+   * 手机端（第 18 轮）。
+   *
+   * 传真就按手机端那套画：标题栏里除了一颗「选择」以外什么都不画（与原文栏同一套做法，
+   * 由 styles.css 末尾那段媒体查询对 `h2` 与各控件收口），
+   * 底部多出**两行操作栏**（翻页那一行 + 提交/档位/批改记录那一行），
+   * 批改视图下翻页那一行还会**钉在译文栏顶部**（因为批改视图下整页可以滚，
+   * 底部那条会跟着内容沉到末尾，翻页就够不着了）。
+   *
+   * **桌面端不传**（默认 `false`）：标题栏与整条栏的 DOM 与改动前逐字相同。
+   */
+  mobile?: boolean
+  /**
+   * 手机端那两行操作栏要用的翻页控件（上一页 / 第 N 页 / 下一页）。
+   *
+   * 传了才画；不传（桌面端，或单页题）就没有那一行。
+   * ⚠️ 手机上原文栏**不再画**自己那条页脚（见 `SourcePane` 里 `!mobileSelect` 那一条），
+   * 因此全页只有**这一套** `[data-nav]` 按钮，不会与它撞车。
+   */
+  mobileNav?: {
+    onSectionChange: (index: number) => void
+    sectionCount: number
+    nextHint: string
+  } | null
 }): JSX.Element {
   const hasAnswer = currentAnswer.trim().length > 0
   /**
@@ -217,7 +243,7 @@ export function AnswerPane({
         : '先在这一页写下你的译文'
 
   return (
-    <section className="pane pane-answer">
+    <section className={`pane pane-answer${mobile ? ' pane-mobile' : ''}`}>
       <header className="pane-head">
         <h2>我的译文</h2>
         <div className="head-meta">
@@ -314,6 +340,22 @@ export function AnswerPane({
       {judgingThisPage && <JudgingProgress />}
 
       <div className="pane-body">
+        {/*
+          手机端：批改视图下把翻页那一行**钉在译文栏顶部**（第 18 轮）。
+
+          为什么要另画一份：批改视图下整页可以滚（用户要求"有多长就展开多长"），
+          底部那条操作栏跟着内容沉到末尾——一篇长译文想翻页就得先滑到底。
+          而桌面端那两颗按钮是钉在原文栏页脚里、永远不动的，手机上不该更差。
+          因此这一份只在**批改视图**下出现（编辑模式不画：那时底部那条就在眼前，
+          画两份等于同一页上有两处「下一页」）。
+          ⚠️ 它也是全页**唯一**一套 `[data-nav]` 按钮（原文栏那条页脚在手机上不渲染）。
+        */}
+        {mobile && multiSection && mobileNav && showingResult && (
+          <div className="pane-foot section-nav result-nav-sticky">
+            <MobileSectionNav nav={mobileNav} sectionIndex={sectionIndex} pageState={pageState} />
+          </div>
+        )}
+
         {error && (
           <div className="error-block">
             <strong>批改未完成：</strong>
@@ -372,9 +414,143 @@ export function AnswerPane({
           翻页导航**不在这里**——它挪到了左边「原文」那一栏（用户要求）。
           理由：翻页是为了换一段原文，人的眼睛在原文上；而这一栏是作答/结果，
           导航摆在这里会和「提交批改」挤在一起。
+
+          ⚠️ **手机端是例外**（第 18 轮，用户点名）：手机上那两颗按钮挪到这一栏底部的
+          两行操作栏里去了（下面那一段 `<footer>`），因为手机屏幕上"原文栏最下方"
+          离手指太远，而底部这一条永远在手边。
         */}
       </div>
+
+      {/*
+        手机端底部的**两行操作栏**（第 18 轮，用户点名）。
+
+        第一行：上一页 / 第 N 页 / 下一页——用户要求"将『下一页』『上一页』按钮放到我的译文栏目"。
+        第二行：提交批改（或返回编辑） / 精修·大改档位 / 批改记录——用户要求
+        "我的译文栏目按钮全部放到下面"。这一行在桌面端长在标题栏里（`head-meta`），
+        手机上标题栏整个不画（styles.css 里 `h2` 与标题栏那几样一起收口），
+        这些按钮全在这一行与「选择」弹窗里。
+
+        高度是算出来的（见 styles.css 末尾）：
+          译文栏 = 100% - 原文栏(1/4) - 底部这条两行
+        因此编辑模式下屏幕从上到下正好是「原文 1/4 · 我的译文 1/4 · 操作栏两行」——
+        用户要的"两栏各占屏幕高度的四分之一"就是靠这一条落地的
+        （剩下那半屏留给手机输入法，用户明确说过不用管输入法）。
+      */}
+      {mobile && (
+        <footer className="pane-foot answer-foot" data-mobile-bar="answer">
+          {mobileNav && multiSection && !showingResult && (
+            <div className="section-nav">
+              <MobileSectionNav nav={mobileNav} sectionIndex={sectionIndex} pageState={pageState} />
+            </div>
+          )}
+          {showAnswerControls && (
+            <div className="answer-actions">
+              {/* 精修 / 大改档位：桌面端它在标题栏里，手机上挪到这一行 */}
+              <div className="level-switch" role="group" aria-label="修改风格">
+                {(Object.keys(LEVEL_LABEL) as PolishLevel[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={key === level ? 'level-btn level-btn-active' : 'level-btn'}
+                    onClick={() => onLevelChange(key)}
+                    title={LEVEL_LABEL[key]}
+                  >
+                    {LEVEL_LABEL[key].split('（')[0]}
+                  </button>
+                ))}
+              </div>
+              {/* 批改记录下拉：桌面端也在标题栏里 */}
+              {gradeHistory.length > 0 && (
+                <GradeHistoryPicker
+                  history={gradeHistory}
+                  viewingId={viewingRecordId}
+                  onView={onViewAttempt}
+                  onDelete={onDeleteRecord}
+                />
+              )}
+              {/*
+                同一颗按钮、两个名字：屏幕上是结果就写「返回编辑」，
+                否则是「提交批改」。判据与标题栏里那一颗**完全共用**（`showingResult` / `frozen`）。
+              */}
+              {showingResult ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={onUnlock}
+                  title="回到这一页的作答框；改完自己按「提交批改」才会再批一次"
+                >
+                  返回编辑
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={onSubmit}
+                  disabled={!hasAnswer || blocked}
+                  title={submitTitle}
+                >
+                  {judgingThisPage ? '批改中…' : '提交批改'}
+                </button>
+              )}
+            </div>
+          )}
+        </footer>
+      )}
     </section>
+  )
+}
+
+/**
+ * 手机端那一套翻页按钮（上一页 / 第 N 页 / 下一页）。
+ *
+ * 三个节点与桌面端原文栏页脚里那一份**逐字同构**（同样的 `data-nav="prev"` /
+ * `data-nav="next"` 与同一句「第 N / M 页 · 状态」），因此验收脚本可以照桌面端那套
+ * 选择器去点它；文案也照旧（`← 上一页` / `下一页 →`）。
+ *
+ * ## 为什么单独抽成一个组件
+ *
+ * 它在**三处**被用到，而且三处分属两个组件：
+ *   - `AnswerPane` 底部操作栏的第一行（编辑模式下）；
+ *   - `AnswerPane` 译文栏顶部那条钉住的行（批改视图下）；
+ *   - **术语栏**的底部操作栏（术语题那一块在 `App.tsx` 里是单独渲染的，
+ *     见那边 `isTermExercise ? …` 那一段，不经过 `AnswerPane`）。
+ * 前两处本来共用同一个局部函数，第三处一旦要接进来，就只能把它提到模块级
+ * ——否则术语栏那一档在手机上就没有翻页按钮（实测：批改视图下 `[data-nav]` 一个都找不到）。
+ */
+export function MobileSectionNav({
+  nav,
+  sectionIndex,
+  pageState,
+}: {
+  nav: { onSectionChange: (index: number) => void; sectionCount: number; nextHint: string }
+  sectionIndex: number
+  pageState: PageState
+}): JSX.Element {
+  return (
+    <>
+      <button
+        type="button"
+        className="btn"
+        onClick={() => nav.onSectionChange(Math.max(0, sectionIndex - 1))}
+        data-nav="prev"
+        disabled={sectionIndex === 0}
+      >
+        ← 上一页
+      </button>
+      <span className="hint">
+        第 {sectionIndex + 1} / {nav.sectionCount} 页 · {PAGE_STATE_HINT[pageState]}
+      </span>
+      <button
+        type="button"
+        className="btn"
+        onClick={() => nav.onSectionChange(Math.min(nav.sectionCount - 1, sectionIndex + 1))}
+        data-nav="next"
+        disabled={sectionIndex >= nav.sectionCount - 1}
+        title={nav.nextHint}
+      >
+        下一页 →
+      </button>
+    </>
   )
 }
 

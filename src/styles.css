@@ -3342,3 +3342,614 @@ button {
   line-height: 1.5;
   word-break: break-all;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ── 手机端（第 18 轮，600px 及以下）─────────────────────────────────────
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * ## 这一段与上面那条 `@media (max-width: 900px)` 的关系
+ *
+ * 那一整段是**上一代"窄屏"**：它把四栏改成上下叠放、让整页自由滚动，
+ * 但导航栏、总评栏、批注栏都还在，只是排成了一列。用户这次要的是**手机端**，
+ * 与它不是一个东西。按用户拍板（"只管 600px 及以下，900px 那条一个字不动"）：
+ *
+ *   - **> 900px**：桌面端，一个字没动；
+ *   - **601–900px**：照旧走上面那一段（平板与窄窗口的现状）；
+ *   - **≤ 600px**：走这一段。
+ *
+ * ⚠️ 断点数字**必须与 `src/components/useIsMobile.ts` 里那句 `MOBILE_QUERY` 一致**。
+ * 那一边管的是"结构"（顶栏换成三条横线、总评栏与批注详情栏整个不渲染、
+ * 原文栏那颗「选择」弹窗），这一边管的是"样式"。两边条件写岔了就会出现
+ * 半截状态：结构按手机来、样式按桌面来（或者反过来），屏幕上看着就是坏的。
+ * 样式写在文件**末尾**是有意的：那一段 900px 的规则与这一段同时命中时
+ * （600px 以下两者都命中），靠"后来者胜"让这一段的声明赢——两边特异性相同。
+ *
+ * ## 用户对手机端的要求（逐条落在哪）
+ *
+ * 1. 「导航栏的所有东西挪到侧边栏，最上方只保留标题和它左边的三条横线」
+ *    → 顶栏换成 `.topbar-mobile` + `.drawer*`（见 MobileSidebar.tsx）。
+ * 2. 「不显示总体评分栏和批注详情栏」
+ *    → 那两栏在 App.tsx 里**根本不渲染**（不是这里藏），这一段只补一句
+ *      "万一它还在（别人改了那个判据）也不占地方"的兜底。
+ * 3. 「原文标题栏的各个选项和下拉栏放到『选择』按钮，点它弹窗弹出」
+ *    → 标题栏里除 `h2` 与 `.mobile-select-open` 以外全收口；
+ *      弹窗那几条写在下面 `.select-modal` 一段。
+ * 4. 「下一页/上一页放到我的译文栏目，去掉我的译文标题栏这一行」
+ *    → 标题栏里的 `h2` 与 `.head-meta` 一起收口；底部两行操作栏见
+ *      `.answer-foot`（翻页一行 + 提交/档位/批改记录一行）。
+ * 5. 「最终屏幕上只有原文、输入框和用户手机输入法三样东西，两栏中间只用一条分割线」
+ *    → 见下面"四等份"那一段。
+ * 6. 「弹出框适配手机屏幕」→ `.select-modal` 那一段。
+ */
+
+@media (max-width: 600px) {
+  /* ── 一、整页锁住：画面就是屏幕本身，只有栏内滚 ─────────────────────
+   *
+   * `.app` 本来就是 `height: 100%`（= 视口高）加 `overflow: hidden`，
+   * 手机端**保持原样**——这正是"两栏各占屏幕四分之一"能成立的前提：
+   * 整页一旦能滚，内容一长就会把另一栏顶出去（用户选的正是"编辑模式严格不许整页滚动"）。
+   *
+   * ⚠️ **批改视图是例外**（下面 `.split-mobile` 那一段会放开）：
+   * 用户要求"批改视图下我的译文和原文完全展开，有多长就展开多长"，
+   * 那就必然要允许整页滚动。
+   */
+
+  /* ── 二、顶栏换成「三条横线 + 标题」，其余全在侧边栏里 ─────────────── */
+
+  .topbar-mobile {
+    height: var(--topbar-h);
+    flex-wrap: nowrap;
+    gap: 12px;
+    padding: 0 14px;
+  }
+
+  .topbar-mobile h1 {
+    margin: 0;
+    font-size: 17px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
+  /*
+   * 三条横线。做够 44px 见方是**手指**的要求（40px 以下容易点不中），
+   * 而不是好看的要求：它是手机端唯一的常驻入口。
+   */
+  .hamburger {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    margin-left: -8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .hamburger:active {
+    background: var(--accent-tint);
+  }
+
+  /* 三条横线的字形里那条竖线的位置需要一点微调（不同字体差一两个像素） */
+  .hamburger span {
+    display: block;
+    transform: translateY(-1px);
+  }
+
+  /* ── 三、侧边栏（抽屉）───────────────────────────────────────────── */
+
+  .drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(15, 23, 42, 0.42);
+  }
+
+  .drawer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(84vw, 320px);
+    display: flex;
+    flex-direction: column;
+    background: var(--paper);
+    border-right: 1px solid var(--line);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.28);
+    /* 整个侧边栏自己可以滚：小屏手机上六颗题型 + 账号 + 两枚按钮放不下 */
+    overflow-y: auto;
+  }
+
+  .drawer-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 12px 12px 12px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .drawer-head h2 {
+    margin: 0;
+    font-size: 16px;
+    letter-spacing: 0.02em;
+  }
+
+  .drawer-close {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink-faint);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .drawer-close:active {
+    background: var(--accent-tint);
+  }
+
+  /*
+   * 六个题型 + 留言板：**竖排、整宽**。
+   *
+   * 这里覆盖的是 `.mode-tab` 自己在桌面端那套（横排、18px 左右内边距、圆角药丸），
+   * 因此手机上点起来是"一整行都是按钮"，而不是一排挤在一起的小标签。
+   */
+  .drawer-nav {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+  }
+
+  .drawer-nav .mode-tab {
+    width: 100%;
+    text-align: left;
+    padding: 11px 14px;
+    border-radius: 8px;
+    font-size: 15px;
+  }
+
+  .drawer-foot {
+    flex: none;
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid var(--line);
+  }
+
+  /* 账号那一组在侧边栏里也是整宽：`.user-center-wrap` 在桌面端是 `position: relative` 的浮层锚点 */
+  .drawer-foot .user-center-wrap {
+    width: 100%;
+  }
+
+  .drawer-foot .user-center {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  /* 菜单在侧边栏里往**下**展开（桌面端它是绝对定位挂在按钮下面，会溢出到侧边栏外） */
+  .drawer-foot .user-menu {
+    position: static;
+    width: 100%;
+    margin-top: 6px;
+    box-shadow: none;
+  }
+
+  .drawer-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .drawer-actions .btn {
+    flex: 1 1 0;
+  }
+
+  /* ── 四、版式：原文 1/4 · 我的译文 1/4 · 底部两行操作栏 ────────────
+   *
+   * 这是用户要的那条"三分法"：
+   *   ┌─────────────────────┐
+   *   │ 原文（屏幕的 1/4）    │  ← 栏内自己滚
+   *   ├─────────────────────┤  ← 两栏之间**只有这一条分割线**，没有任何文字
+   *   │ 我的译文（屏幕 1/4）  │  ← 编辑时是输入框，有结果时可切批改视图
+   *   ├─────────────────────┤
+   *   │ 上一页 第N页 下一页   │  ← 操作栏第一行
+   *   │ 提交/返回编辑 档位 记录│  ← 操作栏第二行
+   *   └─────────────────────┘
+   *   剩下的这半屏高度留给手机输入法（用户明确："剩下二分之一留给输入法"，
+   *   并且选了"按屏幕高度算一半，不管键盘"——因此这里**不去监听输入法高度**，
+   *   也不给 index.html 的 viewport 加 `interactive-widget`：
+   *   加了之后输入法会真的压缩页面，反而会打乱这个固定布局）。
+   *
+   * ⚠️ 上下两排的 `max-height` 必须显式写成 `none`：上面那条 900px 的规则
+   * 已经写过一次 `max-height: none`，而 `.split-row-top` 在自己的规则里还有一个
+   * `max-height: 88%`——不写这一句，`height` 会被它按比例截掉一截。
+   */
+  .split-mobile,
+  .split-mobile.split-term,
+  .split-mobile.split-manual {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .split-mobile > .split-row-top,
+  .split-mobile.split-term > .split-row-top,
+  .split-mobile.split-manual > .split-row-top {
+    /*
+     * **上下叠放**（不是桌面端那种左右并排）。
+     *
+     * 手机屏窄，两栏并排时每栏只剩半个屏宽，一行放不下几个字——用户要的
+     * "从上到下依次是原文、输入框和手机输入法"正是上下叠放。
+     */
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    /* 完整的一屏高；下面两格各占一半（= 屏幕的 1/4 各自），见 `.split-row` 那条 */
+    height: 100dvh;
+    min-height: 0;
+    max-height: none;
+    gap: 0;
+  }
+
+  /*
+   * 上排里那两栏各占**屏幕的 1/4**（`--split-mobile-half`）。
+   *
+   * 1/4 = `50vh / 2`，写成 `calc(50dvh / 2)` 是为了让"一半"这件事在代码里看得见：
+   * 用户的原话是"两栏高度都设成（手机高度 - 输入法高度）/ 2"，
+   * 而他选的算法是"按屏幕高度算一半，不管键盘"——也就是每栏屏幕的四分之一。
+   * 剩下那半屏留给手机输入法（系统的输入法会盖在下面那半屏上）。
+   *
+   * ⚠️ 两个 `flex-basis` 必须写成这种形式：`.split-row > .pane` 在桌面端是
+   * `flex: 1 1 0`，直接写 `height` 会因为 flex 拉伸而失效（实测最容易踩的一处）。
+   */
+  .split-mobile > .split-row-top > .pane {
+    flex: 0 0 calc(50dvh / 2);
+    min-height: 0;
+    min-width: 0;
+  }
+
+  /* 大改档（`.split-refine`）在手机上不摆那张三列网格，退回普通的两栏 */
+  .split-mobile.split-refine,
+  .split-mobile.split-refine > .split-row-top,
+  .split-mobile.split-refine > .split-row-bottom {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /*
+   * **两栏之间那条分割线**（用户："原文和我的译文栏目中间仅仅用一条分割线分割，
+   * 不要有其他任何文字"）。
+   *
+   * 只画**一条**：`.pane` 自己在桌面端带 `border-bottom`，若两栏各留一条，
+   * 屏幕上就会出现两条线——因此把两栏的底边都去掉，只在译文栏的**顶边**画那一条。
+   */
+  .split-mobile .pane-source {
+    border-bottom: none;
+  }
+
+  .split-mobile .pane-answer {
+    border-top: 1px solid var(--line);
+    border-bottom: none;
+  }
+
+  /* ── 五、原文栏：标题栏只剩「原文 + 选择」 ───────────────────────── */
+
+  /*
+   * 标题栏里那一组控件整块收进「选择」弹窗（用户第 3 条）。
+   *
+   * ⚠️ 这里用 `display: none` 而不是"不渲染"，是为了**一份 JSX 两处用**
+   * （`SourcePane` 里 `headControls` 同时喂给标题栏与弹窗，
+   * 见那个文件里对 `headControls` 的说明）：弹窗里那一份是同一段代码渲染的，
+   * 藏起来的只是标题栏这一份。手机上标题栏里真正显示的就两样：
+   * `h2` 与 `.mobile-select-open`。
+   */
+  .pane-source .head-meta {
+    display: none;
+  }
+
+  .mobile-select-open {
+    margin-left: auto;
+    flex: none;
+  }
+
+  /* 标题栏矮一点：手机屏幕上每一像素都要留给正文 */
+  .split-mobile .pane-head {
+    min-height: 0;
+    padding: 6px 12px;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+
+  /* 原文栏那条页脚在手机上不渲染（见 SourcePane），这里只是把它的高度让给正文 */
+  .split-mobile .pane-source .pane-foot {
+    display: none;
+  }
+
+  /* 两栏的正文自己滚、不画滚动条（与桌面端同一条口径，见 `.pane-body`） */
+  .split-mobile .pane-body {
+    padding: 10px 12px;
+  }
+
+  /* ── 六、我的译文栏：标题栏整行去掉，底部两行操作栏 ─────────────── */
+
+  /*
+   * 用户第 4 条："去掉我的译文这个标题栏这一行。"
+   *
+   * 整行 `display: none`（`h2` 与 `.head-meta` 一起），里面的东西一件都没丢：
+   *   - 「提交批改 / 返回编辑」「精修 / 大改」「批改记录」→ 下面 `.answer-actions`；
+   *   - 「勾画 / 对照」视图开关 → 「选择」弹窗不是它的家（那是原文栏的），
+   *     手机上它跟着批改结果走：`.pane-mobile` 那一条把它留在结果区上方。
+   *     ⚠️ 见本段末尾那条已知取舍。
+   */
+  .pane-mobile > .pane-head {
+    display: none;
+  }
+
+  .split-mobile .pane-answer .pane-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* 编辑模式下的输入框：撑满这一格（1/4 屏） */
+  .split-mobile .answer-input-fill {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  /*
+   * 底部两行操作栏（用户第 4 条：把「下一页/上一页」与「我的译文」那一行按钮都放到下面）。
+   * 它是译文栏的页脚，因此**宽度就是译文栏**，永远在屏幕上那一格的最下方。
+   */
+  .answer-foot {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 10px;
+    /* 手机浏览器底部那条系统手势条：留一条安全区，免得按钮贴得太深点不到 */
+    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    background: var(--paper);
+    border-top: 1px solid var(--line);
+  }
+
+  /* 第一行：翻页（与桌面端原文栏页脚同一套排版，只是间距更紧） */
+  .answer-foot .section-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .answer-foot .section-nav .hint {
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* 第二行：提交/返回编辑 + 精修·大改 + 批改记录 */
+  .answer-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .answer-actions .level-switch {
+    flex: none;
+  }
+
+  /* 提交那一颗占掉剩下的宽度，成为这一行最显眼的（拇指最好按的也是它） */
+  .answer-actions > .btn-primary {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  /*
+   * 批改视图下**钉在译文栏顶部**的那一条翻页（用户："就是这样"）。
+   *
+   * 为什么要钉：批改视图下整页可以滚（用户要求"有多长就展开多长"），
+   * 底部那条操作栏会跟着内容沉到末尾——一篇长译文想翻页就得先滑到底。
+   * 而桌面端那两颗按钮是钉在原文栏页脚里、永远不动的，手机上不该更差。
+   * 它待在 `.pane-body`（滚动容器）里，因此 `position: sticky` 钉的是这一栏的顶边。
+   */
+  .pane-body > .result-nav-sticky {
+    position: sticky;
+    top: -10px; /* 抵消 .pane-body 的上内边距，贴住栏顶 */
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: -10px -12px 0;
+    padding: 6px 12px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .pane-body > .result-nav-sticky .hint {
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /*
+   * ⚠️ 已知取舍（用户确认过）：手机上**看不到总体评分与批注详情**。
+   * 那两栏在 App.tsx 里根本不渲染（判据 `!isMobile`），下面这两句只是兜底：
+   * 万一那个判据以后被改掉，这两栏在手机上也别占地方。
+   */
+  .split-mobile .pane-score,
+  .split-mobile .pane-notes {
+    display: none;
+  }
+
+  /* 底部分隔条与其它页脚同理（手机上不画，省一行高） */
+  .split-mobile > .splitter {
+    display: none;
+  }
+
+  /* ── 七、批改视图：两栏「有多长就展开多长」，整页可以滚 ───────────── */
+
+  /*
+   * 用户原话（意思）："当批改结果出来之后，批改视图下，我的译文和原文完全展开，
+   * 有多长，就展开多长，返回编辑模式时才四分之一。"
+   *
+   * 因此这一档把上面那个固定的 `25dvh` 换成"按内容定高"：
+   *   - 两排的 `height: auto` + `flex: none` → 谁都不压缩谁，整排就是内容高度；
+   *   - `.split-mobile` 自己放开 `overflow`、改成"按内容长"→ 整页可以滚。
+   *
+   * ⚠️ 判据是 `data-result`（由 App 写在 `main.split-mobile` 上），而不是
+   * "有没有 `.answer-foot`"之类间接的东西：一个显式的属性最不容易在以后被改坏。
+   */
+  .split-mobile[data-result] {
+    height: auto;
+    min-height: 100%;
+  }
+
+  .split-mobile[data-result] > .split-row-top {
+    height: auto;
+    flex: none;
+  }
+
+  /* 展开时两栏按内容定高（"有多长就多长"） */
+  .split-mobile[data-result] > .split-row-top > .pane {
+    flex: 0 0 auto;
+  }
+
+  /*
+   * 批改视图下两栏各自的"最小高度"去掉：内容短的时候也不留一大块空白
+   * （用户要的是"有多长就多长"，不是"至少半屏"）。
+   */
+  .split-mobile[data-result] .pane-body {
+    overflow-y: visible;
+  }
+
+  /* ── 八、弹窗适配手机屏幕（用户第 6 条）──────────────────────────── */
+
+  /*
+   * 全站弹窗本来就靠 `min(760px, 100%)` 这类写法自适应宽度，缺的是**手机上的余量**：
+   * `padding: 24px` 的backdrop 在 375px 宽的屏幕上只剩 327px 可用，
+   * 而 `max-height: min(640px, 100%)` 又会顶到顶边（手机屏高常常只有 667px，
+   * 还要减去浏览器自己的地址栏）。
+   *
+   * 因此手机上一律：`padding` 收窄、弹窗占满可用宽度、限高按**动态视口**算、
+   * 内部自己滚。`dvh` 是关键——用 `vh` 时手机浏览器那条地址栏会被算进高度里，
+   * 弹窗底部（那里正好是"关闭/确定"这类按钮）会被压到地址栏下面看不见。
+   */
+  .raw-modal-backdrop {
+    padding: 10px;
+    align-items: flex-start;
+  }
+
+  .raw-modal,
+  .raw-modal.gen-modal,
+  .raw-modal.gen-modal:has(.scope-table-wrap) {
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - 20px);
+  }
+
+  /* 弹窗内部滚（`.raw-modal-body` / `.gen-body` 本来就是 `overflow: auto`） */
+  .gen-body,
+  .raw-modal-body {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /*
+   * 「选择」弹窗：里面装的是原文标题栏那一组控件（下拉框、按钮、芯片），
+   * 竖排、整宽——手指点起来是"一行一个"，而不是桌面端那种挤在一条线上的药丸。
+   */
+  .select-modal {
+    width: 100%;
+  }
+
+  .select-body {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    max-height: calc(100dvh - 120px);
+    overflow-y: auto;
+  }
+
+  /*
+   * 弹窗里那几样控件整宽。
+   *
+   * ⚠️ `.domain-select` / `.direction-switch` / `.term-scope-select` 这几个类名是
+   * 从样式表里数出来的（`DomainSelect.tsx` / `TermScopeSelect.tsx` 的根元素），
+   * 不是"sans-serif"式的泛化选择器——泛化会把弹窗里每一颗按钮都拉满，
+   * 包括 `raw-modal-close` 那颗叉号（它就不该整宽）。
+   */
+  .select-body > .btn,
+  .select-body > .chip,
+  .select-body > .domain-select,
+  .select-body > .direction-switch,
+  .select-body > .term-scope-select,
+  .select-body .domain-select > button,
+  .select-body .term-scope-select > button,
+  .select-body .direction-switch > button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* 下拉框展开出来的那层菜单（`.domain-menu`）在弹窗里不该伸到屏幕外 */
+  .select-body .domain-menu {
+    left: 0;
+    right: 0;
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* 信息芯片（「自动判定 · 中译英 · 段落题」）在弹窗里整宽、可以折行 */
+  .select-body .chip {
+    white-space: normal;
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  /* 账号弹窗（`.auth-card`）与改密码也照同一条口径 */
+  .auth-card {
+    width: 100%;
+    max-height: calc(100dvh - 20px);
+    overflow-y: auto;
+  }
+
+  /* ── 九、另外两处浮层 ───────────────────────────────────────────── */
+
+  /*
+   * 批注小卡片：手机上本来就被 `AnnotationText.tsx` 按 `window.innerWidth` 夹住
+   * （`Math.max(180, Math.min(380, …))`），这里再钉一条下限，免得窄屏上它贴边太紧。
+   */
+  .anno-bubble,
+  .detail {
+    max-width: calc(100vw - 16px);
+  }
+
+  /* 右下角那条"这一页批完了"的通知：手机上别把底部的操作栏压住 */
+  .judge-done-toast {
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    left: auto;
+    max-width: calc(100vw - 20px);
+  }
+
+  /* 底部居中的吐司同理（手机上它正好落在操作栏那两行上面） */
+  .toast {
+    max-width: calc(100vw - 20px);
+  }
+}
+

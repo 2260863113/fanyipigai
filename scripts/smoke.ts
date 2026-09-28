@@ -3155,7 +3155,15 @@ export async function runSmokeTests(): Promise<{ checks: number; failures: numbe
       { name: '01-compose', width: 1600, height: 950, action: 'plain', clickTab: '句子' },
       { name: '02-result', width: 1600, height: 950, action: 'submit', exerciseId: shotExerciseId, clickTab: '句子', clickMark: 0 },
       { name: '03-marks', width: 1600, height: 950, action: 'submit', exerciseId: shotExerciseId, clickTab: '句子', clickMark: 0 },
-      { name: '04-mobile', width: 420, height: 900, action: 'plain' },
+      /*
+       * 手机那一张（第 18 轮起它拍的是**手机端版式**，不再是"四栏叠放"）。
+       *
+       * 用 375×667（iPhone SE/8 那一档）而不是原来的 420×900：断点写死在 600px
+       * （手机上要"两栏各占屏幕 1/4"，那是为真正的小屏定的一档），420 与 375 都在断点内，
+       * 但 667 这个高度更接近真实手机，也更能暴露"四分之一屏"这类跟高度有关的问题。
+       * 420 那一档仍覆盖在 601–900px 那条老窄屏规则里（那一档这一轮一个字没动）。
+       */
+      { name: '04-mobile', width: 375, height: 667, action: 'plain' },
     ])
     /*
      * 环境不具备时**跳过**，不算失败：

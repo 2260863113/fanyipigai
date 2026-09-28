@@ -31,13 +31,22 @@
  *
  * 三条都按它那边的手法：点菜单项、点页面别处、按 Esc。少了"点别处"与 Esc 的话，
  * 菜单会一直挂在屏幕上挡住下面那颗「设置」按钮（实测过）。
+ *
+ * ## 第 18 轮：这一整排控件在手机上收进侧边栏
+ *
+ * 手机端（≤600px，见 styles.css 末尾那一段）要求"导航栏的所有东西挪到侧边栏，
+ * 最上方只保留标题与三条横线"。因此：
+ *   - 本组件在手机上**不渲染**（由 `App` 按 `useIsMobile` 决定），
+ *     手机上渲染的是 `MobileSidebar`；
+ *   - 账号那一组控件**搬进了 `AccountControl.tsx`**，两处共用同一份
+ *     （DOM 与类名逐字没动，桌面端那些盯着 `.user-center` / `.user-menu` 的验收照旧）。
  */
 
-import { useEffect, useRef, useState, type JSX } from 'react'
+import type { JSX } from 'react'
 import { VISIBLE_MODE_TABS, type Mode } from '../domain/types'
 import type { PublicUser } from './auth/api'
-import { initialOf } from './auth/format'
-import { ADMIN_TABS, type AdminTab } from './admin-tabs'
+import type { AdminTab } from './admin-tabs'
+import { AccountControl } from './AccountControl'
 
 /** 顶栏导航的取值：四类题型 + 三个独立页面（它们不是题型）。 */
 export type NavTab = Mode | 'records' | 'custom' | 'favorites'
@@ -80,37 +89,6 @@ export function TopBar({
   /** **当前实际生效**的主题（可能是跟随系统算出来的），按钮文案由它决定 */
   theme: 'light' | 'dark'
 }): JSX.Element {
-  const [menuOpen, setMenuOpen] = useState(false)
-  const wrapRef = useRef<HTMLDivElement | null>(null)
-
-  /* 点别处、按 Esc 都收起来；菜单开着的时候才挂监听（不然每次点界面都要跑一遍） */
-  useEffect(() => {
-    if (!menuOpen) return
-    const onPointerDown = (event: PointerEvent): void => {
-      if (!wrapRef.current?.contains(event.target as Node)) setMenuOpen(false)
-    }
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setMenuOpen(false)
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [menuOpen])
-
-  /* 退出登录之后菜单不该还开着——那时下拉栏里已经没有一项能点了 */
-  useEffect(() => {
-    if (!user) setMenuOpen(false)
-  }, [user])
-
-  /** 点菜单里的一项：先收起菜单，再办事（办事会切页面，菜单留着会跟着漂过去） */
-  const pick = (work: () => void) => (): void => {
-    setMenuOpen(false)
-    work()
-  }
-
   return (
     <header className="topbar">
       <div className="topbar-brand">
@@ -146,54 +124,17 @@ export function TopBar({
         账号按钮放在它们左边，因此**没有动**那两颗的位置。
       */}
       <div className="topbar-right">
-        {user ? (
-          <div className="user-center-wrap" ref={wrapRef}>
-            <button
-              type="button"
-              className={`btn btn-ghost account-button user-center${panel === 'profile' ? ' account-button-active' : ''}`}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
-              title="个人中心、修改密码与管理入口"
-            >
-              <span className="account-avatar">
-                {user.avatar ? <img src={user.avatar.dataUrl} alt="" /> : initialOf(user.username)}
-              </span>
-              <span className="account-name">{user.username}</span>
-              <span className="account-caret" aria-hidden="true">
-                ▾
-              </span>
-            </button>
-
-            {menuOpen && (
-              <div className="user-menu" role="menu" aria-label="账号菜单">
-                <button type="button" role="menuitem" onClick={pick(() => onSelectPanel('profile'))}>
-                  个人中心
-                </button>
-                <button type="button" role="menuitem" onClick={pick(onChangePassword)}>
-                  修改密码
-                </button>
-                {/*
-                  三项管理入口只给管理员看（与顶栏那颗被撤掉的「管理」同一个判据）。
-                  ⚠️ 界面上的判断只是"不给看"：真正的权限在服务端的 `requireAdmin`（见 guard.ts）。
-                */}
-                {isAdmin &&
-                  ADMIN_TABS.map((item) => (
-                    <button key={item.id} type="button" role="menuitem" onClick={pick(() => onOpenAdminView(item.id))}>
-                      {item.label}
-                    </button>
-                  ))}
-                <button type="button" role="menuitem" className="user-menu-danger" onClick={pick(onLogout)}>
-                  退出登录
-                </button>
-              </div>
-            )}
-          </div>
-        ) : (
-          <button type="button" className="btn btn-primary account-button" onClick={onOpenAuth} title="登录或注册后才能提交批改">
-            登录 / 注册
-          </button>
-        )}
+        {/* 账号那一组：登录后是「头像 + 用户名 + 下拉栏」，没登录是一颗「登录 / 注册」 */}
+        <AccountControl
+          user={user}
+          isAdmin={isAdmin}
+          panel={panel}
+          onOpenAuth={onOpenAuth}
+          onSelectPanel={onSelectPanel}
+          onChangePassword={onChangePassword}
+          onOpenAdminView={onOpenAdminView}
+          onLogout={onLogout}
+        />
         <button
           type="button"
           className="btn btn-ghost theme-toggle"

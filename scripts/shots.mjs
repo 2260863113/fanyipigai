@@ -33,7 +33,7 @@ writeFileSync(
     `  { name: '01-compose', width: 1600, height: 950, action: 'plain' },`,
     `  { name: '02-result', width: 1600, height: 950, action: 'submit', clickMark: 0 },`,
     `  { name: '03-marks', width: 1600, height: 950, action: 'submit', exerciseId: 'sentence-002', clickTab: '句子', clickMark: 0 },`,
-    `  { name: '04-mobile', width: 420, height: 900, action: 'plain' },`,
+    `  { name: '04-mobile', width: 375, height: 667, action: 'plain' },`,
     `])`,
     `if (!result.ok) { console.log('截屏未完成：' + (result.note ?? '未知原因')); process.exitCode = 1 }`,
     `for (const file of result.files) console.log('  ' + file)`,

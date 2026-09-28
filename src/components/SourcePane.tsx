@@ -31,7 +31,8 @@
  * 连这四个字都不出现。参考译文**只给人看、从不发给模型**（ADR 0003）。
  */
 
-import type { JSX } from 'react'
+import { useEffect, type JSX, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { DIRECTION_LABEL, KIND_LABEL, type Direction, type Exercise, type MarkColor, type Mode } from '../domain/types'
 import { MARK_BG_VALUE, MARK_COLOR_VALUE } from '../domain/color'
 import type { Section } from '../domain/sections'
@@ -102,6 +103,7 @@ export function SourcePane({
   termRange = null,
   termReference = null,
   editableSource = null,
+  mobileSelect = null,
 }: {
   exercise: Exercise
   mode: Mode
@@ -196,6 +198,17 @@ export function SourcePane({
    * 传 null 就是只读的原文（其它题型一律如此）。
    */
   editableSource?: { value: string; onChange: (text: string) => void } | null
+  /**
+   * 手机端的「选择」弹窗（第 18 轮）。
+   *
+   * 用户原话（意思）：「将原文标题栏的各个选项和下拉栏放到『选择』按钮，
+   * 该按钮在『原文』标题的右侧，点击选择后弹窗弹出该栏按钮或者下拉框。」
+   *
+   * 传 `on` 就是手机端：标题栏里除了一颗「选择」以外什么都不画（原来的那些控件
+   * 整块收进弹窗里），「选择」按下去把 `on` 置真、`onClose` 置假。
+   * **桌面端不传**——标题栏照旧把那些控件一条线排开，一个字都没动。
+   */
+  mobileSelect?: { on: boolean; onToggle: () => void; onClose: () => void } | null
 }): JSX.Element {
   /**
    * 这一页的参考译文：把逐段配好的译文拼成一块（与 sections.ts 的 referenceOfPage 同一口径，
@@ -206,145 +219,172 @@ export function SourcePane({
     .filter((text) => text.length > 0)
     .join('\n\n')
 
+  /*
+   * 标题栏里那一组控件（第 18 轮起写成一份、两处用）：
+   *   - 桌面端：原样排在「原文」那三个字右边（与改动前**逐字相同**的 DOM）；
+   *   - 手机端：它们整块收进「选择」弹窗里，标题栏只剩一颗「选择」。
+   * 一份 JSX 两处用，是为了避免"弹窗里那份与标题栏那份迟早分家"。
+   */
+  const headControls = (
+    <>
+      {/*
+        「参考译文」开关摆在**最前面**，即「原文」两个字的右边（用户第 14 条第 5 条点名位置）。
+        它排在「范围」之前是有意的：它是"这一栏怎么显示"的开关，而范围与方向是"练哪一题"，
+        先看栏里的东西、再谈换题——与文章栏把"领域/方向"排在"换哪一篇"之前是同一个顺序。
+      */}
+      {termReference && (
+        <button
+          type="button"
+          className="btn btn-ghost"
+          aria-pressed={termReference.on}
+          data-term-reference={termReference.on ? 'on' : 'off'}
+          onClick={termReference.onToggle}
+          title={
+            termReference.on
+              ? '收起标准译法（它们只长在原文栏右侧，不写到你的作答里）'
+              : '在原文栏右对齐列出这一页每一条的标准译法；再点一下收起'
+          }
+        >
+          参考译文
+        </button>
+      )}
+      {/*
+        **领域下拉与方向切换摆在最前面**，紧挨着「原文」三个字（用户第 7 条原话：
+        "将领域下拉栏挪到原文标题栏紧靠『原文』的右边"）。它们决定的是"练哪一格的题"，
+        因此排在"换哪一篇"之前——先定范围，再挑篇目。
+      */}
+      {range && (
+        <DomainSelect
+          selection={range.selection}
+          onChange={range.onChange}
+          // 列哪些领域由调用方决定（句子栏传五个话题领域，文章栏不传 = 用完整表，见 ADR 0029）
+          {...(range.domains ? { domains: range.domains } : {})}
+        />
+      )}
+      {range?.withDirection && <DirectionSelect selection={range.selection} onChange={range.onChange} />}
+      {/*
+        术语栏那两个控件：**范围**（下拉五大板块 → 弹窗选分组，见 TermScopeSelect）
+        + **方向**（中译英／英译中）。位置与文章栏的「领域 × 方向」一样（紧挨「原文」，
+        排在「参考译文」开关之后）。术语的两个方向永远可点——每条术语两侧都有
+        （中文名 + 官方英文名），不像文章栏那样要按"这一格有没有材料"禁用。
+      */}
+      {termRange && (
+        <>
+          <TermScopeSelect scope={termRange.scope} page={termRange.page} onPick={termRange.onPickGroup} />
+          <DirectionSwitch direction={termRange.direction} onChange={termRange.onPickDirection} />
+        </>
+      )}
+      {/*
+        「选择文章」与「换一句」跟在范围控件后面（它们以前排在最前，那是"头一组按钮"
+        的说法定下的顺序；现在头一组的位置让给了领域与方向）。
+      */}
+      {onPickArticle && (
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={onPickArticle}
+          title="按「领域 × 方向」以卡片罗列文章，选一篇来练"
+        >
+          选择文章
+        </button>
+      )}
+      {onNextSentence && (
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={onNextSentence}
+          title="在该领域的句子里往下走一句"
+        >
+          换一句
+        </button>
+      )}
+      {isCustom ? (
+        /*
+         * 第 13 轮起**没有「重新贴一篇」了**：原文栏本身就是一个输入框（见下面的
+         * `editableSource`），想换一篇直接改上面的字就行，再留一颗按钮等于同一件事两个入口。
+         * 提示词里那句"贴新的会覆盖上一篇（练习记录仍留着）"因此也一并去掉。
+         */
+        null
+      ) : (
+        /*
+         * ⚠️ **术语栏两颗按钮都不画**（第 13 轮用户拍板：「换一换」与「AI 出题」一起撤掉）。
+         *
+         * 早先这里只把「AI 出题」挡住了，「换一换」照旧画出来、只是禁用——
+         * 术语题只有一个来源（这一个范围），因此它永远是灰的：一颗永远点不动、
+         * 又解释不出所以然的按钮，比不画更让人困惑（`verify-term-mode.mjs` 抓到过这一条）。
+         */
+        mode !== 'term' && (
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={onRotate}
+              disabled={sourceOptionsCount < 2}
+              title={
+                rotateTitle ??
+                (sourceOptionsCount < 2
+                  ? '这道题暂时只有一篇原文；点右边的「AI 出题」可以现出一篇'
+                  : '换一篇同话题、同文体的原文继续练')
+              }
+            >
+              换一换
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={onOpenGenerator}
+              title="按领域让 AI 现出一篇同规格的题；生成后会留存，可用「换一换」翻回来"
+            >
+              AI 出题
+            </button>
+          </>
+        )
+      )}
+      {/*
+        第 9 条与第 7 条一起砍掉了三枚芯片里的两枚：
+        「已批 N 页」与「官方建议 N 分钟」都不再显示。
+        ⚠️ 删的只是显示——"哪几页批过"那份进度（article-progress.ts）照旧在用，
+        它管的是"从没批完的那一段继续"与「选择文章」里的「已完成」标记。
+        自己贴的题留「自动判定」：它说明的是"程序把你的原文判成了哪种题型"，
+        与题目本身有关，不是进度。
+      */}
+      {/*
+        还没写原文时**不说**方向与题型：那一刻程序判出来的只是"空串"的默认值
+        （英译中 + 句子题），照实显示反而像界面在胡说。
+      */}
+      {isCustom && (editableSource ? editableSource.value.trim().length > 0 : true) && (
+        <span
+          className="chip"
+          title="方向与题型都是按你写的原文现判的：有汉字就是中译英；多个自然段按文章题、两句以上按段落题、很短又没标点按术语题，其余按句子题"
+        >
+          自动判定 · {DIRECTION_LABEL[exercise.direction]} · {KIND_LABEL[exercise.mode]}
+        </span>
+      )}
+    </>
+  )
+
   return (
     <section className="pane pane-source">
       <header className="pane-head">
         <h2>原文</h2>
-        <div className="head-meta">
-          {/*
-            「参考译文」开关摆在**最前面**，即「原文」两个字的右边（用户第 14 条第 5 条点名位置）。
-            它排在「范围」之前是有意的：它是"这一栏怎么显示"的开关，而范围与方向是"练哪一题"，
-            先看栏里的东西、再谈换题——与文章栏把"领域/方向"排在"换哪一篇"之前是同一个顺序。
-          */}
-          {termReference && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              aria-pressed={termReference.on}
-              data-term-reference={termReference.on ? 'on' : 'off'}
-              onClick={termReference.onToggle}
-              title={
-                termReference.on
-                  ? '收起标准译法（它们只长在原文栏右侧，不写到你的作答里）'
-                  : '在原文栏右对齐列出这一页每一条的标准译法；再点一下收起'
-              }
-            >
-              参考译文
-            </button>
-          )}
-          {/*
-            **领域下拉与方向切换摆在最前面**，紧挨着「原文」三个字（用户第 7 条原话：
-            "将领域下拉栏挪到原文标题栏紧靠『原文』的右边"）。它们决定的是"练哪一格的题"，
-            因此排在"换哪一篇"之前——先定范围，再挑篇目。
-          */}
-          {range && (
-            <DomainSelect
-              selection={range.selection}
-              onChange={range.onChange}
-              // 列哪些领域由调用方决定（句子栏传五个话题领域，文章栏不传 = 用完整表，见 ADR 0029）
-              {...(range.domains ? { domains: range.domains } : {})}
-            />
-          )}
-          {range?.withDirection && <DirectionSelect selection={range.selection} onChange={range.onChange} />}
-          {/*
-            术语栏那两个控件：**范围**（下拉五大板块 → 弹窗选分组，见 TermScopeSelect）
-            + **方向**（中译英／英译中）。位置与文章栏的「领域 × 方向」一样（紧挨「原文」，
-            排在「参考译文」开关之后）。术语的两个方向永远可点——每条术语两侧都有
-            （中文名 + 官方英文名），不像文章栏那样要按"这一格有没有材料"禁用。
-          */}
-          {termRange && (
-            <>
-              <TermScopeSelect scope={termRange.scope} page={termRange.page} onPick={termRange.onPickGroup} />
-              <DirectionSwitch direction={termRange.direction} onChange={termRange.onPickDirection} />
-            </>
-          )}
-          {/*
-            「选择文章」与「换一句」跟在范围控件后面（它们以前排在最前，那是"头一组按钮"
-            的说法定下的顺序；现在头一组的位置让给了领域与方向）。
-          */}
-          {onPickArticle && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={onPickArticle}
-              title="按「领域 × 方向」以卡片罗列文章，选一篇来练"
-            >
-              选择文章
-            </button>
-          )}
-          {onNextSentence && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={onNextSentence}
-              title="在该领域的句子里往下走一句"
-            >
-              换一句
-            </button>
-          )}
-          {isCustom ? (
-            /*
-             * 第 13 轮起**没有「重新贴一篇」了**：原文栏本身就是一个输入框（见下面的
-             * `editableSource`），想换一篇直接改上面的字就行，再留一颗按钮等于同一件事两个入口。
-             * 提示词里那句"贴新的会覆盖上一篇（练习记录仍留着）"因此也一并去掉。
-             */
-            null
-          ) : (
-            /*
-             * ⚠️ **术语栏两颗按钮都不画**（第 13 轮用户拍板：「换一换」与「AI 出题」一起撤掉）。
-             *
-             * 早先这里只把「AI 出题」挡住了，「换一换」照旧画出来、只是禁用——
-             * 术语题只有一个来源（这一个范围），因此它永远是灰的：一颗永远点不动、
-             * 又解释不出所以然的按钮，比不画更让人困惑（`verify-term-mode.mjs` 抓到过这一条）。
-             */
-            mode !== 'term' && (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={onRotate}
-                  disabled={sourceOptionsCount < 2}
-                  title={
-                    rotateTitle ??
-                    (sourceOptionsCount < 2
-                      ? '这道题暂时只有一篇原文；点右边的「AI 出题」可以现出一篇'
-                      : '换一篇同话题、同文体的原文继续练')
-                  }
-                >
-                  换一换
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={onOpenGenerator}
-                  title="按领域让 AI 现出一篇同规格的题；生成后会留存，可用「换一换」翻回来"
-                >
-                  AI 出题
-                </button>
-              </>
-            )
-          )}
-          {/*
-            第 9 条与第 7 条一起砍掉了三枚芯片里的两枚：
-            「已批 N 页」与「官方建议 N 分钟」都不再显示。
-            ⚠️ 删的只是显示——"哪几页批过"那份进度（article-progress.ts）照旧在用，
-            它管的是"从没批完的那一段继续"与「选择文章」里的「已完成」标记。
-            自己贴的题留「自动判定」：它说明的是"程序把你的原文判成了哪种题型"，
-            与题目本身有关，不是进度。
-          */}
-          {/*
-            还没写原文时**不说**方向与题型：那一刻程序判出来的只是"空串"的默认值
-            （英译中 + 句子题），照实显示反而像界面在胡说。
-          */}
-          {isCustom && (editableSource ? editableSource.value.trim().length > 0 : true) && (
-            <span
-              className="chip"
-              title="方向与题型都是按你写的原文现判的：有汉字就是中译英；多个自然段按文章题、两句以上按段落题、很短又没标点按术语题，其余按句子题"
-            >
-              自动判定 · {DIRECTION_LABEL[exercise.direction]} · {KIND_LABEL[exercise.mode]}
-            </span>
-          )}
-        </div>
+        {/*
+          手机端：「原文」右边只剩一颗「选择」，其余控件整块收进弹窗。
+          ⚠️ 这一颗**桌面端不画**（由 `mobileSelect` 传不传来决定），
+          因此桌面端标题栏的 DOM 与改动前逐字相同——那正是"电脑端不要产生任何改变"。
+        */}
+        {mobileSelect && (
+          <button
+            type="button"
+            className="btn btn-ghost mobile-select-open"
+            onClick={mobileSelect.onToggle}
+            aria-haspopup="dialog"
+            aria-expanded={mobileSelect.on}
+            title="这一栏的选项都在里面：范围、方向、换一篇、参考译文等等"
+          >
+            选择
+          </button>
+        )}
+        <div className="head-meta">{headControls}</div>
       </header>
       <div className="pane-body">
         {/*
@@ -449,8 +489,16 @@ export function SourcePane({
         顺带保留两条老规矩：
           - 导航在**原文这一栏**（人的眼睛在原文上，翻页是为了换一段原文）；
           - **批改中照样能翻页**（用户要求：批改在后台跑，拦着反而把人锁在原地干等）。
+
+        ⚠️ **第 18 轮：手机端不画这一条**（判据 `!mobileSelect`）。
+        用户要求"将『下一页』『上一页』按钮放到我的译文栏目"——手机上它们挪到了
+        底部那条操作栏的第一行（见 AnswerPane 的 `.pane-foot.answer-foot` 与 styles.css）。
+        这里在**结构上**就不渲染，而不是用 CSS 藏起来：藏起来的那两颗按钮照样在 DOM 里，
+        同一页上就会出现**两套**「上一页 / 下一页」（手机端的验收脚本按
+        `.section-nav [data-nav="next"]` 找按钮，两套必然撞车）。
+        这也让桌面端的 DOM 在手机上少一块不必要的东西——顺带的好处，不是目的。
       */}
-      {multiSection && (
+      {multiSection && !mobileSelect && (
         <footer className="pane-foot section-nav">
           <button
             type="button"
@@ -476,6 +524,62 @@ export function SourcePane({
           </button>
         </footer>
       )}
+
+      {/*
+        手机端的「选择」弹窗：标题栏里那一组控件（`headControls`，与桌面端标题栏里
+        那一份是**同一份 JSX**）在这个弹窗里竖排展开。
+      */}
+      {mobileSelect && mobileSelect.on && <MobileSelectModal onClose={mobileSelect.onClose}>{headControls}</MobileSelectModal>}
     </section>
+  )
+}
+
+/**
+ * 手机端的「选择」弹窗。
+ *
+ * ## 为什么用 portal 挂到 `document.body` 上
+ *
+ * 原文栏（`.pane-body` / `.pane`）在手机端是**固定高度的滚动盒子**，
+ * 里面还有 `overflow-y: auto`。挂在原文栏里面的浮层会被它剪掉一半
+ * （与「批注小卡片用固定定位挂在 body 上」是同一条理由，见 CONTEXT.md 的「批注卡片」）。
+ * 因此这一层直接挂到 `document.body`：它不属于哪一栏，是一块浮层。
+ *
+ * ## 形状
+ *
+ * 复用设置 / AI 出题那几个弹窗的外壳类名（`.raw-modal-backdrop` / `.raw-modal`），
+ * 因此底色、圆角、阴影、点外面关闭这些行为与全站其它弹窗**完全一致**；
+ * 手机端那几条（占满宽、限高、内部滚动）写在 styles.css 末尾那一段媒体查询里。
+ */
+function MobileSelectModal({ onClose, children }: { onClose: () => void; children: ReactNode }): JSX.Element {
+  /* 按 Esc 关掉——与账号下拉栏、侧边栏同一条口径 */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  return createPortal(
+    <div className="raw-modal-backdrop" onClick={onClose} role="presentation">
+      <div
+        className="raw-modal select-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="选择"
+        /* 点弹窗内部不该关掉它——事件冒泡到 backdrop 就会触发 onClick */
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="raw-modal-head">
+          <span>选择</span>
+          <span className="raw-modal-note">这一栏的选项</span>
+          <button type="button" className="raw-modal-close" onClick={onClose} aria-label="关闭">
+            ×
+          </button>
+        </header>
+        <div className="gen-body select-body">{children}</div>
+      </div>
+    </div>,
+    document.body,
   )
 }
