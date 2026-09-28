@@ -21,6 +21,7 @@ import type { JudgeFailureKind } from '../domain/ai'
 import { useSplitDrag } from './split-drag'
 import { useEqualPaneHeadHeights } from './pane-heads'
 import { useViewportHeightVar } from './split-height'
+import { useTermRowHeight } from './term-row-height'
 import { useIsMobile } from './useIsMobile'
 import { MobileSidebar } from './MobileSidebar'
 import { resolveTheme, useSettings } from './settings'
@@ -345,8 +346,13 @@ export function App(): JSX.Element {
    * 现在改成"量一个与内容无关的盒子"（`#root`，也就是可视高度），
    * 顶栏那 56px 由样式表用 `calc(50% - var(--topbar-h) / 2)` 扣掉——
    * 那个数字全站已经有了一个令牌，不该在 JS 里再写一遍。
+   *
+   * 它还返回**输入法是不是开着**（第 19 条）：手机上的输入法不是网页的一部分，
+   * 浏览器只通过"可视区变矮了"告诉我们它在（两个平台的上报方式还不一样，
+   * 见 `split-height.ts` 文件头第三节）。认出来之后下面会挂一个 `data-keyboard` 属性，
+   * 那一整套"输入法开着时怎么变"全写在样式表里（标题栏与按钮收起来、术语行高三倍）。
    */
-  useViewportHeightVar()
+  const keyboardOpen = useViewportHeightVar()
   /**
    * 手机端判据（第 18 轮）：见 `useIsMobile.ts`。
    *
@@ -555,6 +561,20 @@ export function App(): JSX.Element {
    */
   const termParsed = useMemo(() => parseTermExerciseId(exerciseId), [exerciseId])
   const isTermExercise = termParsed !== null
+  /**
+   * 术语模式 + 手机端时，把"一行原本多高"量出来，输入法一开就写 `--term-row-h`
+   * （= 原高 × 3，第 19 条）。
+   *
+   * 用户要的是"每一个术语所在行的行高**增加为现在的三倍**"——"现在的"是关键词：
+   * 那个高度是十条等分算出来的，取决于当帧可用高度与行数，写死一个像素数必然对不上
+   * （与第 17 条那批"版式靠测量"是同一条口径，见 ADR 0031）。
+   *
+   * ⚠️ `enabled` 只判"**这一档算不算数**"（手机端 + 术语栏），**不要**把 `keyboardOpen` 也并进去：
+   * 基线必须在**输入法关着的时候**学。并进去的话，输入法一开才第一次量，
+   * 量到的是已经被压扁的高度，三倍之后反而更小（这个坑验收脚本抓出来过）。
+   * 那个文件里两个参数的分工写着，见 `term-row-height.ts`。
+   */
+  useTermRowHeight(splitRef, isMobile && isTermExercise, keyboardOpen)
   /** 术语栏这两个控件的当前取值，直接从题号里读出来（不另存一份 state，免得两份打架） */
   const termScope: TermScope = termParsed?.scope ?? 'cn-org'
   const termDirection: Direction = termParsed?.direction ?? 'zh-to-en'
@@ -2177,12 +2197,21 @@ export function App(): JSX.Element {
             返回编辑模式时，才四分之一。"
             判据与 `AnswerPane` 里那颗按钮写「提交批改」还是「返回编辑」**同一个**
             （`shown !== null && !editing`：在看结果就展开），免得两处各判一次、判出两种结果。
+
+            ⚠️ 第 19 条再加一个 `data-keyboard`：**手机输入法开着**时写上。
+            用户要求："当用户点开输入法的时候，隐藏『原文』这个标题栏，隐藏提交批改、
+            翻页等所有按钮，当且仅当用户关掉输入法，才重新显现出来。"
+            以及术语模式下"每一个术语所在行的行高度增加为现在的三倍"。
+            这些几乎全是**样式**的事（收起来 / 放大），因此这里只挂一个属性，规则写在 styles.css；
+            只有一处需要数字（术语行高三倍）才由 `--term-row-h` 提供，那个数由下面量出来
+            （见 `term-row-height.ts`）。
           */}
           <main
             className={`split${split ? ' split-manual' : ''}${shown?.refine ? ' split-refine' : ''}${
               isTermExercise ? ' split-term' : ''
             }${isMobile ? ' split-mobile' : ''}`}
             {...(isMobile && shown !== null && !editing ? { 'data-result': 'on' } : null)}
+            {...(isMobile && keyboardOpen ? { 'data-keyboard': 'on' } : null)}
             ref={splitRef}
             style={splitStyle}
           >

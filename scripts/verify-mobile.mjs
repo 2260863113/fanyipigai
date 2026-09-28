@@ -241,7 +241,7 @@ try {
   }
 
   /* ══ 第 1 节：电脑端一个字没变 ══════════════════════════════════════ */
-  console.log('\n[1/7] 桌面端（1440×900）没有产生任何改变')
+  console.log('\n[1/8] 桌面端（1440×900）没有产生任何改变')
   {
     const page = await openPage(DESKTOP)
     const snapshot = await page.client.evaluate(`(() => {
@@ -301,7 +301,7 @@ try {
   }
 
   /* ══ 第 2 节：手机端最上方只剩「三条横线 + 标题」 ══════════════════ */
-  console.log('\n[2/7] 手机端（375×667）最上方只剩标题与三条横线，其余都在侧边栏里')
+  console.log('\n[2/8] 手机端（375×667）最上方只剩标题与三条横线，其余都在侧边栏里')
   const phone = await openPage(PHONE)
   cdp = phone.client
   {
@@ -371,7 +371,7 @@ try {
   }
 
   /* ══ 第 3 节：总评栏与批注详情栏不显示 ═════════════════════════════ */
-  console.log('\n[3/7] 手机端不显示「总体评分」与「批注详情」两栏')
+  console.log('\n[3/8] 手机端不显示「总体评分」与「批注详情」两栏')
   {
     const panes = await phone.client.evaluate(`(() => {
       const M = window.__M;
@@ -387,7 +387,7 @@ try {
   }
 
   /* ══ 第 4 节：原文标题栏只剩「原文 + 选择」，点它弹窗 ══════════════ */
-  console.log('\n[4/7] 原文标题栏只剩「原文」与「选择」，点「选择」弹窗弹出该栏的选项')
+  console.log('\n[4/8] 原文标题栏只剩「原文」与「选择」，点「选择」弹窗弹出该栏的选项')
   {
     /* 先回文章栏：那里标题栏里的控件最多（领域 + 方向 + 选择文章 + 换一换 + AI 出题） */
     await phone.client.evaluate(`(async () => {
@@ -478,7 +478,7 @@ try {
   }
 
   /* ══ 第 5 节：我的译文那一行去掉、翻页挪到底部 ═════════════════════ */
-  console.log('\n[5/7] 「我的译文」标题栏整行去掉，翻页与提交按钮都在底部的两行操作栏里')
+  console.log('\n[5/8] 「我的译文」标题栏整行去掉，翻页与提交按钮都在底部的两行操作栏里')
   {
     const answer = await phone.client.evaluate(`(() => {
       const M = window.__M;
@@ -524,7 +524,7 @@ try {
   }
 
   /* ══ 第 6 节：屏幕上是「原文一半 · 我的译文一半」，两栏之间只有一条线 ══ */
-  console.log('\n[6/7] 编辑模式下两栏各占可用高度的一半，中间只有一条分割线')
+  console.log('\n[6/8] 编辑模式下两栏各占可用高度的一半，中间只有一条分割线')
   {
     const layout = await phone.client.evaluate(`(() => {
       const M = window.__M;
@@ -664,7 +664,7 @@ try {
   }
 
   /* ══ 第 7 节：批改视图下两栏完全展开 ══════════════════════════════ */
-  console.log('\n[7/7] 批改视图下两栏完全展开、整页可以滚（点「返回编辑」才回到一半那一档）')
+  console.log('\n[7/8] 批改视图下两栏完全展开、整页可以滚（点「返回编辑」才回到一半那一档）')
   {
     /*
      * ## 为什么这一节做了两条路
@@ -928,6 +928,284 @@ try {
       `按钮名字变回「提交批改」（实测「${back.buttonLabel}」）`,
       back,
     )
+  }
+
+  /* ══ 第 8 节：输入法开着时（第 19 条）═════════════════════════════ */
+  console.log('\n[8/8] 输入法开着时：标题栏与所有按钮收起来，关掉就回来（术语模式还要求行高三倍）')
+  {
+    /*
+     * ## 判据怎么驱动
+     *
+     * 真机上"输入法弹出来"这件事浏览器只通过**可视区变矮**告诉我们
+     * （安卓看 `innerHeight`、苹果看 `visualViewport`，两处都挂在 split-height.ts 里）。
+     * 无头浏览器里没有真输入法，但 `Emulation.setDeviceMetricsOverride` 把视口压矮时
+     * `innerHeight` 会**真的**跟着变（这一条是先用一次性探针实测过的，
+     * 不实测就写出来的验证多半是假的）。
+     *
+     * 因此这里：667 → **367**（矮掉 45%，与真机上输入法吃掉 40%～50% 的量级一致）→ 再回到 667。
+     * 走的是与真机**完全相同**的那条路：resize → 判据 → `data-keyboard` → 样式。
+     *
+     * ⚠️ 这一节必须**最后**跑：它会把视口改来改去，而前面各节量的都是 375×667 的几何。
+     */
+    const setViewport = async (height) => {
+      await phone.client.send('Emulation.setDeviceMetricsOverride', {
+        width: PHONE.width,
+        height,
+        deviceScaleFactor: 2,
+        mobile: true,
+      })
+      await sleep(600)
+    }
+
+    /* 先在**文章栏**验"收起来 / 又回来" */
+    {
+      await setViewport(PHONE.height)
+      const before = await phone.client.evaluate(`(() => {
+        const M = window.__M;
+        return {
+          keyboard: M.q('.split-mobile')?.getAttribute('data-keyboard') ?? null,
+          topbarVisible: M.visible(M.q('.topbar-mobile')),
+          sourceHeadVisible: M.visible(M.q('.pane-source .pane-head')),
+          footVisible: M.visible(M.q('.pane-answer .answer-foot')),
+          submitVisible: M.visible(M.q('.pane-answer .answer-actions .btn-primary')),
+          navVisible: M.visible(M.q('.pane-answer [data-nav="next"]')),
+          inputVisible: M.visible(M.q('.pane-answer textarea.answer-input')),
+        };
+      })()`)
+      check(
+        before.keyboard === null && before.sourceHeadVisible === true && before.footVisible === true,
+        '没点输入法时：标题栏与底部那条操作栏都在（`data-keyboard` 没挂上）',
+        before,
+      )
+
+      /* ── 视口压矮 = 输入法弹出来 ── */
+      await setViewport(367)
+      const open = await phone.client.evaluate(`(() => {
+        const M = window.__M;
+        return {
+          keyboard: M.q('.split-mobile')?.getAttribute('data-keyboard') ?? null,
+          innerHeight: window.innerHeight,
+          splitVar: getComputedStyle(document.documentElement).getPropertyValue('--split-vh').trim(),
+          topbarVisible: M.visible(M.q('.topbar-mobile')),
+          sourceHeadVisible: M.visible(M.q('.pane-source .pane-head')),
+          sourceHeadDisplay: M.q('.pane-source .pane-head') ? getComputedStyle(M.q('.pane-source .pane-head')).display : null,
+          footVisible: M.visible(M.q('.pane-answer .answer-foot')),
+          submitVisible: M.visible(M.q('.pane-answer .answer-actions .btn-primary')),
+          navVisible: M.visible(M.q('.pane-answer [data-nav="next"]')),
+          /*
+           * ⚠️ 输入框要**两种都认**：文章栏那一路是 textarea.answer-input，
+           * 术语栏那一路是一行一个 input.term-input（术语题一页十条）。
+           * 这一节跑在第 7 节之后，那时可能人在术语栏里（第 7 节末尾会切过去），
+           * 只认 textarea 的话这一条就永远是"输入框不见了"（其实是尺子只认一种输入框）。
+           */
+          inputVisible:
+            M.visible(M.q('.pane-answer textarea.answer-input')) ||
+            M.visible(M.q('.pane-answer input.term-input')),
+          inputRect: M.rect(M.q('.pane-answer textarea.answer-input') ?? M.q('.pane-answer input.term-input')),
+          /* 输入法开着时"屏幕上还剩什么"——这是用户真正要的那件事 */
+          visibleTexts: [...document.querySelectorAll('.split-mobile .pane-source, .split-mobile .pane-answer')]
+            .flatMap((pane) => [...pane.children])
+            .filter((node) => M.visible(node))
+            .map((node) => node.className || node.tagName),
+        };
+      })()`)
+      check(open.keyboard === 'on', `输入法开着时挂上了 data-keyboard（视口 ${open.innerHeight}）`, open)
+      check(
+        open.splitVar === `${open.innerHeight}px`,
+        `可视高度那个变量跟着变矮了（--split-vh = ${open.splitVar}）`,
+        open,
+      )
+      check(
+        open.sourceHeadVisible === false && open.sourceHeadDisplay === 'none',
+        '「原文」那个标题栏**收起来了**（用户第 1 句）',
+        open,
+      )
+      check(
+        open.footVisible === false && open.submitVisible === false && open.navVisible === false,
+        '「提交批改」「上一页 / 下一页」等**所有按钮都收起来了**（底部那两行整条不显示）',
+        open,
+      )
+      check(
+        open.topbarVisible === true,
+        '最上面那条「三条横线 + 标题」**没有**跟着收（用户只点名了原文标题栏与那些按钮；它是唯一的出口）',
+        open,
+      )
+      check(
+        open.inputVisible === true && (open.inputRect?.h ?? 0) > 20,
+        `输入框还在、还够写（高 ${open.inputRect?.h}px）——地方全让给它与原文了`,
+        open,
+      )
+
+      /* ── 视口恢复 = 输入法关掉 ── */
+      await setViewport(PHONE.height)
+      const closed = await phone.client.evaluate(`(() => {
+        const M = window.__M;
+        return {
+          keyboard: M.q('.split-mobile')?.getAttribute('data-keyboard') ?? null,
+          sourceHeadVisible: M.visible(M.q('.pane-source .pane-head')),
+          footVisible: M.visible(M.q('.pane-answer .answer-foot')),
+          submitVisible: M.visible(M.q('.pane-answer .answer-actions .btn-primary')),
+          navVisible: M.visible(M.q('.pane-answer [data-nav="next"]')),
+          splitVar: getComputedStyle(document.documentElement).getPropertyValue('--split-vh').trim(),
+        };
+      })()`)
+      check(
+        closed.keyboard === null &&
+          closed.sourceHeadVisible === true &&
+          closed.footVisible === true &&
+          closed.submitVisible === true &&
+          closed.navVisible === true,
+        '关掉输入法之后它们**全部自己回来了**（用户："当且仅当用户关掉输入法，才重新显现出来"）',
+        closed,
+      )
+      check(
+        closed.splitVar === `${PHONE.height}px`,
+        `可视高度也回到原样（--split-vh = ${closed.splitVar}）`,
+        closed,
+      )
+    }
+
+    /* ── 术语模式：每行高三倍，且两栏仍然一格对一格 ── */
+    {
+      /* 先切到术语栏（用侧边栏，与第 2 节同一套手法） */
+      await phone.client.evaluate(`(async () => {
+        const M = window.__M;
+        M.q('.hamburger').click();
+        await M.sleep(400);
+        await M.clickText('.drawer-nav .mode-tab', '术语', 900);
+      })()`)
+
+      const measureRows = () => phone.client.evaluate(`(() => {
+        const M = window.__M;
+        const heights = (sel) => M.qa(sel).map((n) => Math.round(n.getBoundingClientRect().height));
+        const source = heights('.term-source-list > .term-source-row');
+        const answer = heights('.term-list > .term-row');
+        const bodyOverflow = (sel) => {
+          const n = M.q(sel);
+          return n ? getComputedStyle(n).overflowY : null;
+        };
+        return {
+          keyboard: M.q('.split-mobile')?.getAttribute('data-keyboard') ?? null,
+          /*
+           * term-row-h 就是"一行有多高"：输入法关着时它是**原高**，
+           * 开着时它是**放大后的高度**（钩子两档都写）。看它比看行的实测高更准——
+           * 实测高会被"十条能不能塞进这一格"影响（关着时反而被压矮到 19px，
+           * 而那个变量老老实实写着 13px），变量才是"该有多高"的直接答案。
+           */
+          rowVar: M.q('.split-mobile')?.style.getPropertyValue('--term-row-h') ?? '',
+          sourceRowCount: source.length,
+          answerRowCount: answer.length,
+          sourceRowH: source[0] ?? null,
+          answerRowH: answer[0] ?? null,
+          sourceBodyH: M.rect(M.q('.pane-source .pane-body'))?.h ?? null,
+          answerBodyH: M.rect(M.q('.pane-answer .pane-body'))?.h ?? null,
+          sourceAllEqual: source.length > 0 && source.every((h) => Math.abs(h - source[0]) <= 1),
+          answerAllEqual: answer.length > 0 && answer.every((h) => Math.abs(h - answer[0]) <= 1),
+          /*
+           * "两栏一格对一格"（第 17 条第 4 条 / ADR 0031）：逐格比高度。
+           * 这是最容易被"只放大一边"破坏的那条不变量，因此放大三倍之后必须重新量。
+           */
+          pairsMatch:
+            source.length === answer.length &&
+            source.every((h, i) => Math.abs(h - answer[i]) <= 2),
+          sourceBodyOverflow: bodyOverflow('.pane-source .pane-body'),
+          answerBodyOverflow: bodyOverflow('.pane-answer .pane-body'),
+        };
+      })()`)
+
+      const termClosed = await measureRows()
+      const closedRowVar = Number.parseFloat(termClosed.rowVar)
+      check(
+        termClosed.sourceRowCount === 10 && termClosed.answerRowCount === 10,
+        `术语页两边都是十条（原文 ${termClosed.sourceRowCount}、作答 ${termClosed.answerRowCount}）`,
+        termClosed,
+      )
+      /*
+       * ⚠️ 两栏**正文盒等高**是"一格对一格"的前提：手机上两栏的 pane 一样高，
+       * 但"非正文部分"不一样（原文栏上面 51px 的标题栏 vs 译文栏下面 87px 的底部操作栏），
+       * 于是正文盒会差 37px、十条格子 23 vs 19——这一条是那次返修的重点之一。
+       */
+      check(
+        termClosed.sourceBodyH !== null &&
+          termClosed.answerBodyH !== null &&
+          Math.abs(termClosed.sourceBodyH - termClosed.answerBodyH) <= 2,
+        `没点输入法时两栏**正文盒等高**（原文 ${termClosed.sourceBodyH}px / 作答 ${termClosed.answerBodyH}px）——第 17 条"一格对一格"的前提`,
+        termClosed,
+      )
+      check(
+        termClosed.pairsMatch && termClosed.sourceAllEqual && termClosed.answerAllEqual,
+        `没点输入法时两栏本来就一格对一格（原文 ${termClosed.sourceRowH}px / 作答 ${termClosed.answerRowH}px，各十条等高）`,
+        termClosed,
+      )
+      check(
+        Number.isFinite(closedRowVar) && closedRowVar > 10,
+        `关着时"一行原本多高"记下来了（--term-row-h = ${JSON.stringify(termClosed.rowVar)}）`,
+        termClosed,
+      )
+
+      /* ── 打开输入法 ── */
+      await setViewport(367)
+      const termOpen = await measureRows()
+      const openRowVar = Number.parseFloat(termOpen.rowVar)
+      check(
+        termOpen.keyboard === 'on' && Number.isFinite(openRowVar),
+        `输入法开着时写下了放大后的行高（--term-row-h = ${JSON.stringify(termOpen.rowVar)}）`,
+        termOpen,
+      )
+      check(
+        Number.isFinite(openRowVar) && Math.abs(openRowVar - closedRowVar * 3) <= 2,
+        `**正好是三倍**（${closedRowVar}px → ${openRowVar}px，三倍应为 ${closedRowVar * 3}px）`,
+        termOpen,
+      )
+      /*
+       * 行的实测高必须与变量对得上，否则"写了变量却没生效"这种状态会漏过去。
+       * ⚠️ 拿**输入法开着**这一档比：那一档的行高由这个变量说了算
+       * （`flex: 0 0 var(--term-row-h)`），因此两者必须一致。
+       * 关着那一档不能这么比：那时行高由"十条等分"决定，会被挤矮。
+       */
+      check(
+        termOpen.sourceRowH !== null && Math.abs(termOpen.sourceRowH - openRowVar) <= 2,
+        `原文栏每行**真的按那个高度画出来了**（实测 ${termOpen.sourceRowH}px vs 变量 ${openRowVar}px）`,
+        termOpen,
+      )
+      check(
+        termOpen.answerRowH !== null && Math.abs(termOpen.answerRowH - openRowVar) <= 2,
+        `输入栏每行也**真的按那个高度画出来了**（实测 ${termOpen.answerRowH}px）`,
+        termOpen,
+      )
+      check(
+        termOpen.pairsMatch && termOpen.sourceAllEqual && termOpen.answerAllEqual,
+        '放大之后两栏**仍然一格对一格**、各自十条等高（只放一边的话这里会立刻红）',
+        termOpen,
+      )
+      check(
+        termOpen.sourceBodyOverflow === 'auto' && termOpen.answerBodyOverflow === 'auto',
+        `三倍之后两栏正文都能滚（overflow-y: 原文 ${termOpen.sourceBodyOverflow}、译文 ${termOpen.answerBodyOverflow}）——十条放不下一屏是必然的，能滚才对`,
+        termOpen,
+      )
+
+      /* ── 关掉输入法 ── */
+      await setViewport(PHONE.height)
+      const termBack = await measureRows()
+      const backRowVar = Number.parseFloat(termBack.rowVar)
+      check(
+        termBack.keyboard === null && Number.isFinite(backRowVar) && Math.abs(backRowVar - closedRowVar) <= 2,
+        `关掉输入法后一行回到原来的高度（--term-row-h = ${JSON.stringify(termBack.rowVar)}，原本 ${closedRowVar}px）`,
+        termBack,
+      )
+      check(
+        termBack.answerRowH !== null &&
+          termBack.sourceRowH !== null &&
+          Math.abs(termBack.answerRowH - termBack.sourceRowH) <= 2,
+        `关掉输入法后**每一条译文所在行的高度与原文行一样**（作答 ${termBack.answerRowH}px / 原文 ${termBack.sourceRowH}px，用户最后一句）`,
+        termBack,
+      )
+      check(
+        termBack.pairsMatch && termBack.answerAllEqual,
+        '关掉之后两栏仍然逐格等高（十条都回来了）',
+        termBack,
+      )
+    }
   }
 } finally {
   try {
