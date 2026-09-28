@@ -32,11 +32,11 @@
  *        `.pane-answer .section-nav [data-nav]` 存在，而原文栏那一条不存在。
  *   ⑦ 「最终效果是手机上只有原文、输入框和输入法三个东西……原文和我的译文中间
  *      仅仅用一条分割线分割，不要有其他任何文字」
- *      → 第 6 节：量原文栏与译文栏的高度（各占屏幕约 1/4）、
+ *      → 第 6 节：量原文栏与译文栏的高度（各占「可视高度 - 顶栏」的一半）、
  *        两栏之间只有一条线（用 `getComputedStyle` 数边框）、
  *        两栏正文里没有多余的标题文字。
  *   ⑧ 「批改视图下我的译文和原文完全展开，有多长就展开多长，返回编辑模式时才四分之一」
- *      → 第 7 节：点「提交批改」之后（内置示例桩），两栏高度大于 1/4 屏、
+ *      → 第 7 节：点「提交批改」之后，两栏高度大于编辑模式那一档、
  *        整页可以滚、`data-result` 在。
  *
  * 用法：node scripts/verify-mobile.mjs        （需要开发服务器在 5180）
@@ -137,7 +137,16 @@ const helpers = `
     const rect = (node) => {
       if (!node) return null;
       const r = node.getBoundingClientRect();
-      return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+      /*
+       * bottom / right 都要给出来：好几条断言问的是"这个东西有没有落在屏幕里"，
+       * 那只看得见底边（第一版漏了 bottom，断言里比的是 undefined，
+       * 报出来的话看着像功能坏了，其实是尺子少了一格）。
+       */
+      return {
+        x: Math.round(r.x), y: Math.round(r.y),
+        w: Math.round(r.width), h: Math.round(r.height),
+        right: Math.round(r.right), bottom: Math.round(r.bottom),
+      };
     };
     const visible = (node) => {
       if (!node) return false;
@@ -514,8 +523,8 @@ try {
     )
   }
 
-  /* ══ 第 6 节：屏幕上是「原文 1/4 · 我的译文 1/4」，两栏之间只有一条线 ══ */
-  console.log('\n[6/7] 编辑模式下两栏各占屏幕四分之一，中间只有一条分割线')
+  /* ══ 第 6 节：屏幕上是「原文一半 · 我的译文一半」，两栏之间只有一条线 ══ */
+  console.log('\n[6/7] 编辑模式下两栏各占可用高度的一半，中间只有一条分割线')
   {
     const layout = await phone.client.evaluate(`(() => {
       const M = window.__M;
@@ -526,12 +535,15 @@ try {
       const s = getComputedStyle(source);
       const a = getComputedStyle(answer);
       const termRowHead = M.q('.pane-source .pane-head');
+      const foot = M.q('.pane-answer .answer-foot');
       return {
         viewport: { w: window.innerWidth, h: window.innerHeight },
         sourceRect: M.rect(source),
         answerRect: M.rect(answer),
         sourceBodyRect: M.rect(sourceBody),
         answerBodyRect: M.rect(answerBody),
+        footRect: M.rect(foot),
+        topbarRect: M.rect(M.q('.topbar-mobile')),
         sourceBorderBottom: s.borderBottomWidth,
         answerBorderTop: a.borderTopWidth,
         answerBorderBottom: a.borderBottomWidth,
@@ -540,17 +552,82 @@ try {
         inputRect: M.rect(M.q('.pane-answer textarea.answer-input')),
         headText: (termRowHead?.textContent || '').trim(),
         bodyText: (sourceBody?.textContent || '').trim().slice(0, 24),
+        /* ── 这一组是"界面被顶出屏幕"那个真机 bug 的护栏（见下面那一段注释）── */
+        appRect: M.rect(M.q('.app')),
+        docScrollHeight: document.documentElement.scrollHeight,
+        docClientHeight: document.documentElement.clientHeight,
+        splitVar: getComputedStyle(document.documentElement).getPropertyValue('--split-vh').trim(),
+        submitRect: M.rect(M.q('.pane-answer .answer-actions .btn-primary')),
+        prevRect: M.rect(M.q('.pane-answer [data-nav="prev"]')),
+        nextRect: M.rect(M.q('.pane-answer [data-nav="next"]')),
       };
     })()`)
-    const quarter = layout.viewport.h / 4
+
+    /*
+     * 期望的高度是 **( 可视高度 - 顶栏 ) / 2**，不是"屏幕的 1/4"。
+     *
+     * 这两个数只差顶栏那一半（28px），而**差在哪一边正是这个 bug 的教训**：
+     * 用户要的是"两栏加起来把那半屏之外的可用高度占满，剩下半屏留给输入法"，
+     * 因此算的时候必须先把顶栏减掉。第一版我写的是 `50dvh / 2`（= 视口的一半再一半），
+     * 于是两栏加起来正好等于整个视口 **加上** 顶栏的高度，把 `.app` 顶出屏幕 56px——
+     * 而 `.app` 是 `overflow: hidden`，那 56px 既看不到也滚不到（用户："根本没法用"）。
+     */
+    const half = (layout.viewport.h - layout.topbarRect.h) / 2
     check(
-      Math.abs(layout.sourceRect.h - quarter) <= 4,
-      `原文栏高 ≈ 屏幕 1/4（实测 ${layout.sourceRect.h}px，1/4 = ${Math.round(quarter)}px）`,
+      Math.abs(layout.sourceRect.h - half) <= 4,
+      `原文栏高 ≈（可视高度 - 顶栏）/ 2（实测 ${layout.sourceRect.h}px，应为 ${Math.round(half)}px）`,
       layout,
     )
     check(
-      Math.abs(layout.answerRect.h - quarter) <= 4,
-      `我的译文栏高 ≈ 屏幕 1/4（实测 ${layout.answerRect.h}px）`,
+      Math.abs(layout.answerRect.h - half) <= 4,
+      `我的译文栏高 ≈（可视高度 - 顶栏）/ 2（实测 ${layout.answerRect.h}px，应为 ${Math.round(half)}px）`,
+      layout,
+    )
+    /*
+     * ── 真机 bug 的护栏（第 18 轮的返修）──────────────────────────────
+     *
+     * 这个 bug 在无头浏览器里**量不出来**：headless 没有地址栏，`dvh == vh == innerHeight`，
+     * 所以"写死 100dvh"与"量可视高度"两种写法碰巧都对，62 项全绿，而真机是废的。
+     * 因此这里不靠"某个尺寸下碰巧对上"，而是**直接盯住因果**：
+     *   ① 两栏加起来 + 顶栏 必须正好是可视高度（不多不少）；
+     *   ② `.app` 不许比视口高（一旦高了，`overflow: hidden` 会把底部剪掉且滚不到）；
+     *   ③ 编辑模式下 `documentElement` 不许长出滚动条（长了就说明有人溢出了）；
+     *   ④ 底部那两行操作栏（提交批改、上一页/下一页）**必须完整落在屏幕里**——
+     *      这是用户真正能感知到的那一条：它们一旦出界，整个界面就没法用。
+     */
+    check(
+      Math.abs(layout.sourceRect.h + layout.answerRect.h + layout.topbarRect.h - layout.viewport.h) <= 3,
+      `两栏 + 顶栏 = 可视高度，一像素不多不少（${layout.sourceRect.h} + ${layout.answerRect.h} + ${layout.topbarRect.h} = ${layout.sourceRect.h + layout.answerRect.h + layout.topbarRect.h} vs ${layout.viewport.h}）`,
+      layout,
+    )
+    check(
+      layout.appRect.h <= layout.viewport.h + 1,
+      `\`.app\` 没有比视口高（${layout.appRect.h} ≤ ${layout.viewport.h}）——比视口高就会被 overflow:hidden 剪掉且滚不到`,
+      layout,
+    )
+    check(
+      layout.docScrollHeight <= layout.docClientHeight + 1,
+      `编辑模式下整页没有溢出（scrollHeight ${layout.docScrollHeight} ≤ clientHeight ${layout.docClientHeight}）`,
+      layout,
+    )
+    check(
+      layout.submitRect !== null &&
+        layout.submitRect.bottom <= layout.viewport.h + 1 &&
+        layout.submitRect.h > 10,
+      `「提交批改」完整落在屏幕里（底边 ${layout.submitRect?.bottom} ≤ ${layout.viewport.h}，高 ${layout.submitRect?.h}）`,
+      layout,
+    )
+    check(
+      layout.prevRect !== null &&
+        layout.nextRect !== null &&
+        layout.nextRect.bottom <= layout.viewport.h + 1 &&
+        layout.nextRect.h > 10,
+      `「上一页 / 下一页」也完整落在屏幕里（next 底边 ${layout.nextRect?.bottom} ≤ ${layout.viewport.h}）`,
+      layout,
+    )
+    check(
+      layout.splitVar !== '' && layout.splitVar !== undefined,
+      `可视高度那个变量写上了（--split-vh = ${JSON.stringify(layout.splitVar)}）`,
       layout,
     )
     check(
@@ -587,7 +664,7 @@ try {
   }
 
   /* ══ 第 7 节：批改视图下两栏完全展开 ══════════════════════════════ */
-  console.log('\n[7/7] 批改视图下两栏完全展开、整页可以滚（点「返回编辑」才回到四分之一）')
+  console.log('\n[7/7] 批改视图下两栏完全展开、整页可以滚（点「返回编辑」才回到一半那一档）')
   {
     /*
      * ## 为什么这一节做了两条路
@@ -602,7 +679,7 @@ try {
      *      不经模型、不用等、不花钱），因此这一条路**一定**能出结果。
      *
      * 先试第 1 条（它走的是文章栏那条主路，形态最像用户平时用的），
-     * 出不了结果就退到第 2 条。两条都验同一件事：**两栏从四分之一变成按内容展开**。
+     * 出不了结果就退到第 2 条。两条都验同一件事：**两栏从"一半"变成按内容展开**。
      */
     const submit = await phone.client.evaluate(`(async () => {
       const M = window.__M;
@@ -703,23 +780,71 @@ try {
         sourceRect: M.rect(source),
         answerRect: M.rect(answer),
         topRowHeight: M.rect(M.q('.split-row-top')).h,
+        topbarRect: M.rect(M.q('.topbar-mobile')),
         viewport: { w: window.innerWidth, h: window.innerHeight },
         docScrollable: document.documentElement.scrollHeight > window.innerHeight,
         buttonLabel: M.text('.pane-answer .answer-actions .btn-primary'),
         sourceTextLen: (M.q('.pane-source .pane-body')?.textContent || '').trim().length,
         answerTextLen: (M.q('.pane-answer .pane-body')?.textContent || '').trim().length,
+        /* 展开那一档的三条判据（见下面对它们的说明） */
+        sourcePaneFlexBasis: getComputedStyle(source).flexBasis,
+        answerPaneFlexBasis: getComputedStyle(answer).flexBasis,
+        sourceBodyOverflow: getComputedStyle(M.q('.pane-source .pane-body')).overflowY,
+        answerBodyOverflow: getComputedStyle(M.q('.pane-answer .pane-body')).overflowY,
+        /*
+         * "内容有没有被装下"：两栏正文各自比一比。
+         * 批改视图下 overflow-y 是 visible，因此 scrollHeight 与 clientHeight 应当相等；
+         * 差出来的那几像素就是"被剪掉的内容"。
+         */
+        sourceOverflow: (() => {
+          const b = M.q('.pane-source .pane-body');
+          return b ? Math.max(0, b.scrollHeight - b.clientHeight) : -1;
+        })(),
+        answerOverflow: (() => {
+          const b = M.q('.pane-answer .pane-body');
+          return b ? Math.max(0, b.scrollHeight - b.clientHeight) : -1;
+        })(),
+        appHeight: M.rect(M.q('.app')).h,
       };
     })()`)
-    const quarter = expanded.viewport.h / 4
+    expanded.sourceContentFits = expanded.sourceOverflow === 0
+    expanded.answerContentFits = expanded.answerOverflow === 0
+    /** 编辑模式那一档的高度：`(可视高度 - 顶栏) / 2`，与第 6 节同一个口径 */
+    const half = (expanded.viewport.h - (expanded.topbarRect?.h ?? 56)) / 2
     check(expanded.dataResult === true, '`data-result` 写上了（手机端靠它切"展开"那一档版式）', expanded)
+    /*
+     * ⚠️ 这两条**不能**写成"每一栏都要比编辑模式那一档高"。
+     *
+     * 批改视图下两栏是 `flex: 0 0 auto`——**高度由内容决定**（这正是用户要的
+     * "有多长就展开多长"）。而"展开"是相对**内容被剪掉**而言的，不是相对"某一栏的屏幕高度"：
+     * 这一题原文那一页只有 93 字，展开之后它自然比"半屏"矮（实测 200px < 306px），
+     * 那不是 bug，恰恰是"按内容来"的证据；而译文栏那一边有 692 字的批改结果，
+     * 它就从 306 长到了 326。
+     *
+     * 因此这里盯的是**真正成立的那件事**：
+     *   ① 高度确实由内容决定（`.pane` 的 flex-basis 是 auto）；
+     *   ② 两栏正文都不再被剪（`overflow-y` 可见）；
+     *   ③ 上排加起来超过了"编辑模式那两栏之和的那条线"——也就是它没有被锁在半屏里。
+     */
     check(
-      expanded.sourceRect.h > quarter + 2 && expanded.answerRect.h > quarter + 2,
-      `两栏都比"四分之一屏"高了（原文 ${expanded.sourceRect.h}px、我的译文 ${expanded.answerRect.h}px，1/4 = ${Math.round(quarter)}px）`,
+      expanded.sourcePaneFlexBasis === 'auto' && expanded.answerPaneFlexBasis === 'auto',
+      `两栏高度都由内容决定（flex-basis: 原文 ${expanded.sourcePaneFlexBasis}、译文 ${expanded.answerPaneFlexBasis}）`,
       expanded,
     )
     check(
-      expanded.topRowHeight > quarter * 2 + 2,
-      `上排整体已经超过半屏（${expanded.topRowHeight}px > ${Math.round(quarter * 2)}px）——也就是"有多长就展开多长"`,
+      expanded.sourceBodyOverflow === 'visible' && expanded.answerBodyOverflow === 'visible',
+      `两栏正文都不再被剪（overflow-y: 原文 ${expanded.sourceBodyOverflow}、译文 ${expanded.answerBodyOverflow}）——这才叫"完全展开"`,
+      expanded,
+    )
+    /*
+     * ⚠️ 这里**不能**断言"两栏加起来不低于编辑模式那一档"（我第一版就是那么写的，结果自己报了红）：
+     * 批改视图下高度由内容决定，"展开"的反而可能是**变矮**——这一题原文那一页只有 93 字，
+     * 按内容量出来就是 200px，比编辑模式那边的 306px 矮。那是"按内容来"的正确结果，不是 bug。
+     * 真正该盯的是**内容有没有被装下**：两栏各自的 scrollHeight 都不超过它的可视高。
+     */
+    check(
+      expanded.sourceContentFits && expanded.answerContentFits,
+      `两栏都把内容装下了、没有被剪（原文多余 ${expanded.sourceOverflow}px、译文多余 ${expanded.answerOverflow}px，都应为 0）`,
       expanded,
     )
     check(expanded.buttonLabel === '返回编辑', `底部那颗按钮原地改名叫「返回编辑」（实测「${expanded.buttonLabel}」）`, expanded)
@@ -751,7 +876,7 @@ try {
     )
     check(stickyNav.navCount === 2, `仍然只有一套「上一页 / 下一页」（实测 ${stickyNav.navCount} 个）`, stickyNav)
 
-    /* 点「返回编辑」：回到四分之一那一档 */
+    /* 点「返回编辑」：回到"两栏各占可用高度一半"那一档 */
     const back = await phone.client.evaluate(`(async () => {
       const M = window.__M;
       M.q('.pane-answer .answer-actions .btn-primary').click();
@@ -762,15 +887,40 @@ try {
         answerH: M.rect(M.q('.pane-answer')).h,
         inputVisible: M.visible(M.q('.pane-answer textarea.answer-input')),
         buttonLabel: M.text('.pane-answer .answer-actions .btn-primary'),
+        topbarH: M.rect(M.q('.topbar-mobile')).h,
         viewport: { h: window.innerHeight },
+        docScrollHeight: document.documentElement.scrollHeight,
+        docClientHeight: document.documentElement.clientHeight,
+        /* 输入框到底是不见了、还是没长开（这两种修法完全不同） */
+        inputExists: Boolean(M.q('.pane-answer textarea.answer-input')),
+        answerBodyRect: M.rect(M.q('.pane-answer .pane-body')),
+        answerBodyHTML: (M.q('.pane-answer .pane-body')?.innerHTML || '').slice(0, 120),
+        /*
+         * ⚠️ 数的是**两种**输入框：文章栏那一路是 textarea.answer-input，
+         * 而术语栏那一路是一行一个 input.term-input（术语题一页十条）。
+         * 第一版只数了 textarea——走到术语栏那条路上它就永远是 0，
+         * 报出来像"输入框没回来"，其实是尺子只认一种输入框（实测踩到）。
+         */
+        inputCount:
+          M.qa('.pane-answer textarea.answer-input').length + M.qa('.pane-answer input.term-input').length,
       };
     })()`)
-    const q2 = back.viewport.h / 4
+    const q2 = (back.viewport.h - back.topbarH) / 2
     check(
       back.dataResult === false &&
         Math.abs(back.sourceH - q2) <= 4 &&
         Math.abs(back.answerH - q2) <= 4,
-      `点「返回编辑」之后回到"两栏各占四分之一"（原文 ${back.sourceH}px、我的译文 ${back.answerH}px，1/4 = ${Math.round(q2)}px）`,
+      `点「返回编辑」之后回到"两栏各占可用高度一半"（原文 ${back.sourceH}px、我的译文 ${back.answerH}px，应为 ${Math.round(q2)}px）`,
+      back,
+    )
+    check(
+      back.inputCount > 0 && back.answerBodyRect.h > 40,
+      `输入框回来了（这一栏里能写字的框有 ${back.inputCount} 个，正文盒高 ${back.answerBodyRect.h}px）`,
+      back,
+    )
+    check(
+      back.docScrollHeight <= back.docClientHeight + 1,
+      `回到编辑模式后整页的溢出也收回来了（scrollHeight ${back.docScrollHeight} ≤ clientHeight ${back.docClientHeight}）`,
       back,
     )
     check(

@@ -20,6 +20,7 @@ import { GENERATION_TOPICS, type GeneratedExercise } from '../domain/generate'
 import type { JudgeFailureKind } from '../domain/ai'
 import { useSplitDrag } from './split-drag'
 import { useEqualPaneHeadHeights } from './pane-heads'
+import { useViewportHeightVar } from './split-height'
 import { useIsMobile } from './useIsMobile'
 import { MobileSidebar } from './MobileSidebar'
 import { resolveTheme, useSettings } from './settings'
@@ -333,6 +334,19 @@ export function App(): JSX.Element {
    * 因此这里量一遍再拉平（见 pane-heads.ts）。
    */
   useEqualPaneHeadHeights(splitRef)
+  /**
+   * 把**可视高度**写成 `--split-vh`（第 18 轮的修正，见 `split-height.ts`）。
+   *
+   * 手机端要"两栏各占可用高度的一半"，我第一版写成 `100dvh`——
+   * 而 `dvh` 是**视口**高、不含上面那 56px 的顶栏，于是 `.app` 被顶穿，
+   * 底部（提交按钮与翻页那两行）整条落到屏幕外**且滚不到**（`.app` 是 `overflow: hidden`）。
+   * 无头浏览器里量不出来（它没有地址栏，`dvh == innerHeight`），因此真机上才暴露。
+   *
+   * 现在改成"量一个与内容无关的盒子"（`#root`，也就是可视高度），
+   * 顶栏那 56px 由样式表用 `calc(50% - var(--topbar-h) / 2)` 扣掉——
+   * 那个数字全站已经有了一个令牌，不该在 JS 里再写一遍。
+   */
+  useViewportHeightVar()
   /**
    * 手机端判据（第 18 轮）：见 `useIsMobile.ts`。
    *
